@@ -11,6 +11,7 @@
 #include <cmath>
 #include <numeric>
 #include <core/scalar.h>
+#include <core/Random.h>
 
 int main(int argc, char** argv)
 {       initSystem(argc, argv);
@@ -79,44 +80,27 @@ int main(int argc, char** argv)
 	const int numBlocks = floor((totalBlocks*(iProc+1.0))/nProcs) - floor((totalBlocks*iProc*1.0)/nProcs);
 	std::vector<double> N1blocks(numBlocks);
 	int nKpts = floor(nKptsN1 *1.0/numBlocks);
-	std::vector<double> expVec;
 	for( int nb = 0; nb < numBlocks; nb++){
-		std::cout << "Calculating normalization factor ... " << std::endl;
-		std::vector<double> mk(nKpts,INFINITY);
-		expVec.clear();
-		srand(iProc+nb);
-		std::vector< vector3<double> > kpoints;
-		diagMatrix eigs;
-		vector3<double> kpnt;
-		double Ev, Ec;
-		//std::cout << "nb = " << nb << "   nKpts = " << nKpts << std::endl;
-		for( int nk =0; nk<nKpts; nk++){
-			kpnt[0] = ((double) rand() / (RAND_MAX));
-			kpnt[1] = ((double) rand() / (RAND_MAX));
-			kpnt[2] = ((double) rand() / (RAND_MAX));
-			kpoints.push_back(kpnt);
-			//std::cout << "rands = " << kpnt[1] << " " << kpnt[2] << "  " << kpnt[3]  << std::endl; // for debugging
-			eigs = bs.getStates(kpnt);
-			for(int indV = 0; indV < eigs.nCols(); indV++){
-				Ev = eigs[indV] - mu;
-				if (Ev<0){ // for every Ev<0
-                        		for (int indC = 0; indC < eigs.nRows(); indC++){ 	
-						Ec = eigs[indC] - mu;
-						if (Ec>0){ // for every Ec>0
-							mk[nk] = std::min( mk[nk], std::pow((Ec - Ev - Eplasmon),2));
-							//std::cout << "mk = " << mk[nk] << " Ev = " << Ev << " Ec = " <<Ec << std::endl;
-						}
-					}					
-				}				
+		logPrintf("Calculating normalization factor ... "); logFlush();
+		N1blocks[nb] = 0;
+		for(int nk =0; nk<nKpts; nk++)
+		{	vector3<> kpnt; for(int j=0; j<3; j++) kpnt[j] = Random::uniform();
+			diagMatrix eigs = bs.getStates(kpnt);
+			double mk = INFINITY;
+			for(int indV = 0; indV < eigs.nCols(); indV++)
+			{	double Ev = eigs[indV] - mu;
+				if (Ev<0) // for every Ev<0
+				{	for(int indC = 0; indC < eigs.nRows(); indC++)
+					{	double Ec = eigs[indC] - mu;
+						if (Ec>0) // for every Ec>0
+							mk = std::min(mk, std::pow((Ec - Ev - Eplasmon),2));
+					}
+				}
 			}
-			expVec.push_back(exp(-0.5*mk[nk]/(T*T)));
-			//std::cout << "mk min= " << mk[nk] <<" exp= " << expVec[nk] << std::endl;
+			N1blocks[nb] += exp(-0.5*mk/(T*T));
 		}
-		N1blocks[nb] = std::accumulate(expVec.begin(), expVec.end(), 0) / expVec.size();
-		std::cout << "N1block = " << N1blocks[nb] << std::endl;
-		//for(int ii = 0; ii < nKpts; ii++)
-		//	std::cout << expVec[ii] << " ";
-		mk.clear();
+		N1blocks[nb] /=  nKpts;
+		logPrintf("N1block = %le\n", N1blocks[nb]);
 	}
 
 	// Dielectric values
