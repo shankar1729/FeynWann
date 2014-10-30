@@ -91,9 +91,9 @@ int main(int argc, char** argv)
 		double Ev, Ec;
 		//std::cout << "nb = " << nb << "   nKpts = " << nKpts << std::endl;
 		for( int nk =0; nk<nKpts; nk++){
+			kpnt[0] = ((double) rand() / (RAND_MAX));
 			kpnt[1] = ((double) rand() / (RAND_MAX));
 			kpnt[2] = ((double) rand() / (RAND_MAX));
-			kpnt[3] = ((double) rand() / (RAND_MAX));
 			kpoints.push_back(kpnt);
 			//std::cout << "rands = " << kpnt[1] << " " << kpnt[2] << "  " << kpnt[3]  << std::endl; // for debugging
 			eigs = bs.getStates(kpnt);
@@ -104,13 +104,13 @@ int main(int argc, char** argv)
 						Ec = eigs[indC] - mu;
 						if (Ec>0){ // for every Ec>0
 							mk[nk] = std::min( mk[nk], std::pow((Ec - Ev - Eplasmon),2));
-							std::cout << "mk = " << mk[nk] << " Ev = " << Ev << " Ec = " <<Ec << std::endl;
+							//std::cout << "mk = " << mk[nk] << " Ev = " << Ev << " Ec = " <<Ec << std::endl;
 						}
 					}					
 				}				
 			}
 			expVec.push_back(exp(-0.5*mk[nk]/(T*T)));
-			std::cout << "mk min= " << mk[nk] <<" exp= " << expVec[nk] << std::endl;
+			//std::cout << "mk min= " << mk[nk] <<" exp= " << expVec[nk] << std::endl;
 		}
 		N1blocks[nb] = std::accumulate(expVec.begin(), expVec.end(), 0) / expVec.size();
 		std::cout << "N1block = " << N1blocks[nb] << std::endl;
