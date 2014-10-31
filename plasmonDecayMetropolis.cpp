@@ -73,8 +73,8 @@ int main(int argc, char** argv)
 	const int numBlocks = floor((totalBlocks*(iProc+1.0))/nProcs) - floor((totalBlocks*iProc*1.0)/nProcs);
 	std::vector<double> N1blocks(numBlocks);
 	int nKpts = floor(nKptsN1 *1.0/numBlocks);
-	for( int nb = 0; nb < numBlocks; nb++){
-		logPrintf("Calculating normalization factor ... "); logFlush();
+	for( int nb = 0; nb < numBlocks; nb++)
+	{	logPrintf("Calculating normalization factor ... "); logFlush();
 		N1blocks[nb] = 0;
 		for(int nk =0; nk<nKpts; nk++)
 		{	vector3<> kpnt; for(int j=0; j<3; j++) kpnt[j] = Random::uniform();
@@ -95,6 +95,7 @@ int main(int argc, char** argv)
 		N1blocks[nb] /=  nKpts;
 		logPrintf("N1block = %le\n", N1blocks[nb]);
 	}
+	double N1blocksSum = std::accumulate(N1blocks.begin(),N1blocks.end(),0); //used to calculate linewidth
 
 	// Dielectric values
 	// Lorentz-drude model parameters: f Gamma omega
@@ -118,8 +119,8 @@ int main(int argc, char** argv)
 	double num;
 	vector3<double> epsParam;
 	complex I(0.0,1.0);
-	for( int iPole = 0; iPole < epsParams.size(); iPole++){
-		epsParam = epsParams[iPole];
+	for( int iPole = 0; iPole < epsParams.size(); iPole++)
+	{	epsParam = epsParams[iPole];
 		num = epsParam[0]*(std::pow(omega_p,2));
 		den = one/(std::pow(epsParam[2],2) - omega*omega - I * omega * epsParam[1]);
 		epsilon = epsilon + num *den;
@@ -152,32 +153,37 @@ int main(int argc, char** argv)
 	vector3<double> kpnt, kpntPrev, holder, holderpc, holderpv, holderr;
 	vector3<complex> holderc;
 	diagMatrix eigs;
-	double acceptProb, weight, ikTot, Ev, Ec;
-	for( int iw = 0 ; iw<numWalkers; iw++){
-		int ik = 0, nKptsTot = 0, equib=0;
+	double acceptProb, acceptRatioSingle, LineWidth_in_eV_from_1_Proc_soFar, weight, Ev, Ec , Esigma = T;
+	int ik, nKptsTot, equib;
+	histogram EcHist(-10*Esigma, 0.5*Esigma, Eplasmon+5*Esigma);
+	histogram EvHist(-Eplasmon-5*Esigma, 0.5*Esigma, 10*Esigma);
+	for( int iw = 0 ; iw<numWalkers; iw++)
+	{	ik = 0; nKptsTot = 0; equib=0;
 		srand(iProc + iw);
-		kpntPrev[1] = ((double) rand() / (RAND_MAX));
+		//for(int j=0; j<3; j++) kpntPrev[j] = Random::uniform();
+		kpntPrev[0] = ((double) rand() / (RAND_MAX));
+                kpntPrev[1] = ((double) rand() / (RAND_MAX));
                 kpntPrev[2] = ((double) rand() / (RAND_MAX));
-                kpntPrev[3] = ((double) rand() / (RAND_MAX));
 		kpnt = kpntPrev;
 		double mkPrev = INFINITY, mk;
 		std::vector<double> Evs, Ecs, acceptRatio;
 		std::vector<matrix> Pk;
 		matrix px, py, pz;
-		while(ik<nKpts){
-			// Calculate mk:
+		while(ik<nKpts)
+		{	// Calculate mk:
 			mk = INFINITY;
 			eigs = bs.getStates(kpnt);
 			eigs.print(eigsTxt);
-			for( int indV = 0; indV < eigs.nCols(); indV++){
-				Ev = eigs[indV] - mu;
-				if (Ev<0){ // for every Ev<0
-					Evs.push_back(Ev);
-					for (int indC = 0; indC < eigs.nRows(); indC++){
-						Ec = eigs[indC] - mu;
-						if (Ec>0){ // for every Ec>0
-							Ecs.push_back(Ec);
+			for( int indV = 0; indV < eigs.nCols(); indV++)
+			{	Ev = eigs[indV] - mu;
+				if (Ev<0) // for every Ev<0
+				{	Evs.push_back(Ev);
+					for (int indC = 0; indC < eigs.nRows(); indC++)
+					{	Ec = eigs[indC] - mu;
+						if (Ec>0) // for every Ec>0
+						{	Ecs.push_back(Ec);
 							mk = std::min( mk, std::pow((Ec - Ev - Eplasmon),2));
+							//std::cout << "mk = " << mk << std::endl;
                                                  }
                                          }
                                  }
@@ -185,32 +191,32 @@ int main(int argc, char** argv)
 
 			// Metropolis accept - reject:
 			acceptProb = exp(0.5*(mkPrev - mk)/(T*T));
-			//std::cout << "mk = " << mk << " mkPrev = " << mkPrev << " acceptProb = " << acceptProb << " kpnt = " << kpnt[1] << " " << kpnt[2] << "  " << kpnt[3]  << std::endl;
-			if (acceptProb > ((double) rand() / (RAND_MAX))){
-				//std:: cout << "loop enetered" << std::endl;
+			acceptBar = ((double) rand() / (RAND_MAX));
+			//std::cout << "mk = " << mk << " mkPrev = " << mkPrev << " acceptProb = " << acceptProb << " acceptBar = " << acceptBar << " kpnt = " << kpnt[0] << " " << kpnt[1] << "  " << kpnt[2]  << std::endl;
+			if (acceptProb > acceptBar)
+			{	//std:: cout << "loop enetered" << std::endl;
 				mkPrev = mk;
 				kpntPrev = kpnt;
 				
 				if( mk < 2*T*T)
 					equib = 1;
 			
-				if(equib==1){
-					ik++;
+				if(equib==1)
+				{	ik++;
 					
 					// Calculate transitions at current k-point:
 					weight = exp(0.5*(mk - std::pow((Ec - Ev - Eplasmon),2))/(T*T))/(T*sqrt(2*M_PI));
 					Pk = bs.getTransitions(kpnt);
-					ikTot = (iw)*nKpts + ik + 1;
 					
-					for( int indV = 0; indV < eigs.nCols(); indV++){
-						Ev = eigs[indV] - mu;
-						if (Ev<0){ // for every Ev<0
-							for( int indC = 0; indC < eigs.nRows(); indC++){
+					for( int indV = 0; indV < eigs.nCols(); indV++)
+					{	Ev = eigs[indV] - mu;
+						if (Ev<0) // for every Ev<0
+						{	for( int indC = 0; indC < eigs.nRows(); indC++){
 								Ec = eigs[indC] - mu;
-								if ( Ec > 0){
-									weight=exp(0.5*(mk-std::pow((Ec-Ev-Eplasmon),2))/(T*T))/(T*sqrt(2*M_PI));
-									if ( weight > weightCut ){
-										// Scalars
+								if ( Ec > 0)
+								{	weight=exp(0.5*(mk-std::pow((Ec-Ev-Eplasmon),2))/(T*T))/(T*sqrt(2*M_PI));
+									if ( weight > weightCut )
+									{	// Scalars
 										holder[0] = Ev; holder[1] = Ec; holder[2] = weight;
 										Econserve_evcw.push_back(holder);
 										Econserve_Ev.push_back(Ev);
@@ -224,6 +230,8 @@ int main(int argc, char** argv)
 										holderr[2] = std::pow(abs(holderc[2] * sqrtGammaPrefac[2]),2);
 										Econserve_rate.push_back((0.5*spinWeight) * weight * holderr);
 										Econserve_rateSum += (0.5*spinWeight) * weight * (holderr[0] + holderr[1] + holderr[2]);
+										//EcProbDensity
+										//EvProbDensity
 										// Momenta
 										holderpc[0] = real(px(indC,indC));
 										holderpc[1] = real(px(indC,indC));
@@ -241,14 +249,17 @@ int main(int argc, char** argv)
 				}
 			}
 			// Generate next kpoint
+			//for(int j=0; j<3; j++) kpnt[j] = Random::uniform();
+			kpnt[0] = kpntPrev[0] + dk * ((double) rand() / (RAND_MAX));
 			kpnt[1] = kpntPrev[1] + dk * ((double) rand() / (RAND_MAX));
 			kpnt[2] = kpntPrev[2] + dk * ((double) rand() / (RAND_MAX));
-			kpnt[3] = kpntPrev[3] + dk * ((double) rand() / (RAND_MAX));
 			if( equib == 1)
 				nKptsTot++;
 		}
-		acceptRatio.push_back( nKpts/nKptsTot );
-		std::cout << "acceptRatio = " << nKpts/nKptsTot << std::endl;
+		acceptRatio.push_back( (double)nKpts/nKptsTot );
+		std::cout << "acceptRatio = " << (double)nKpts/nKptsTot << " nKptsTot = " << nKptsTot <<std::endl;
+		LineWidth_in_eV_from_1_Proc_soFar = N1blocksSum/N1blocks.size()/numWalkers * Econserve_rateSum/eV;
+		std::cout << "LineWidth so far =  " << LineWidth_in_eV_from_1_Proc_soFar << std::endl;
 	}
 
 // For plasmon collect
