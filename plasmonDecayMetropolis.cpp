@@ -2,61 +2,52 @@
 #include <electronic/matrix.h>
 #include <iostream>
 #include <fstream>
-#include <vector>
-#include <math.h>
-#include "bandStruct.h"
-#include "histogram.h"
 #include <sstream>
-#include <string>
-#include <cmath>
-#include <numeric>
 #include <core/scalar.h>
 #include <core/Random.h>
+#include <core/string.h>
+#include <core/Units.h>
+#include "bandStruct.h"
+#include "histogram.h"
 
 int main(int argc, char** argv)
-{       initSystem(argc, argv);
-	const double Angstrom = 1./0.5291772192;	
-	const double nanometer = 10*Angstrom;
-	const double eV = 1./27.21138386;
-	const double invSeconds = 2.418884326505e-17;
+{   initSystem(argc, argv);
 	const double c = 1./7.29735257e-3;
 
 	//Get the system parameters (mu, T, lattice vectors etc.)
-	std::ifstream systemFile("system.txt");
-	string name;
-	double val;
-	std::vector<string> names;
-	std::vector<double> vals;
-	while (systemFile >> name >> val){
-		std:: cout << name << " " << val << std::endl;	
-		names.push_back(name);
-		vals.push_back(val);
+	struct InputMap : std::map<string,double> //map class with a safe accessor that quits with error if key not found
+	{	double get(string key) const
+		{	auto iter = find(key);
+			if(iter == end()) die("\nCould not find required entry '%s' in input.\n", key.c_str());
+			return iter->second;
+		}
 	}
-		
+	inputMap;
+	std::ifstream systemFile("system.txt");
+	while(!systemFile.eof())
+	{	string line; getline(systemFile, line); //line-by-line processing (comments can now be inline)
+		trim(line);
+		istringstream iss(line);
+		string name; double val;
+		if(iss >> name >> val)
+			inputMap[name] = val;
+	}
 	systemFile.close();    
 	
-	const double nKptsN1 = vals.at(0);
-	const double totalBlocks = vals.at(1);
-	const double nKptsMetro = vals.at(2);
-	const double dk = vals.at(3);
-	const double totalWalkers = vals.at(4);
-	const double kPhi = vals.at(5);
-	const double Eplasmon = vals.at(6)*eV;
-	const double mu = 0.57938;//vals.at(7);
-	const double T = vals.at(8)*eV;
-	const double Eplasmon2 = vals.at(9);
-	const double spinWeight = vals.at(10);
-	//RRRRRR  not sure how to read this in.... so just do it explicitly for now......
-	//std::vector< vector3<double> > R;
-	matrix R(3,3);
-	double llen = (4.080*Angstrom)*0.5;
-	//R[1] = {0,llen,llen};
-	//R[2] = {llen,0,llen};
-	//R[3] = {llen,llen,0};
-	R(0,0) = 0; R(0,1) = llen; R(0,2) = llen;
-	R(1,0) = llen; R(1,1) = 0; R(1,2) = llen;
-	R(2,0) = llen; R(2,1) = llen; R(2,2) = 0;
+	const double nKptsN1 = inputMap.get("nKptsN1");
+	const double totalBlocks = inputMap.get("totalBlocks");
+	const double nKptsMetro = inputMap.get("nKptsMetro");
+	const double dk = inputMap.get("dk");
+	const double totalWalkers = inputMap.get("totalWalkers");
+	const double kPhi = inputMap.get("kPhi");
+	const double Eplasmon = inputMap.get("Eplasmon") * eV;
+	const double mu = inputMap.get("mu");
+	const double T = inputMap.get("T") * eV;
+	const double Eplasmon2 = inputMap.get("Eplasmon2") * eV;
+	const double spinWeight = inputMap.get("spinWeight");
+	matrix3<> R = matrix3<>(0,1,1, 1,0,1, 0,1,1) * (0.5*inputMap.get("aCubic")*Angstrom);
 
+	logPrintf("\nInputs after conversion to atomic units:\n");
 	std::cout << "nKptsN1 = " << nKptsN1 << std::endl;
 	std::cout << "totalBlocks = " << totalBlocks << std::endl;
 	std::cout << "nKptsMetro = " << nKptsMetro << std::endl;
@@ -68,6 +59,8 @@ int main(int argc, char** argv)
 	std::cout << "T = " << T << std::endl;
 	std::cout << "Eplamson2 = " << Eplasmon2 << std::endl;
 	std::cout << "spinWeight = " << spinWeight << std::endl;
+	std::cout << "R:\n";
+	R.print(globalLog, " %lg ");
 	
 	const double weightCut = 1e-6; // Ignore states with filling weight below this threshold
 
