@@ -18,5 +18,6 @@ public:
 	std::vector<double> Egrid, out;
         histogram(double Emin, double dE, double Emax);
         void addEvent(double energy, double weight);
+	std::vector<double> getHist() { return out; }
 };
 #endif
