@@ -45,7 +45,7 @@ int main(int argc, char** argv)
 	const double T = inputMap.get("T") * eV;
 	const double Eplasmon2 = inputMap.get("Eplasmon2") * eV;
 	const double spinWeight = inputMap.get("spinWeight");
-	matrix3<> R = matrix3<>(0,1,1, 1,0,1, 0,1,1) * (0.5*inputMap.get("aCubic")*Angstrom);
+	matrix3<> R = matrix3<>(0,1,1, 1,0,1, 1,1,0) * (0.5*inputMap.get("aCubic")*Angstrom);
 
 	logPrintf("\nInputs after conversion to atomic units:\n");
 	std::cout << "nKptsN1 = " << nKptsN1 << std::endl;
@@ -73,6 +73,7 @@ int main(int argc, char** argv)
 	const int numBlocks = floor((totalBlocks*(iProc+1.0))/nProcs) - floor((totalBlocks*iProc*1.0)/nProcs);
 	std::vector<double> N1blocks(numBlocks);
 	int nKpts = floor(nKptsN1 *1.0/numBlocks);
+	double N1blocksSum = 0.0;
 	for( int nb = 0; nb < numBlocks; nb++)
 	{	logPrintf("Calculating normalization factor ... "); logFlush();
 		N1blocks[nb] = 0;
@@ -94,8 +95,11 @@ int main(int argc, char** argv)
 		}
 		N1blocks[nb] /=  nKpts;
 		logPrintf("N1block = %le\n", N1blocks[nb]);
+		N1blocksSum += N1blocks[nb]; // used to calculate linewidth later
 	}
-	double N1blocksSum = std::accumulate(N1blocks.begin(),N1blocks.end(),0); //used to calculate linewidth
+	double N1blocksAverage = N1blocksSum/numBlocks;
+	std::cout << "N1blocksSum  = " << N1blocksSum << " N1blocksAverage = " << N1blocksAverage <<std::endl;
+	//double N1blocksSum = std::accumulate(N1blocks.begin(),N1blocks.end(),0); //used to calculate linewidth
 
 	// Dielectric values
 	// Lorentz-drude model parameters: f Gamma omega
@@ -133,15 +137,21 @@ int main(int argc, char** argv)
 	double modGammaMinus = sqrt(k*k - (omega/c)*(omega/c));
 	double Lquant = (1/(4*std::pow(modGammaPlus,3))) * (std::pow(modGammaPlus,2) + k*k + std::pow((omega/c),2)) + (1/(4*std::pow(modGammaPlus,3))) * ((std::pow(modGammaMinus,2)+k*k)*real(omegaEpsilonPrime)+(std::pow((real(epsilon*omega/c)),2)));
 
-	// For plasmon collect
-	// Plasmon direction
+	// For plasmon collect, Plasmon direction
 	vector3<complex> kHat(cos(kPhi), sin(kPhi), 0.0);
 
 	// Compute effective mode vector on the frequency grid
 	vector3<complex> oneVec(0.0, 0.0, one);
 	vector3<complex> sqrtGammaPrefac = (M_PI/(sqrt((nKpts*abs(det(R)))*modGammaMinus*omega*Lquant))) * (kHat - I*(k/modGammaMinus)*oneVec);
+	std::cout << "sqrtGammaPrefac Real = " <<  real(sqrtGammaPrefac[0]) << " " << real(sqrtGammaPrefac[1]) << " " << real(sqrtGammaPrefac[2]) <<std::endl;
+	std::cout << "sqrtGammaPrefac Imag = " <<  imag(sqrtGammaPrefac[0]) << " " << imag(sqrtGammaPrefac[1]) << " " << imag(sqrtGammaPrefac[2]) <<std::endl;
+	std::cout << "sqrt part 1 = " <<  (M_PI/(sqrt((nKpts*abs(det(R)))*modGammaMinus*omega*Lquant))) << std::endl;
+	std::cout << "parts of 1 = " << det(R) << " " << modGammaMinus << " " << omega << " " << Lquant << std::endl;
+	std::cout << "sqrt part 2 Real = " << real(kHat[0] - I*(k/modGammaMinus)*oneVec[0]) << " "  <<  real(kHat[1] - I*(k/modGammaMinus)*oneVec[1])  << " "  << real(kHat[2] - I*(k/modGammaMinus)*oneVec[2])  <<std::endl;
+	std::cout << "sqrt part 2 Imag = " << imag(kHat[0] - I*(k/modGammaMinus)*oneVec[0]) << " "  <<  imag(kHat[1] - I*(k/modGammaMinus)*oneVec[1])  << " "  << imag(kHat[2] - I*(k/modGammaMinus)*oneVec[2])  <<std::endl;
 
 	// Metropolis sampling of BZ:
+	std::cout << "Starting Metropolis sampling of BZ" << std::endl;
 	int numWalkers = floor((totalWalkers*(iProc+1.0))/nProcs) - floor ((totalWalkers*iProc*1.0)/nProcs);
 	std::vector<double> Econserve_Ec, Econserve_Ev;
 	std::vector< vector3<complex> > Econserve_pcv; // matrix element (complex 3-vector)
@@ -153,12 +163,13 @@ int main(int argc, char** argv)
 	vector3<double> kpnt, kpntPrev, holder, holderpc, holderpv, holderr;
 	vector3<complex> holderc;
 	diagMatrix eigs;
-	double acceptProb, acceptRatioSingle, LineWidth_in_eV_from_1_Proc_soFar, weight, Ev, Ec , Esigma = T;
+	double acceptProb, acceptBar, LineWidth_in_eV_from_1_Proc_soFar, weight, Ev, Ec , Esigma = T;
 	int ik, nKptsTot, equib;
 	histogram EcHist(-10*Esigma, 0.5*Esigma, Eplasmon+5*Esigma);
 	histogram EvHist(-Eplasmon-5*Esigma, 0.5*Esigma, 10*Esigma);
 	for( int iw = 0 ; iw<numWalkers; iw++)
-	{	ik = 0; nKptsTot = 0; equib=0;
+	{	std::cout << "... metropolis sampling for one walker ...";
+		ik = 0; nKptsTot = 0; equib=0;
 		srand(iProc + iw);
 		//for(int j=0; j<3; j++) kpntPrev[j] = Random::uniform();
 		kpntPrev[0] = ((double) rand() / (RAND_MAX));
@@ -225,13 +236,13 @@ int main(int argc, char** argv)
 										px = Pk[0]; py = Pk[1]; pz = Pk[2];
 										holderc[0] = px(indC,indV); holderc[1] = py(indC,indV); holderc[2] = pz(indC,indV);
 										Econserve_pcv.push_back(holderc);
-										holderr[0] = std::pow(abs(holderc[0] * sqrtGammaPrefac[0]),2);
-										holderr[1] = std::pow(abs(holderc[1] * sqrtGammaPrefac[1]),2);
-										holderr[2] = std::pow(abs(holderc[2] * sqrtGammaPrefac[2]),2);
-										Econserve_rate.push_back((0.5*spinWeight) * weight * holderr);
-										Econserve_rateSum += (0.5*spinWeight) * weight * (holderr[0] + holderr[1] + holderr[2]);
-										//EcProbDensity
-										//EvProbDensity
+										holderr[0] = (0.5*spinWeight) * weight * std::pow(abs(holderc[0] * sqrtGammaPrefac[0]),2);
+										holderr[1] = (0.5*spinWeight) * weight * std::pow(abs(holderc[1] * sqrtGammaPrefac[1]),2);
+										holderr[2] = (0.5*spinWeight) * weight * std::pow(abs(holderc[2] * sqrtGammaPrefac[2]),2);
+										Econserve_rate.push_back(holderr);
+										Econserve_rateSum += holderr[0] + holderr[1] + holderr[2];
+										//std::cout << "Econserve_rate = " << holderr[0] << " " << holderr[1] << " " << holderr[3] << std::endl;
+										//std::cout << "Econserve_rateSum = " << Econserve_rateSum << std::endl;
 										// Momenta
 										holderpc[0] = real(px(indC,indC));
 										holderpc[1] = real(px(indC,indC));
@@ -241,6 +252,10 @@ int main(int argc, char** argv)
                                                                                 holderpv[2] = real(px(indV,indV));
 										Econserve_pc.push_back(holderpc);
 										Econserve_pv.push_back(holderpv);
+									
+										// Histogram energys, weights
+										EcHist.addEvent(Ec, weight);
+										EvHist.addEvent(Ev, weight);
 									}
 								}
 							}
@@ -257,15 +272,18 @@ int main(int argc, char** argv)
 				nKptsTot++;
 		}
 		acceptRatio.push_back( (double)nKpts/nKptsTot );
-		std::cout << "acceptRatio = " << (double)nKpts/nKptsTot << " nKptsTot = " << nKptsTot <<std::endl;
-		LineWidth_in_eV_from_1_Proc_soFar = N1blocksSum/N1blocks.size()/numWalkers * Econserve_rateSum/eV;
+		std::cout << std::endl << "acceptRatio = " << (double)nKpts/nKptsTot << " nKptsTot = " << nKptsTot <<std::endl;
+		LineWidth_in_eV_from_1_Proc_soFar = N1blocksAverage/numWalkers * Econserve_rateSum/eV;
 		std::cout << "LineWidth so far =  " << LineWidth_in_eV_from_1_Proc_soFar << std::endl;
 	}
 
 // For plasmon collect
-double N1blocksSum = std::accumulate(N1blocks.begin(),N1blocks.end(),0);
-double LineWidth_in_eV_from_1_Proc = N1blocksSum/N1blocks.size()/numWalkers * Econserve_rateSum/eV;
-std::cout<< "LineWidth_in_eV_from_1_Proc = " << LineWidth_in_eV_from_1_Proc << std::endl;
-double Esigma = T;
-
+//double N1blocksSum = std::accumulate(N1blocks.begin(),N1blocks.end(),0);
+double LineWidth_in_eV_from_1_Proc = N1blocksAverage/numWalkers * Econserve_rateSum/eV;
+std::cout << "Econserve_rateSum = " << Econserve_rateSum << std::endl;
+std::cout << "LineWidth_in_eV_from_1_Proc = " << LineWidth_in_eV_from_1_Proc << std::endl;
+//double Esigma = T;
+std::vector<double> EcProbDensity = EcHist.getHist();
+std::vector<double> EvProbDensity = EvHist.getHist();
+std::cout <<"done";
 }	

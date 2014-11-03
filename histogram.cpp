@@ -16,11 +16,9 @@ histogram::histogram(double Emin, double dE, double Emax)
 	double val = Emin;
 	for(int i =0; i<numBins; i++, val += dE){
 		Egrid.push_back(val);
-		std::cout << "Egrid = " << val << std::endl;
 	}
 	Egrid.push_back(Emax);
 	out.assign(Egrid.size(),0);
-	std::cout << "Egrid = " << Emax << std::endl;
 }
 
 void histogram::addEvent(double energy, double weight)
