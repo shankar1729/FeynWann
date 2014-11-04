@@ -13,9 +13,10 @@ class bandStruct
 public:
 	string filePrefix;
 	std::vector< vector3<int> > cellMap;
-	std::vector<matrix> hWannierArray, pxWannierArray, pyWannierArray, pzWannierArray;
-	matrix evecs;
-	vector3<> kPoint_evecs; //value of kpoint for which evecs was computed
+	int nBands;
+	matrix hWannier, pxWannier, pyWannier, pzWannier;
+	matrix phase, evecs;
+	vector3<> kPoint_evecs; //value of kpoint for which evecs and phase was computed
 	bandStruct(string filePrefix);
 	diagMatrix getStates(vector3<double> kPoint);
 	std::vector<matrix> getTransitions(vector3<double> kPoint);
