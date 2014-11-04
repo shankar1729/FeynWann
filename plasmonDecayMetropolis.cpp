@@ -177,8 +177,8 @@ int main(int argc, char** argv)
 		srand(iProc + iw);
 		//for(int j=0; j<3; j++) kpntPrev[j] = Random::uniform();
 		kpntPrev[0] = ((double) rand() / (RAND_MAX));
-                kpntPrev[1] = ((double) rand() / (RAND_MAX));
-                kpntPrev[2] = ((double) rand() / (RAND_MAX));
+		kpntPrev[1] = ((double) rand() / (RAND_MAX));
+		kpntPrev[2] = ((double) rand() / (RAND_MAX));
 		kpnt = kpntPrev;
 		double mkPrev = INFINITY, mk;
 		std::vector<double> Evs, Ecs, acceptRatio;
@@ -198,18 +198,18 @@ int main(int argc, char** argv)
 						if (Ec>0) // for every Ec>0
 						{	Ecs.push_back(Ec);
 							mk = std::min( mk, std::pow((Ec - Ev - Eplasmon),2));
-							//logPrintf("mk = " << mk << std::endl;
-                                                 }
-                                         }
-                                 }
-                         }
+							//logPrintf("mk = %lg\n", mk);
+						}
+					}
+				}
+			}
 
 			// Metropolis accept - reject:
 			acceptProb = exp(0.5*(mkPrev - mk)/(T*T));
 			acceptBar = ((double) rand() / (RAND_MAX));
-			//logPrintf("mk = " << mk << " mkPrev = " << mkPrev << " acceptProb = " << acceptProb << " acceptBar = " << acceptBar << " kpnt = " << kpnt[0] << " " << kpnt[1] << "  " << kpnt[2]  << std::endl;
+			//logPrintf("mk = %lg   mkPrev = %lg   acceptProb = %lg   acceptBar = %lg\n", mk, mkPrev, acceptProb, acceptBar);
 			if (acceptProb > acceptBar)
-			{	//std:: cout << "loop enetered" << std::endl;
+			{	//logPrintf("loop entered\n");
 				mkPrev = mk;
 				kpntPrev = kpnt;
 				
@@ -243,15 +243,15 @@ int main(int argc, char** argv)
 										Econserve_rateSingle = (0.5*spinWeight) * weight * std::pow(abs( holderc[0] * sqrtGammaPrefac[0] + holderc[1] * sqrtGammaPrefac[1] + holderc[2] * sqrtGammaPrefac[2] ),2);
 										Econserve_rate.push_back(Econserve_rateSingle);
 										Econserve_rateSum += Econserve_rateSingle;
-										//logPrintf("Econserve_rate = " << Econserve_rateSingle << std::endl;
-										//logPrintf("Econserve_rateSum = " << Econserve_rateSum << std::endl;
+										//logPrintf("Econserve_rate = %lg\n", Econserve_rateSingle);
+										//logPrintf("Econserve_rateSum = %lg\n", Econserve_rateSum);
 										// Momenta
 										holderpc[0] = real(px(indC,indC));
 										holderpc[1] = real(px(indC,indC));
-                                                                                holderpc[2] = real(px(indC,indC));
-                                                                                holderpv[0] = real(px(indV,indV));
-                                                                                holderpv[1] = real(px(indV,indV));
-                                                                                holderpv[2] = real(px(indV,indV));
+										holderpc[2] = real(px(indC,indC));
+										holderpv[0] = real(px(indV,indV));
+										holderpv[1] = real(px(indV,indV));
+										holderpv[2] = real(px(indV,indV));
 										Econserve_pc.push_back(holderpc);
 										Econserve_pv.push_back(holderpv);
 									
@@ -266,7 +266,6 @@ int main(int argc, char** argv)
 				}
 			}
 			// Generate next kpoint
-			//for(int j=0; j<3; j++) kpnt[j] = Random::uniform();
 			kpnt[0] = kpntPrev[0] + dk * ((double) rand() / (RAND_MAX));
 			kpnt[1] = kpntPrev[1] + dk * ((double) rand() / (RAND_MAX));
 			kpnt[2] = kpntPrev[2] + dk * ((double) rand() / (RAND_MAX));
@@ -282,11 +281,9 @@ int main(int argc, char** argv)
 	fclose(eigsTxt);
 	
 	// For plasmon collect
-	//double N1blocksSum = std::accumulate(N1blocks.begin(),N1blocks.end(),0);
 	double LineWidth_in_eV_from_1_Proc = N1blocksAverage/numWalkers * Econserve_rateSum/eV;
 	logPrintf("Econserve_rateSum = %lg\n", Econserve_rateSum);
 	logPrintf("LineWidth_in_eV_from_1_Proc = %lg\n", LineWidth_in_eV_from_1_Proc);
-	//double Esigma = T;
 	std::vector<double> EcProbDensity = EcHist.getHist();
 	std::vector<double> EcGrid = EcHist.getEgrid();
 	std::vector<double> EvProbDensity = EvHist.getHist();
