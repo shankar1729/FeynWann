@@ -11,7 +11,9 @@
 #include "histogram.h"
 
 int main(int argc, char** argv)
-{   initSystem(argc, argv);
+{   string inputFilename; bool dryRun, printDefaults;
+	initSystemCmdline(argc, argv, "Metropolis calculation of plasmon decay rate", inputFilename, dryRun, printDefaults);
+	
 	const double c = 1./7.29735257e-3;
 
 	//Get the system parameters (mu, T, lattice vectors etc.)
@@ -23,7 +25,9 @@ int main(int argc, char** argv)
 		}
 	}
 	inputMap;
-	std::ifstream systemFile("system.txt");
+	std::ifstream systemFile(inputFilename.c_str());
+	if(!systemFile.is_open())
+		die("Could not open system file '%s' for reading.\n", inputFilename.c_str());
 	while(!systemFile.eof())
 	{	string line; getline(systemFile, line); //line-by-line processing (comments can now be inline)
 		trim(line);
@@ -61,6 +65,11 @@ int main(int argc, char** argv)
 	std::cout << "spinWeight = " << spinWeight << std::endl;
 	std::cout << "R:\n";
 	R.print(globalLog, " %lg ");
+	if(dryRun)
+	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
+		finalizeSystem();
+		return 0;
+	}
 	
 	const double weightCut = 1e-6; // Ignore states with filling weight below this threshold
 
@@ -74,6 +83,7 @@ int main(int argc, char** argv)
 	std::vector<double> N1blocks(numBlocks);
 	int nKpts = floor(nKptsN1 *1.0/numBlocks);
 	double N1blocksSum = 0.0;
+	StopWatch watchNorm("normalization"); watchNorm.start();
 	for( int nb = 0; nb < numBlocks; nb++)
 	{	logPrintf("Calculating normalization factor ... "); logFlush();
 		N1blocks[nb] = 0;
@@ -97,6 +107,7 @@ int main(int argc, char** argv)
 		logPrintf("N1block = %le\n", N1blocks[nb]);
 		N1blocksSum += N1blocks[nb]; // used to calculate linewidth later
 	}
+	watchNorm.stop();
 	double N1blocksAverage = N1blocksSum/numBlocks;
 	std::cout << "N1blocksSum  = " << N1blocksSum << " N1blocksAverage = " << N1blocksAverage <<std::endl;
 	//double N1blocksSum = std::accumulate(N1blocks.begin(),N1blocks.end(),0); //used to calculate linewidth
@@ -123,7 +134,7 @@ int main(int argc, char** argv)
 	double num;
 	vector3<double> epsParam;
 	complex I(0.0,1.0);
-	for( int iPole = 0; iPole < epsParams.size(); iPole++)
+	for(size_t iPole = 0; iPole < epsParams.size(); iPole++)
 	{	epsParam = epsParams[iPole];
 		num = epsParam[0]*(std::pow(omega_p,2));
 		den = one/(std::pow(epsParam[2],2) - omega*omega - I * omega * epsParam[1]);
@@ -166,6 +177,7 @@ int main(int argc, char** argv)
 	int ik, nKptsTot, equib;
 	histogram EcHist(-10*Esigma, 0.5*Esigma, Eplasmon+5*Esigma);
 	histogram EvHist(-Eplasmon-5*Esigma, 0.5*Esigma, 10*Esigma);
+	StopWatch watchMet("metropolis"); watchMet.start();
 	for( int iw = 0 ; iw<numWalkers; iw++)
 	{	std::cout << "... metropolis sampling for one walker ...";
 		ik = 0; nKptsTot = 0; equib=0;
@@ -238,7 +250,7 @@ int main(int argc, char** argv)
 										Econserve_rateSingle = (0.5*spinWeight) * weight * std::pow(abs( holderc[0] * sqrtGammaPrefac[0] + holderc[1] * sqrtGammaPrefac[1] + holderc[2] * sqrtGammaPrefac[2] ),2);
 										Econserve_rate.push_back(Econserve_rateSingle);
 										Econserve_rateSum += Econserve_rateSingle;
-										std::cout << "Econserve_rate = " << Econserve_rateSingle << std::endl;
+										//std::cout << "Econserve_rate = " << Econserve_rateSingle << std::endl;
 										//std::cout << "Econserve_rateSum = " << Econserve_rateSum << std::endl;
 										// Momenta
 										holderpc[0] = real(px(indC,indC));
@@ -273,16 +285,19 @@ int main(int argc, char** argv)
 		LineWidth_in_eV_from_1_Proc_soFar = N1blocksAverage/numWalkers * Econserve_rateSum/eV;
 		std::cout << "LineWidth so far =  " << LineWidth_in_eV_from_1_Proc_soFar << std::endl;
 	}
+	watchMet.stop();
 
-// For plasmon collect
-//double N1blocksSum = std::accumulate(N1blocks.begin(),N1blocks.end(),0);
-double LineWidth_in_eV_from_1_Proc = N1blocksAverage/numWalkers * Econserve_rateSum/eV;
-std::cout << "Econserve_rateSum = " << Econserve_rateSum << std::endl;
-std::cout << "LineWidth_in_eV_from_1_Proc = " << LineWidth_in_eV_from_1_Proc << std::endl;
-//double Esigma = T;
-std::vector<double> EcProbDensity = EcHist.getHist();
-std::vector<double> EcGrid = EcHist.getEgrid();
-std::vector<double> EvProbDensity = EvHist.getHist();
-std::vector<double> EvGrid = EvHist.getEgrid();
-std::cout << "done" << std::endl;
+	// For plasmon collect
+	//double N1blocksSum = std::accumulate(N1blocks.begin(),N1blocks.end(),0);
+	double LineWidth_in_eV_from_1_Proc = N1blocksAverage/numWalkers * Econserve_rateSum/eV;
+	std::cout << "Econserve_rateSum = " << Econserve_rateSum << std::endl;
+	std::cout << "LineWidth_in_eV_from_1_Proc = " << LineWidth_in_eV_from_1_Proc << std::endl;
+	//double Esigma = T;
+	std::vector<double> EcProbDensity = EcHist.getHist();
+	std::vector<double> EcGrid = EcHist.getEgrid();
+	std::vector<double> EvProbDensity = EvHist.getHist();
+	std::vector<double> EvGrid = EvHist.getEgrid();
+	std::cout << "done" << std::endl;
+	
+	finalizeSystem();
 }

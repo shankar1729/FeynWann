@@ -61,21 +61,24 @@ bandStruct::bandStruct(string prefix)
 }
 
 diagMatrix bandStruct::getStates(vector3<double> kPoint)
-{       // Compute & record interpolated band strucutre;
-        //matrix evecs;
-        diagMatrix eigs;
-        matrix Hk,Hkh;
-        const int cmsize = cellMap.size();
-        for (int ic = 0; ic<cmsize; ic++)
-                Hk +=  hWannierArray[ic] * cis(2*M_PI * dot(cellMap[ic],kPoint));
-        Hkh = dagger_symmetrize(Hk);
-        Hkh.diagonalize(evecs, eigs);
-	
+{   static StopWatch watch("bandStruct::getStates"); watch.start();
+	// Compute & record interpolated band strucutre;
+	diagMatrix eigs;
+	matrix Hk,Hkh;
+	const int cmsize = cellMap.size();
+	for (int ic = 0; ic<cmsize; ic++)
+		Hk +=  hWannierArray[ic] * cis(2*M_PI * dot(cellMap[ic],kPoint));
+	Hkh = dagger_symmetrize(Hk);
+	Hkh.diagonalize(evecs, eigs);
+	kPoint_evecs = kPoint;
+	watch.stop();
 	return eigs;
 }
 
 std::vector<matrix> bandStruct::getTransitions(vector3<double> kPoint)
-{	// Compute transitions at kPoint
+{	static StopWatch watch("bandStruct::getTransitions"); watch.start();
+	if(!(kPoint == kPoint_evecs)) getStates(kPoint); //Update evecs if necessary
+	// Compute transitions at kPoint
 	matrix Pkx, Pky, Pkz, px, py, pz;
         const int cmsiz = cellMap.size();
 	for (int ip = 0; ip<cmsiz; ip++){
@@ -84,13 +87,10 @@ std::vector<matrix> bandStruct::getTransitions(vector3<double> kPoint)
 		Pkz += pzWannierArray[ip]*cis(2*M_PI * dot(cellMap[ip],kPoint));
 	}
 	// Change basis of Px, Py, Pz to eigenbasis of Hk
-	px = transpose(evecs) * Pkx * evecs;
-	py = transpose(evecs) * Pky * evecs;
-	pz = transpose(evecs) * Pkz * evecs;
-	PkWannierArray.resize(3);
-	PkWannierArray[0] = px;
-	PkWannierArray[1] = py;
-	PkWannierArray[2] = pz;
-
-        return PkWannierArray;
-}                                                
+	std::vector<matrix> pk(3);
+	pk[0] = transpose(evecs) * Pkx * evecs;
+	pk[1] = transpose(evecs) * Pky * evecs;
+	pk[2] = transpose(evecs) * Pkz * evecs;
+	watch.stop();
+	return pk;
+}

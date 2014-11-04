@@ -1,5 +1,5 @@
-JDFTX_BUILD_DIR=/home/anabrown/JDFTx/build
-JDFTX_SRC_DIR=/home/anabrown/JDFTx/jdftx
+JDFTX_BUILD_DIR=/home/shankar/DFT/Code/JDFTx/build_testing
+JDFTX_SRC_DIR=/home/shankar/DFT/Code/JDFTx/jdftx
 
 CXX_FLAGS=-g -Wall -O3 -std=c++0x -I$(JDFTX_SRC_DIR) -DENABLE_PROFILING
 LINK_FLAGS=-L$(JDFTX_BUILD_DIR) -Wl,-rpath,$(JDFTX_BUILD_DIR) -ljdftx
