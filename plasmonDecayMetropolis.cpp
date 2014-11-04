@@ -153,17 +153,16 @@ int main(int argc, char** argv)
 	// Metropolis sampling of BZ:
 	std::cout << "Starting Metropolis sampling of BZ" << std::endl;
 	int numWalkers = floor((totalWalkers*(iProc+1.0))/nProcs) - floor ((totalWalkers*iProc*1.0)/nProcs);
-	std::vector<double> Econserve_Ec, Econserve_Ev;
+	std::vector<double> Econserve_Ec, Econserve_Ev, Econserve_rate;
 	std::vector< vector3<complex> > Econserve_pcv; // matrix element (complex 3-vector)
-	std::vector< vector3<double> > Econserve_evcw, Econserve_pc, Econserve_pv, Econserve_rate; // energies and weights, final & initial momentum (real 3-vector)
-	double Econserve_rateSum = 0;
+	std::vector< vector3<double> > Econserve_evcw, Econserve_pc, Econserve_pv; // energies and weights, final & initial momentum (real 3-vector)
 	FILE * eigsTxt;
         eigsTxt = fopen("WannierBandstruct.eigenvals","w+");
 	nKpts = floor(nKptsMetro/numWalkers);
-	vector3<double> kpnt, kpntPrev, holder, holderpc, holderpv, holderr;
+	vector3<double> kpnt, kpntPrev, holder, holderpc, holderpv;
 	vector3<complex> holderc;
 	diagMatrix eigs;
-	double acceptProb, acceptBar, LineWidth_in_eV_from_1_Proc_soFar, weight, Ev, Ec , Esigma = T;
+	double acceptProb, acceptBar, LineWidth_in_eV_from_1_Proc_soFar, weight, Ev, Ec , Econserve_rateSingle, Econserve_rateSum = 0, Esigma = T;
 	int ik, nKptsTot, equib;
 	histogram EcHist(-10*Esigma, 0.5*Esigma, Eplasmon+5*Esigma);
 	histogram EvHist(-Eplasmon-5*Esigma, 0.5*Esigma, 10*Esigma);
@@ -236,12 +235,10 @@ int main(int argc, char** argv)
 										px = Pk[0]; py = Pk[1]; pz = Pk[2];
 										holderc[0] = px(indC,indV); holderc[1] = py(indC,indV); holderc[2] = pz(indC,indV);
 										Econserve_pcv.push_back(holderc);
-										holderr[0] = (0.5*spinWeight) * weight * std::pow(abs(holderc[0] * sqrtGammaPrefac[0]),2);
-										holderr[1] = (0.5*spinWeight) * weight * std::pow(abs(holderc[1] * sqrtGammaPrefac[1]),2);
-										holderr[2] = (0.5*spinWeight) * weight * std::pow(abs(holderc[2] * sqrtGammaPrefac[2]),2);
-										Econserve_rate.push_back(holderr);
-										Econserve_rateSum += holderr[0] + holderr[1] + holderr[2];
-										//std::cout << "Econserve_rate = " << holderr[0] << " " << holderr[1] << " " << holderr[3] << std::endl;
+										Econserve_rateSingle = (0.5*spinWeight) * weight * std::pow(abs( holderc[0] * sqrtGammaPrefac[0] + holderc[1] * sqrtGammaPrefac[1] + holderc[2] * sqrtGammaPrefac[2] ),2);
+										Econserve_rate.push_back(Econserve_rateSingle);
+										Econserve_rateSum += Econserve_rateSingle;
+										std::cout << "Econserve_rate = " << Econserve_rateSingle << std::endl;
 										//std::cout << "Econserve_rateSum = " << Econserve_rateSum << std::endl;
 										// Momenta
 										holderpc[0] = real(px(indC,indC));
@@ -284,6 +281,8 @@ std::cout << "Econserve_rateSum = " << Econserve_rateSum << std::endl;
 std::cout << "LineWidth_in_eV_from_1_Proc = " << LineWidth_in_eV_from_1_Proc << std::endl;
 //double Esigma = T;
 std::vector<double> EcProbDensity = EcHist.getHist();
+std::vector<double> EcGrid = EcHist.getEgrid();
 std::vector<double> EvProbDensity = EvHist.getHist();
-std::cout <<"done";
-}	
+std::vector<double> EvGrid = EvHist.getEgrid();
+std::cout << "done" << std::endl;
+}
