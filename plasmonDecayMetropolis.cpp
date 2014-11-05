@@ -74,18 +74,15 @@ int main(int argc, char** argv)
 
 	bandStruct bs("wannier");
 
-	const int iProc = 1;
-	const int nProcs = 1;
-
 	//Compute the normalization factor
-	const int numBlocks = floor((totalBlocks*(iProc+1.0))/nProcs) - floor((totalBlocks*iProc*1.0)/nProcs);
-	std::vector<double> N1blocks(numBlocks);
-	int nKpts = floor(nKptsN1 *1.0/numBlocks);
-	double N1blocksSum = 0.0;
+	int blockStart = (totalBlocks * (mpiUtil->iProcess())) / mpiUtil->nProcesses(); //MPI division
+	int blockStop = (totalBlocks * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
+	int nKpts = nKptsN1/totalBlocks;
+	double N1sum = 0., N1sumSq = 0.;
 	StopWatch watchNorm("normalization"); watchNorm.start();
-	for( int nb = 0; nb < numBlocks; nb++)
-	{	logPrintf("Calculating normalization factor ... "); logFlush();
-		N1blocks[nb] = 0;
+	logPrintf("Calculating normalization factor ... "); logFlush();
+	for(int block=blockStart; block<blockStop; block++)
+	{	double N1block = 0.;
 		for(int nk =0; nk<nKpts; nk++)
 		{	vector3<> kpnt; for(int j=0; j<3; j++) kpnt[j] = Random::uniform();
 			diagMatrix eigs = bs.getStates(kpnt);
@@ -100,31 +97,28 @@ int main(int argc, char** argv)
 					}
 				}
 			}
-			N1blocks[nb] += exp(-0.5*mk/(T*T));
+			N1block += exp(-0.5*mk/(T*T));
 		}
-		N1blocks[nb] /=  nKpts;
-		logPrintf("N1block = %le\n", N1blocks[nb]);
-		N1blocksSum += N1blocks[nb]; // used to calculate linewidth later
+		N1block /=  nKpts;
+		N1sum += N1block;
+		N1sumSq += std::pow(N1block,2);
 	}
 	watchNorm.stop();
-	double N1blocksAverage = N1blocksSum/numBlocks;
-	logPrintf("N1blocksSum = %lg   N1blocksAverage = %lg\n", N1blocksSum, N1blocksAverage);
+	mpiUtil->allReduce(N1sum, MPIUtil::ReduceSum);
+	mpiUtil->allReduce(N1sumSq, MPIUtil::ReduceSum);
+	double N1 = N1sum / totalBlocks;
+	double N1std = sqrt(N1sumSq/totalBlocks - N1*N1);
+	logPrintf("N1 = %lg +/- %lg\n", N1, N1std);
 
 	// Dielectric values
 	// Lorentz-drude model parameters: f Gamma omega
 	std::vector<vector3<double>> epsParams;
-	vector3<double> holdr(0.760, 0.053*eV, 0.000*eV);
-	epsParams.push_back(holdr);
-	holdr[0] = 0.024; holdr[1] = 0.241*eV; holdr[2] = 0.415*eV;
-	epsParams.push_back(holdr);
-	holdr[0] = 0.010; holdr[1] = 0.345*eV; holdr[2] = 0.830*eV;
-	epsParams.push_back(holdr);
-	holdr[0] = 0.071; holdr[1] = 0.870*eV; holdr[2] = 2.969*eV;
-	epsParams.push_back(holdr);
-	holdr[0] = 0.601; holdr[1] = 2.494*eV; holdr[2] = 4.304*eV;
-	epsParams.push_back(holdr);
-	holdr[0] = 4.384; holdr[1] = 2.214*eV; holdr[2] = 13.32*eV;
- 	epsParams.push_back(holdr);
+	epsParams.push_back(vector3<>(0.760, 0.053*eV, 0.000*eV));
+	epsParams.push_back(vector3<>(0.024, 0.241*eV, 0.415*eV));
+	epsParams.push_back(vector3<>(0.010, 0.345*eV, 0.830*eV));
+	epsParams.push_back(vector3<>(0.071, 0.870*eV, 2.969*eV));
+	epsParams.push_back(vector3<>(0.601, 2.494*eV, 4.304*eV));
+	epsParams.push_back(vector3<>(4.384, 2.214*eV, 13.32*eV));
 	double omega_p = 9.03*eV;
 	// Calculate the dielectric at omega = Eplasmon
 	double omega = Eplasmon;
@@ -136,8 +130,8 @@ int main(int argc, char** argv)
 	{	epsParam = epsParams[iPole];
 		num = epsParam[0]*(std::pow(omega_p,2));
 		den = one/(std::pow(epsParam[2],2) - omega*omega - I * omega * epsParam[1]);
-		epsilon = epsilon + num *den;
-		omegaEpsilonPrime = omegaEpsilonPrime + num * den*den * (std::pow(epsParam[2],2) + omega*omega);
+		epsilon += num *den;
+		omegaEpsilonPrime += num * den*den * (std::pow(epsParam[2],2) + omega*omega);
 	}
 	// Plasmon mode deatils
 	double realEpsilon = real(epsilon);
@@ -157,7 +151,7 @@ int main(int argc, char** argv)
 
 	// Metropolis sampling of BZ:
 	logPrintf("Starting Metropolis sampling of BZ\n");
-	int numWalkers = floor((totalWalkers*(iProc+1.0))/nProcs) - floor ((totalWalkers*iProc*1.0)/nProcs);
+	int numWalkers = floor((totalWalkers*(mpiUtil->iProcess()+1.0))/mpiUtil->nProcesses()) - floor ((totalWalkers*mpiUtil->iProcess()*1.0)/mpiUtil->nProcesses());
 	std::vector<double> Econserve_Ec, Econserve_Ev, Econserve_rate;
 	std::vector< vector3<complex> > Econserve_pcv; // matrix element (complex 3-vector)
 	std::vector< vector3<double> > Econserve_evcw, Econserve_pc, Econserve_pv; // energies and weights, final & initial momentum (real 3-vector)
@@ -174,7 +168,7 @@ int main(int argc, char** argv)
 	for(int iw = 0; iw<numWalkers; iw++)
 	{	logPrintf("... metropolis sampling for one walker ...");
 		ik = 0; nKptsTot = 0; equib=0;
-		srand(iProc + iw);
+		srand(mpiUtil->iProcess() + iw);
 		//for(int j=0; j<3; j++) kpntPrev[j] = Random::uniform();
 		kpntPrev[0] = ((double) rand() / (RAND_MAX));
 		kpntPrev[1] = ((double) rand() / (RAND_MAX));
@@ -274,14 +268,14 @@ int main(int argc, char** argv)
 		}
 		acceptRatio.push_back( (double)nKpts/nKptsTot );
 		logPrintf("\nacceptRatio = %lg  nKptsTot = %d\n", (double)nKpts/nKptsTot, nKptsTot);
-		LineWidth_in_eV_from_1_Proc_soFar = N1blocksAverage/numWalkers * Econserve_rateSum/eV;
+		LineWidth_in_eV_from_1_Proc_soFar = N1/numWalkers * Econserve_rateSum/eV;
 		logPrintf("LineWidth so far =  %lg\n", LineWidth_in_eV_from_1_Proc_soFar);
 	}
 	watchMet.stop();
 	fclose(eigsTxt);
 	
 	// For plasmon collect
-	double LineWidth_in_eV_from_1_Proc = N1blocksAverage/numWalkers * Econserve_rateSum/eV;
+	double LineWidth_in_eV_from_1_Proc = N1/numWalkers * Econserve_rateSum/eV;
 	logPrintf("Econserve_rateSum = %lg\n", Econserve_rateSum);
 	logPrintf("LineWidth_in_eV_from_1_Proc = %lg\n", LineWidth_in_eV_from_1_Proc);
 	std::vector<double> EcProbDensity = EcHist.getHist();
