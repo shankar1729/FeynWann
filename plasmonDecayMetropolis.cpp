@@ -152,13 +152,10 @@ int main(int argc, char** argv)
 	// Metropolis sampling of BZ:
 	logPrintf("Starting Metropolis sampling of BZ\n");
 	int numWalkers = floor((totalWalkers*(mpiUtil->iProcess()+1.0))/mpiUtil->nProcesses()) - floor ((totalWalkers*mpiUtil->iProcess()*1.0)/mpiUtil->nProcesses());
-	std::vector<double> Econserve_Ec, Econserve_Ev, Econserve_rate;
-	std::vector< vector3<complex> > Econserve_pcv; // matrix element (complex 3-vector)
-	std::vector< vector3<double> > Econserve_evcw, Econserve_pc, Econserve_pv; // energies and weights, final & initial momentum (real 3-vector)
-	FILE * eigsTxt = fopen("WannierBandstruct.eigenvals","w+");
+	std::vector<double> Econserve_rate;
+	//FILE * eigsTxt = fopen("WannierBandstruct.eigenvals","w+");
 	nKpts = floor(nKptsMetro/std::max(numWalkers,1));
-	vector3<double> kpnt, kpntPrev, holder, holderpc, holderpv;
-	vector3<complex> holderc;
+	vector3<double> kpnt, kpntPrev;
 	diagMatrix eigs;
 	double acceptProb, acceptBar, LineWidth_in_eV_from_1_Proc_soFar, weight, Ev, Ec , Econserve_rateSingle, Econserve_rateSum = 0, Esigma = T;
 	int ik, nKptsTot, equib;
@@ -169,29 +166,26 @@ int main(int argc, char** argv)
 	{	logPrintf("... metropolis sampling for one walker ...");
 		ik = 0; nKptsTot = 0; equib=0;
 		srand(mpiUtil->iProcess() + iw);
-		//for(int j=0; j<3; j++) kpntPrev[j] = Random::uniform();
 		kpntPrev[0] = ((double) rand() / (RAND_MAX));
 		kpntPrev[1] = ((double) rand() / (RAND_MAX));
 		kpntPrev[2] = ((double) rand() / (RAND_MAX));
 		kpnt = kpntPrev;
 		double mkPrev = INFINITY, mk;
-		std::vector<double> Evs, Ecs, acceptRatio;
+		std::vector<double> acceptRatio;
 		std::vector<matrix> Pk;
 		matrix px, py, pz;
 		while(ik<nKpts)
 		{	// Calculate mk:
 			mk = INFINITY;
 			eigs = bs.getStates(kpnt);
-			eigs.print(eigsTxt);
+			//eigs.print(eigsTxt);
 			for( int indV = 0; indV < eigs.nCols(); indV++)
 			{	Ev = eigs[indV] - mu;
 				if (Ev<0) // for every Ev<0
-				{	Evs.push_back(Ev);
-					for (int indC = 0; indC < eigs.nRows(); indC++)
+				{	for (int indC = 0; indC < eigs.nRows(); indC++)
 					{	Ec = eigs[indC] - mu;
 						if (Ec>0) // for every Ec>0
-						{	Ecs.push_back(Ec);
-							mk = std::min( mk, std::pow((Ec - Ev - Eplasmon),2));
+						{	mk = std::min( mk, std::pow((Ec - Ev - Eplasmon),2));
 							//logPrintf("mk = %lg\n", mk);
 						}
 					}
@@ -212,44 +206,24 @@ int main(int argc, char** argv)
 			
 				if(equib==1)
 				{	ik++;
-					
 					// Calculate transitions at current k-point:
-					weight = exp(0.5*(mk - std::pow((Ec - Ev - Eplasmon),2))/(T*T))/(T*sqrt(2*M_PI));
-					Pk = bs.getTransitions(kpnt);
-					
 					for( int indV = 0; indV < eigs.nCols(); indV++)
 					{	Ev = eigs[indV] - mu;
 						if (Ev<0) // for every Ev<0
 						{	for( int indC = 0; indC < eigs.nRows(); indC++){
 								Ec = eigs[indC] - mu;
-								if ( Ec > 0)
+								if ( Ec > 0) // for every Ec > 0
 								{	weight=exp(0.5*(mk-std::pow((Ec-Ev-Eplasmon),2))/(T*T))/(T*sqrt(2*M_PI));
 									if ( weight > weightCut )
-									{	// Scalars
-										holder[0] = Ev; holder[1] = Ec; holder[2] = weight;
-										Econserve_evcw.push_back(holder);
-										Econserve_Ev.push_back(Ev);
-										Econserve_Ec.push_back(Ec);
-										// Effective matrix elements
+									{	// Effective matrix elements
+										Pk = bs.getTransitions(kpnt);
 										px = Pk[0]; py = Pk[1]; pz = Pk[2];
-										holderc[0] = px(indC,indV); holderc[1] = py(indC,indV); holderc[2] = pz(indC,indV);
-										Econserve_pcv.push_back(holderc);
-										Econserve_rateSingle = (0.5*spinWeight) * weight * std::pow(abs( holderc[0] * sqrtGammaPrefac[0] + holderc[1] * sqrtGammaPrefac[1] + holderc[2] * sqrtGammaPrefac[2] ),2);
-										Econserve_rate.push_back(Econserve_rateSingle);
+										Econserve_rateSingle = (0.5*spinWeight) * weight * std::pow(abs( px(indC,indV) * sqrtGammaPrefac[0] + py(indC,indV) * sqrtGammaPrefac[1] + pz(indC,indV) * sqrtGammaPrefac[2] ),2);
 										Econserve_rateSum += Econserve_rateSingle;
 										//logPrintf("Econserve_rate = %lg\n", Econserve_rateSingle);
 										//logPrintf("Econserve_rateSum = %lg\n", Econserve_rateSum);
-										// Momenta
-										holderpc[0] = real(px(indC,indC));
-										holderpc[1] = real(px(indC,indC));
-										holderpc[2] = real(px(indC,indC));
-										holderpv[0] = real(px(indV,indV));
-										holderpv[1] = real(px(indV,indV));
-										holderpv[2] = real(px(indV,indV));
-										Econserve_pc.push_back(holderpc);
-										Econserve_pv.push_back(holderpv);
 									
-										// Histogram energys, weights
+										// Histogram energies, weights
 										EcHist.addEvent(Ec, weight);
 										EvHist.addEvent(Ev, weight);
 									}
@@ -272,7 +246,7 @@ int main(int argc, char** argv)
 		logPrintf("LineWidth so far =  %lg\n", LineWidth_in_eV_from_1_Proc_soFar);
 	}
 	watchMet.stop();
-	fclose(eigsTxt);
+	//fclose(eigsTxt);
 	
 	// For plasmon collect
 	double LineWidth_in_eV_from_1_Proc = N1/numWalkers * Econserve_rateSum/eV;
