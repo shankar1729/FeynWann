@@ -12,29 +12,35 @@
 epsilon::epsilon(string inputFilename, double E)
 {	//Get the epsilon parameters
 	Eplasmon = E;
-	std::ifstream systemFile(inputFilename.c_str());
-        if(!systemFile.is_open())
-                die("Could not open system file '%s' for reading.\n", inputFilename.c_str());
-        while(!systemFile.eof())
-        {	string line; getline(systemFile, line); //line-by-line processing (comments can now be inline)
-		//trim(line);
+	std::ifstream epsFile(inputFilename.c_str());
+	if(!epsFile.is_open())
+		die("Could not open system file '%s' for reading.\n", inputFilename.c_str());
+	logPrintf("---- Initializing dielectric model ----\n");
+	while(!epsFile.eof())
+	{	string line; getline(epsFile, line); //line-by-line processing (comments can now be inline)
+		trim(line);
+		if(line[0]=='#' || !line.length()) continue; //ignore comments and blank lines
 		istringstream iss(line);
-		string name; double val;
-		if(iss >> name >> val)
-		{	if( name == "omega_p")
-        		{	omega_p = val*eV;
-				logPrintf("omega_p = %lg\n", omega_p); 
-			}	
+		string name; iss >> name;
+		if(name == "omega_p")
+		{	iss >> omega_p;
+			omega_p *= eV;
+			logPrintf("omega_p = %lg Eh\n", omega_p);
 		}
-		string ename; double val1, val2, val3;
-		if(iss >> ename >> val1 >> val2 >> val3)
-		{	if (ename == "epsParams")
-			{	epsParams.push_back(vector3<>(val1, val2*eV, val3*eV));
-				logPrintf( "epsParams1 = %lg 2 =  %lg 3 = %lg\n", val1, val2, val3);
-			}	
+		else if(name == "epsParams")
+		{	double f, Gamma, omega0;
+			iss >> f >> Gamma >> omega0;
+			Gamma *= eV;
+			omega0 *= eV;
+			epsParams.push_back(vector3<>(f, Gamma, omega0));
+			logPrintf( "epsParams:  f = %lg  Gamma = %lg Eh  omega0 = %lg Eh\n", f, Gamma, omega0);
+		}
+		else
+		{	die("Error: invalid command '%s' in dielectric parameter file '%s'.\n", name.c_str(), inputFilename.c_str())
 		}
 	}
-        systemFile.close();
+	logPrintf("\n");
+	epsFile.close();
 }
 
 double epsilon::getLquant()

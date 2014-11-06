@@ -68,11 +68,20 @@ int main(int argc, char** argv)
 		finalizeSystem();
 		return 0;
 	}
+	logPrintf("\n");
 	
-	const double weightCut = 1e-6; // Ignore states with filling weight below this threshold
+	//Initialize dielectric model:
+	epsilon eps("epsilon.txt", Eplasmon);
+	double Lquant = eps.getLquant();
+	double modGammaMinus = eps.getModGammaMinus();
+	double k = eps.getK();
 
+	//Initialize Wannier bandstructure:
 	bandStruct bs("wannier");
 
+	const double weightCut = 1e-6; // Ignore states with filling weight below this threshold
+
+	
 	//Compute the normalization factor
 	int blockStart = (totalBlocks * (mpiUtil->iProcess())) / mpiUtil->nProcesses(); //MPI division
 	int blockStop = (totalBlocks * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
@@ -109,16 +118,10 @@ int main(int argc, char** argv)
 	double N1std = sqrt(N1sumSq/totalBlocks - N1*N1);
 	logPrintf("N1 = %lg +/- %lg\n", N1, N1std);
 
-	// Dielectric values
-	epsilon eps("epsilon.txt", Eplasmon);
-	double Lquant = eps.getLquant();
-	double modGammaMinus = eps.getModGammaMinus();
-	double k = eps.getK();
-
 	// For plasmon collect, Plasmon direction
 	vector3<complex> kHat(cos(kPhi), sin(kPhi), 0.0);
 
-// Metropolis sampling of BZ:
+	// Metropolis sampling of BZ:
 	logPrintf("Starting Metropolis sampling of BZ\n");
 	int numWalkers = floor((totalWalkers*(mpiUtil->iProcess()+1.0))/mpiUtil->nProcesses()) - floor ((totalWalkers*mpiUtil->iProcess()*1.0)/mpiUtil->nProcesses());
 	std::vector<double> Econserve_rate;
