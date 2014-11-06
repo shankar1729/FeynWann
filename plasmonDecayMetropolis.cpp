@@ -158,7 +158,7 @@ int main(int argc, char** argv)
 	vector3<double> kpnt, kpntPrev;
 	diagMatrix eigs;
 	double acceptProb, acceptBar, LineWidth_in_eV_from_1_Proc_soFar, weight, Ev, Ec , Econserve_rateSingle, Econserve_rateSum = 0, Esigma = T;
-	int ik, nKptsTot, equib;
+	int ik, nKptsTot, equib, totalMetroSteps;
 	histogram EcHist(-10*Esigma, 0.5*Esigma, Eplasmon+5*Esigma);
 	histogram EvHist(-Eplasmon-5*Esigma, 0.5*Esigma, 10*Esigma);
 	StopWatch watchMet("metropolis"); watchMet.start();
@@ -239,13 +239,16 @@ int main(int argc, char** argv)
 			kpnt[2] = kpntPrev[2] + dk * ((double) rand() / (RAND_MAX));
 			if( equib == 1)
 				nKptsTot++;
+
+			totalMetroSteps++;
 		}
 		acceptRatio.push_back( (double)nKpts/nKptsTot );
-		logPrintf("\nacceptRatio = %lg  nKptsTot = %d\n", (double)nKpts/nKptsTot, nKptsTot);
+		logPrintf("\nacceptRatio = %lg  nKptsTot = %d total Metro Steps = %d\n", (double)nKpts/nKptsTot, nKptsTot, totalMetroSteps);
 		LineWidth_in_eV_from_1_Proc_soFar = N1/numWalkers * Econserve_rateSum/eV;
 		logPrintf("LineWidth so far =  %lg\n", LineWidth_in_eV_from_1_Proc_soFar);
 	}
 	watchMet.stop();
+	watchMet.print();
 	//fclose(eigsTxt);
 	
 	// For plasmon collect
