@@ -154,11 +154,11 @@ int main(int argc, char** argv)
 	int numWalkers = floor((totalWalkers*(mpiUtil->iProcess()+1.0))/mpiUtil->nProcesses()) - floor ((totalWalkers*mpiUtil->iProcess()*1.0)/mpiUtil->nProcesses());
 	std::vector<double> Econserve_rate;
 	//FILE * eigsTxt = fopen("WannierBandstruct.eigenvals","w+");
-	nKpts = floor(nKptsMetro/std::max(numWalkers,1));
+	nKpts = nKptsMetro/numWalkers;
 	vector3<double> kpnt, kpntPrev;
 	diagMatrix eigs;
 	double acceptProb, acceptBar, LineWidth_in_eV_from_1_Proc_soFar, weight, Ev, Ec , Econserve_rateSingle, Econserve_rateSum = 0, Esigma = T;
-	int ik, nKptsTot, equib, totalMetroSteps;
+	int ik, nKptsTot, equib, totalMetroSteps=0;
 	histogram EcHist(-10*Esigma, 0.5*Esigma, Eplasmon+5*Esigma);
 	histogram EvHist(-Eplasmon-5*Esigma, 0.5*Esigma, 10*Esigma);
 	StopWatch watchMet("metropolis"); watchMet.start();
@@ -166,9 +166,8 @@ int main(int argc, char** argv)
 	{	logPrintf("... metropolis sampling for one walker ...");
 		ik = 0; nKptsTot = 0; equib=0;
 		srand(mpiUtil->iProcess() + iw);
-		kpntPrev[0] = ((double) rand() / (RAND_MAX));
-		kpntPrev[1] = ((double) rand() / (RAND_MAX));
-		kpntPrev[2] = ((double) rand() / (RAND_MAX));
+		for(int j=0; j<3; j++)
+			kpntPrev[j] = Random::uniform();
 		kpnt = kpntPrev;
 		double mkPrev = INFINITY, mk;
 		std::vector<double> acceptRatio;
@@ -234,9 +233,8 @@ int main(int argc, char** argv)
 				}
 			}
 			// Generate next kpoint
-			kpnt[0] = kpntPrev[0] + dk * ((double) rand() / (RAND_MAX));
-			kpnt[1] = kpntPrev[1] + dk * ((double) rand() / (RAND_MAX));
-			kpnt[2] = kpntPrev[2] + dk * ((double) rand() / (RAND_MAX));
+			for(int j=0; j<3; j++)
+				kpnt[j] = kpntPrev[j] + dk * Random::normal();
 			if( equib == 1)
 				nKptsTot++;
 
