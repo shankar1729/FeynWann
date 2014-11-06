@@ -8,12 +8,11 @@
 #include <core/Units.h>
 #include "bandStruct.h"
 #include "histogram.h"
+#include "epsilon.h"
 
 int main(int argc, char** argv)
 {   string inputFilename; bool dryRun, printDefaults;
 	initSystemCmdline(argc, argv, "Metropolis calculation of plasmon decay rate", inputFilename, dryRun, printDefaults);
-	
-	const double c = 1./7.29735257e-3;
 
 	//Get the system parameters (mu, T, lattice vectors etc.)
 	struct InputMap : std::map<string,double> //map class with a safe accessor that quits with error if key not found
@@ -111,43 +110,13 @@ int main(int argc, char** argv)
 	logPrintf("N1 = %lg +/- %lg\n", N1, N1std);
 
 	// Dielectric values
-	// Lorentz-drude model parameters: f Gamma omega
-	std::vector<vector3<double>> epsParams;
-	epsParams.push_back(vector3<>(0.760, 0.053*eV, 0.000*eV));
-	epsParams.push_back(vector3<>(0.024, 0.241*eV, 0.415*eV));
-	epsParams.push_back(vector3<>(0.010, 0.345*eV, 0.830*eV));
-	epsParams.push_back(vector3<>(0.071, 0.870*eV, 2.969*eV));
-	epsParams.push_back(vector3<>(0.601, 2.494*eV, 4.304*eV));
-	epsParams.push_back(vector3<>(4.384, 2.214*eV, 13.32*eV));
-	double omega_p = 9.03*eV;
-	// Calculate the dielectric at omega = Eplasmon
-	double omega = Eplasmon;
-	complex epsilon(1.0,0.0), omegaEpsilonPrime(1.0,0.0), one(1.0,0.0), den;
-	double num;
-	vector3<double> epsParam;
-	complex I(0.0,1.0);
-	for(size_t iPole = 0; iPole < epsParams.size(); iPole++)
-	{	epsParam = epsParams[iPole];
-		num = epsParam[0]*(std::pow(omega_p,2));
-		den = one/(std::pow(epsParam[2],2) - omega*omega - I * omega * epsParam[1]);
-		epsilon += num *den;
-		omegaEpsilonPrime += num * den*den * (std::pow(epsParam[2],2) + omega*omega);
-	}
-	// Plasmon mode deatils
-	double realEpsilon = real(epsilon);
-	double k = (omega/c) * sqrt(realEpsilon/(realEpsilon+1));
-	double modGammaPlus = sqrt(k*k - (omega/c)*(omega/c));
-	double modGammaMinus = sqrt(k*k - (omega/c)*(omega/c));
-	double Lquant = (1/(4*std::pow(modGammaPlus,3))) * (std::pow(modGammaPlus,2) + k*k + std::pow((omega/c),2)) + (1/(4*std::pow(modGammaPlus,3))) * ((std::pow(modGammaMinus,2)+k*k)*real(omegaEpsilonPrime)+(std::pow((real(epsilon*omega/c)),2)));
+	epsilon eps("epsilon.txt", Eplasmon);
+	double Lquant = eps.getLquant();
+	double modGammaMinus = eps.getModGammaMinus();
+	double k = eps.getK();
 
 	// For plasmon collect, Plasmon direction
 	vector3<complex> kHat(cos(kPhi), sin(kPhi), 0.0);
-
-	// Compute effective mode vector on the frequency grid
-	vector3<complex> oneVec(0.0, 0.0, one);
-	vector3<complex> sqrtGammaPrefac = (M_PI/(sqrt((nKpts*abs(det(R)))*modGammaMinus*omega*Lquant))) * (kHat - I*(k/modGammaMinus)*oneVec);
-	logPrintf("sqrtGammaPrefac Real = %lg %lg %lg\n",  real(sqrtGammaPrefac[0]), real(sqrtGammaPrefac[1]), real(sqrtGammaPrefac[2]));
-	logPrintf("sqrtGammaPrefac Imag = %lg %lg %lg\n",  imag(sqrtGammaPrefac[0]), imag(sqrtGammaPrefac[1]), imag(sqrtGammaPrefac[2]));
 
 	// Metropolis sampling of BZ:
 	logPrintf("Starting Metropolis sampling of BZ\n");
@@ -155,6 +124,14 @@ int main(int argc, char** argv)
 	std::vector<double> Econserve_rate;
 	//FILE * eigsTxt = fopen("WannierBandstruct.eigenvals","w+");
 	nKpts = nKptsMetro/numWalkers;
+	// Compute effective mode vector
+	complex one(1.0,0.0);
+	vector3<complex> oneVec(0.0, 0.0, one);
+	complex I(0.0,1.0);
+	double omega = Eplasmon;
+	vector3<complex> sqrtGammaPrefac = (M_PI/(sqrt((nKpts*abs(det(R)))*modGammaMinus*omega*Lquant))) * (kHat - I*(k/modGammaMinus)*oneVec);
+	logPrintf("sqrtGammaPrefac Real = %lg %lg %lg\n",  real(sqrtGammaPrefac[0]), real(sqrtGammaPrefac[1]), real(sqrtGammaPrefac[2]));
+	logPrintf("sqrtGammaPrefac Imag = %lg %lg %lg\n",  imag(sqrtGammaPrefac[0]), imag(sqrtGammaPrefac[1]), imag(sqrtGammaPrefac[2]));
 	vector3<double> kpnt, kpntPrev;
 	diagMatrix eigs;
 	double acceptProb, acceptBar, LineWidth_in_eV_from_1_Proc_soFar, weight, Ev, Ec , Econserve_rateSingle, Econserve_rateSum = 0, Esigma = T;
