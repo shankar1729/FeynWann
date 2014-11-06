@@ -13,8 +13,8 @@ class epsilon
 {
 public:
 	std::vector<vector3<double>> epsParams;
-	double omega_p, Eplasmon, modGammaPlus, modGammaMinus, k;
-	epsilon(string inputFilename, double Eplamson);
+	double omega_p, omega, Eplasmon, modGammaPlus, modGammaMinus, k;
+	epsilon(string inputFilename, double E);
 	double getLquant();
 	double getModGammaMinus() { return modGammaMinus; }
 	double getK() {return k; }

@@ -9,24 +9,29 @@
 // -------------------------------------------- class epsilon --------------------------------------------
 
 // Constructor
-epsilon::epsilon(string inputFilename, double Eplasmon)
+epsilon::epsilon(string inputFilename, double E)
 {	//Get the epsilon parameters
+	Eplasmon = E;
 	std::ifstream systemFile(inputFilename.c_str());
         if(!systemFile.is_open())
                 die("Could not open system file '%s' for reading.\n", inputFilename.c_str());
         while(!systemFile.eof())
         {	string line; getline(systemFile, line); //line-by-line processing (comments can now be inline)
-		trim(line);
+		//trim(line);
 		istringstream iss(line);
 		string name; double val;
 		if(iss >> name >> val)
 		{	if( name == "omega_p")
-        			omega_p = val*eV;
+        		{	omega_p = val*eV;
+				logPrintf("omega_p = %lg\n", omega_p); 
+			}	
 		}
 		string ename; double val1, val2, val3;
 		if(iss >> ename >> val1 >> val2 >> val3)
 		{	if (ename == "epsParams")
-				epsParams.push_back(vector3<>(val1, val2*eV, val3*eV));
+			{	epsParams.push_back(vector3<>(val1, val2*eV, val3*eV));
+				logPrintf( "epsParams1 = %lg 2 =  %lg 3 = %lg\n", val1, val2, val3);
+			}	
 		}
 	}
         systemFile.close();
@@ -52,7 +57,8 @@ double epsilon::getLquant()
 	double realEpsilon = real(epsilon);
 	k = (omega/c) * sqrt(realEpsilon/(realEpsilon+1));
 	modGammaPlus = sqrt(k*k - (omega/c)*(omega/c));
-	modGammaMinus = sqrt(k*k - (omega/c)*(omega/c));
+	modGammaMinus = sqrt(k*k - (realEpsilon*(omega/c)*(omega/c)));
+	logPrintf("k = %lg omega = %lg c = %lg modGammaMinus  = %lg modGammaPlus = %lg\n", k, omega, c, modGammaMinus, modGammaPlus);
 	double Lquant = (1/(4*std::pow(modGammaPlus,3))) * (std::pow(modGammaPlus,2) + k*k + std::pow((omega/c),2)) + (1/(4*std::pow(modGammaPlus,3))) * ((std::pow(modGammaMinus,2)+k*k)*real(omegaEpsilonPrime)+(std::pow((real(epsilon*omega/c)),2)));
 	return Lquant;
 }

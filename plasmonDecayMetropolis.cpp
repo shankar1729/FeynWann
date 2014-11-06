@@ -118,20 +118,24 @@ int main(int argc, char** argv)
 	// For plasmon collect, Plasmon direction
 	vector3<complex> kHat(cos(kPhi), sin(kPhi), 0.0);
 
-	// Metropolis sampling of BZ:
+// Metropolis sampling of BZ:
 	logPrintf("Starting Metropolis sampling of BZ\n");
 	int numWalkers = floor((totalWalkers*(mpiUtil->iProcess()+1.0))/mpiUtil->nProcesses()) - floor ((totalWalkers*mpiUtil->iProcess()*1.0)/mpiUtil->nProcesses());
 	std::vector<double> Econserve_rate;
 	//FILE * eigsTxt = fopen("WannierBandstruct.eigenvals","w+");
 	nKpts = nKptsMetro/numWalkers;
+	
 	// Compute effective mode vector
 	complex one(1.0,0.0);
 	vector3<complex> oneVec(0.0, 0.0, one);
 	complex I(0.0,1.0);
 	double omega = Eplasmon;
+	double absdetR = abs(det(R));
+	logPrintf("nKpts = %d abs(det(R)) = %lg modGammaMinus = %lg omega = %lg Lquant = %lg\n", nKpts, absdetR, modGammaMinus, omega, Lquant);
 	vector3<complex> sqrtGammaPrefac = (M_PI/(sqrt((nKpts*abs(det(R)))*modGammaMinus*omega*Lquant))) * (kHat - I*(k/modGammaMinus)*oneVec);
 	logPrintf("sqrtGammaPrefac Real = %lg %lg %lg\n",  real(sqrtGammaPrefac[0]), real(sqrtGammaPrefac[1]), real(sqrtGammaPrefac[2]));
 	logPrintf("sqrtGammaPrefac Imag = %lg %lg %lg\n",  imag(sqrtGammaPrefac[0]), imag(sqrtGammaPrefac[1]), imag(sqrtGammaPrefac[2]));
+	
 	vector3<double> kpnt, kpntPrev;
 	diagMatrix eigs;
 	double acceptProb, acceptBar, LineWidth_in_eV_from_1_Proc_soFar, weight, Ev, Ec , Econserve_rateSingle, Econserve_rateSum = 0, Esigma = T;
