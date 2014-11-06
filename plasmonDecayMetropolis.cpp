@@ -70,18 +70,9 @@ int main(int argc, char** argv)
 	}
 	logPrintf("\n");
 	
-	//Initialize dielectric model:
-	epsilon eps("epsilon.txt", Eplasmon);
-	double Lquant = eps.getLquant();
-	double modGammaMinus = eps.getModGammaMinus();
-	double k = eps.getK();
-
 	//Initialize Wannier bandstructure:
 	bandStruct bs("wannier");
 
-	const double weightCut = 1e-6; // Ignore states with filling weight below this threshold
-
-	
 	//Compute the normalization factor
 	int blockStart = (totalBlocks * (mpiUtil->iProcess())) / mpiUtil->nProcesses(); //MPI division
 	int blockStop = (totalBlocks * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
@@ -118,27 +109,36 @@ int main(int argc, char** argv)
 	double N1std = sqrt(N1sumSq/totalBlocks - N1*N1);
 	logPrintf("N1 = %lg +/- %lg\n", N1, N1std);
 
+
+	//Initialize dielectric model:
+	double omega = Eplasmon;
+	epsilon eps("epsilon.txt");
+	eps.setFrequency(omega);
+	double Lquant = eps.Lquant;
+	double modGammaMinus = eps.modGammaMinus;
+	double k = eps.k;
+
 	// For plasmon collect, Plasmon direction
 	vector3<complex> kHat(cos(kPhi), sin(kPhi), 0.0);
 
 	// Metropolis sampling of BZ:
 	logPrintf("Starting Metropolis sampling of BZ\n");
-	int numWalkers = floor((totalWalkers*(mpiUtil->iProcess()+1.0))/mpiUtil->nProcesses()) - floor ((totalWalkers*mpiUtil->iProcess()*1.0)/mpiUtil->nProcesses());
+	//int numWalkers = floor((totalWalkers*(mpiUtil->iProcess()+1.0))/mpiUtil->nProcesses()) - floor ((totalWalkers*mpiUtil->iProcess()*1.0)/mpiUtil->nProcesses());
 	std::vector<double> Econserve_rate;
 	//FILE * eigsTxt = fopen("WannierBandstruct.eigenvals","w+");
-	nKpts = nKptsMetro/numWalkers;
+	int nKptsW = nKptsMetro/totalWalkers;
 	
 	// Compute effective mode vector
 	complex one(1.0,0.0);
 	vector3<complex> oneVec(0.0, 0.0, one);
 	complex I(0.0,1.0);
-	double omega = Eplasmon;
 	double absdetR = abs(det(R));
-	logPrintf("nKpts = %d abs(det(R)) = %lg modGammaMinus = %lg omega = %lg Lquant = %lg\n", nKpts, absdetR, modGammaMinus, omega, Lquant);
-	vector3<complex> sqrtGammaPrefac = (M_PI/(sqrt((nKpts*abs(det(R)))*modGammaMinus*omega*Lquant))) * (kHat - I*(k/modGammaMinus)*oneVec);
+	logPrintf("nKptsW = %d abs(det(R)) = %lg modGammaMinus = %lg omega = %lg Lquant = %lg\n", nKptsW, absdetR, modGammaMinus, omega, Lquant);
+	vector3<complex> sqrtGammaPrefac = (M_PI/(sqrt((nKptsW*abs(det(R)))*modGammaMinus*omega*Lquant))) * (kHat - I*(k/modGammaMinus)*oneVec);
 	logPrintf("sqrtGammaPrefac Real = %lg %lg %lg\n",  real(sqrtGammaPrefac[0]), real(sqrtGammaPrefac[1]), real(sqrtGammaPrefac[2]));
 	logPrintf("sqrtGammaPrefac Imag = %lg %lg %lg\n",  imag(sqrtGammaPrefac[0]), imag(sqrtGammaPrefac[1]), imag(sqrtGammaPrefac[2]));
-	
+
+	const double weightCut = 1e-6; // Ignore states with filling weight below this threshold
 	vector3<double> kpnt, kpntPrev;
 	diagMatrix eigs;
 	double acceptProb, acceptBar, LineWidth_in_eV_from_1_Proc_soFar, weight, Ev, Ec , Econserve_rateSingle, Econserve_rateSum = 0, Esigma = T;
@@ -146,10 +146,13 @@ int main(int argc, char** argv)
 	histogram EcHist(-10*Esigma, 0.5*Esigma, Eplasmon+5*Esigma);
 	histogram EvHist(-Eplasmon-5*Esigma, 0.5*Esigma, 10*Esigma);
 	StopWatch watchMet("metropolis"); watchMet.start();
-	for(int iw = 0; iw<numWalkers; iw++)
+	int walkerStart = (totalWalkers * (mpiUtil->iProcess())) / mpiUtil->nProcesses(); // MPI division
+	int walkerStop = (totalWalkers * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
+	int numWalkers = walkerStop - walkerStart;
+	for(int walk=walkerStart; walk<walkerStop; walk++)
 	{	logPrintf("... metropolis sampling for one walker ...");
 		ik = 0; nKptsTot = 0; equib=0;
-		srand(mpiUtil->iProcess() + iw);
+		srand(walk); // srand(mpiUtil->iProcess() + walk);
 		for(int j=0; j<3; j++)
 			kpntPrev[j] = Random::uniform();
 		kpnt = kpntPrev;
@@ -157,7 +160,7 @@ int main(int argc, char** argv)
 		std::vector<double> acceptRatio;
 		std::vector<matrix> Pk;
 		matrix px, py, pz;
-		while(ik<nKpts)
+		while(ik<nKptsW)
 		{	// Calculate mk:
 			mk = INFINITY;
 			eigs = bs.getStates(kpnt);
@@ -224,9 +227,9 @@ int main(int argc, char** argv)
 
 			totalMetroSteps++;
 		}
-		acceptRatio.push_back( (double)nKpts/nKptsTot );
-		logPrintf("\nacceptRatio = %lg  nKptsTot = %d total Metro Steps = %d\n", (double)nKpts/nKptsTot, nKptsTot, totalMetroSteps);
-		LineWidth_in_eV_from_1_Proc_soFar = N1/numWalkers * Econserve_rateSum/eV;
+		acceptRatio.push_back( (double)nKptsW/nKptsTot );
+		logPrintf("\nacceptRatio = %lg  nKptsTot = %d total Metro Steps = %d\n", (double)nKptsW/nKptsTot, nKptsTot, totalMetroSteps);
+		LineWidth_in_eV_from_1_Proc_soFar = N1/(walk - walkerStart +1) * Econserve_rateSum/eV;
 		logPrintf("LineWidth so far =  %lg\n", LineWidth_in_eV_from_1_Proc_soFar);
 	}
 	watchMet.stop();

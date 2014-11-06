@@ -9,9 +9,8 @@
 // -------------------------------------------- class epsilon --------------------------------------------
 
 // Constructor
-epsilon::epsilon(string inputFilename, double E)
+epsilon::epsilon(string inputFilename)
 {	//Get the epsilon parameters
-	Eplasmon = E;
 	std::ifstream epsFile(inputFilename.c_str());
 	if(!epsFile.is_open())
 		die("Could not open system file '%s' for reading.\n", inputFilename.c_str());
@@ -43,9 +42,9 @@ epsilon::epsilon(string inputFilename, double E)
 	epsFile.close();
 }
 
-double epsilon::getLquant()
+void epsilon::setFrequency(double omegaIn)
 {	// Calculate the dielectric at omega = Eplasmon
-	double omega = Eplasmon;
+	double omega = omegaIn;
 	complex epsilon(1.0,0.0), omegaEpsilonPrime(1.0,0.0), one(1.0,0.0), den;
 	double num;
 	vector3<double> epsParam;
@@ -65,8 +64,7 @@ double epsilon::getLquant()
 	modGammaPlus = sqrt(k*k - (omega/c)*(omega/c));
 	modGammaMinus = sqrt(k*k - (realEpsilon*(omega/c)*(omega/c)));
 	logPrintf("k = %lg omega = %lg c = %lg modGammaMinus  = %lg modGammaPlus = %lg\n", k, omega, c, modGammaMinus, modGammaPlus);
-	double Lquant = (1/(4*std::pow(modGammaPlus,3))) * (std::pow(modGammaPlus,2) + k*k + std::pow((omega/c),2)) + (1/(4*std::pow(modGammaPlus,3))) * ((std::pow(modGammaMinus,2)+k*k)*real(omegaEpsilonPrime)+(std::pow((real(epsilon*omega/c)),2)));
-	return Lquant;
+	Lquant = (1/(4*std::pow(modGammaPlus,3))) * (std::pow(modGammaPlus,2) + k*k + std::pow((omega/c),2)) + (1/(4*std::pow(modGammaPlus,3))) * ((std::pow(modGammaMinus,2)+k*k)*real(omegaEpsilonPrime)+(std::pow((real(epsilon*omega/c)),2)));
 }
 
 
