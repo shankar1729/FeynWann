@@ -193,7 +193,7 @@ int main(int argc, char** argv)
 
 			// Metropolis accept - reject:
 			acceptProb = exp(0.5*(mkPrev - mk)/(T*T));
-			acceptBar = ((double) rand() / (RAND_MAX));
+			acceptBar = Random::uniform();
 			//logPrintf("mk = %lg   mkPrev = %lg   acceptProb = %lg   acceptBar = %lg\n", mk, mkPrev, acceptProb, acceptBar);
 			if (acceptProb > acceptBar)
 			{	//logPrintf("loop entered\n");
