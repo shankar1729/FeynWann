@@ -133,8 +133,7 @@ int main(int argc, char** argv)
 	complex one(1.0,0.0);
 	vector3<complex> oneVec(0.0, 0.0, one);
 	complex I(0.0,1.0);
-	double absdetR = abs(det(R));
-	//logPrintf("nKptsW = %d abs(det(R)) = %lg modGammaMinus = %lg omega = %lg Lquant = %lg\n", nKptsW, absdetR, modGammaMinus, omega, Lquant);
+	//logPrintf("nKptsW = %d abs(det(R)) = %lg modGammaMinus = %lg omega = %lg Lquant = %lg\n", nKptsW, abs(det(R)), modGammaMinus, omega, Lquant);
 	vector3<complex> sqrtGammaPrefac = (M_PI/(sqrt((nKptsW*abs(det(R)))*modGammaMinus*omega*Lquant))) * (kHat - I*(k/modGammaMinus)*oneVec);
 	logPrintf("sqrtGammaPrefac Real = %lg %lg %lg\n",  real(sqrtGammaPrefac[0]), real(sqrtGammaPrefac[1]), real(sqrtGammaPrefac[2]));
 	logPrintf("sqrtGammaPrefac Imag = %lg %lg %lg\n",  imag(sqrtGammaPrefac[0]), imag(sqrtGammaPrefac[1]), imag(sqrtGammaPrefac[2]));
@@ -144,8 +143,8 @@ int main(int argc, char** argv)
 	diagMatrix eigs;
 	double acceptProb, acceptBar, LineWidth_in_eV_from_1_Proc_soFar, weight, Ev, Ec , Econserve_rateSingle, Econserve_rateSum = 0, Esigma = T;
 	int ik, nKptsTot, equib, totalMetroSteps=0;
-	histogram EcHist(-10*Esigma, 0.5*Esigma, Eplasmon+5*Esigma);
-	histogram EvHist(-Eplasmon-5*Esigma, 0.5*Esigma, 10*Esigma);
+	histogram EcHist(-10*Esigma, Esigma, Eplasmon+5*Esigma);
+	histogram EvHist(-Eplasmon-5*Esigma, Esigma, 10*Esigma);
 	StopWatch watchMet("metropolis"); watchMet.start();
 	int walkerStart = (totalWalkers * (mpiUtil->iProcess())) / mpiUtil->nProcesses(); // MPI division
 	int walkerStop = (totalWalkers * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
@@ -250,11 +249,11 @@ int main(int argc, char** argv)
 
 	// output histogram results to text file
 	ofstream EcDataFile, EvDataFile;
-	EcDataFile.open ("EcHist.data");
-	EvDataFile.open ("EvHist.data");
+	EcDataFile.open ("eDistrib-2.8eV-metro.dat");
+	EvDataFile.open ("hDistrib-2.8eV-metro.dat");
 	for(int ii = 0; ii<EcGrid.size(); ii++)
-	{	EcDataFile << EcGrid[ii] << "\t" << EcProbDensity[ii] <<std::endl;
-		EvDataFile << EvGrid[ii] << "\t" << EvProbDensity[ii] <<std::endl;
+	{	EcDataFile << EcGrid[ii]/eV << "\t" << EcProbDensity[ii]*eV <<std::endl;
+		EvDataFile << EvGrid[ii]/eV << "\t" << EvProbDensity[ii]*eV <<std::endl;
 	}
 	EcDataFile.close();
 	EvDataFile.close();
