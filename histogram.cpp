@@ -10,8 +10,9 @@
 //-------------------------- class histogram ------------------------------------------------
 
 // Constructor
-histogram::histogram(double Emin, double dE, double Emax)
+histogram::histogram(double emin, double de, double emax)
 {	// Make uniform energy gric
+	dE = de; Emin = emin; Emax = emax;
 	int numBins = (Emax - Emin)/dE;
 	double val = Emin;
 	for(int i =0; i<numBins; i++, val += dE){
@@ -22,7 +23,8 @@ histogram::histogram(double Emin, double dE, double Emax)
 }
 
 void histogram::addEvent(double energy, double weight)
-{	double index = floor((energy-Emin)/dE);
+{	double Energy = energy;
+	int index = floor((Energy-Emin)/dE);
 	//std::cout << "val before = " << out[index] << std::endl;
 	out[index] +=weight;
 	//std::cout << "val after = " << out[index] << std::endl;

@@ -14,9 +14,7 @@ class histogram
 public:
         double Emin, dE, Emax;
 	std::vector<double> Egrid, out;
-        histogram(double Emin, double dE, double Emax);
+        histogram(double emin, double de, double emax);
         void addEvent(double energy, double weight);
-	std::vector<double> getHist() { return out; }
-	std::vector<double> getEgrid() { return Egrid; }
 };
 #endif

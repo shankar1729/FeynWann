@@ -1,6 +1,7 @@
 #include <core/Util.h>
 #include <electronic/matrix.h>
 #include <fstream>
+#include <iterator>
 #include <sstream>
 #include <core/scalar.h>
 #include <core/Random.h>
@@ -212,6 +213,7 @@ int main(int argc, char** argv)
 										// Histogram energies, weights
 										EcHist.addEvent(Ec, weight);
 										EvHist.addEvent(Ev, weight);
+										//logPrintf("Ec = %lg Ev = %lg weight = %lg\n", Ec, Ev, weight);
 									}
 								}
 							}
@@ -240,10 +242,44 @@ int main(int argc, char** argv)
 	double LineWidth_in_eV_from_1_Proc = N1/numWalkers * Econserve_rateSum/eV;
 	logPrintf("Econserve_rateSum = %lg\n", Econserve_rateSum);
 	logPrintf("LineWidth_in_eV_from_1_Proc = %lg\n", LineWidth_in_eV_from_1_Proc);
-	std::vector<double> EcProbDensity = EcHist.getHist();
-	std::vector<double> EcGrid = EcHist.getEgrid();
-	std::vector<double> EvProbDensity = EvHist.getHist();
-	std::vector<double> EvGrid = EvHist.getEgrid();
+	std::vector<double> EcProbDensity = EcHist.out;
+	std::vector<double> EcGrid = EcHist.Egrid;
+	std::vector<double> EvProbDensity = EvHist.out;
+	std::vector<double> EvGrid = EvHist.Egrid;
+
+
+	// output histogram results to text file
+	ofstream EcDataFile, EvDataFile;
+	EcDataFile.open ("EcHist.data");
+	EvDataFile.open ("EvHist.data");
+	for(int ii = 0; ii<EcGrid.size(); ii++)
+	{	EcDataFile << EcGrid[ii] << "\t" << EcProbDensity[ii] <<std::endl;
+		EvDataFile << EvGrid[ii] << "\t" << EvProbDensity[ii] <<std::endl;
+	}
+	EcDataFile.close();
+	EvDataFile.close();
+
+/*
+	std::ofstream EcPoutput_file("./EcProbDensity.dat");
+	std::ostream_iterator<double> EcPoutput_iterator(EcPoutput_file, "\n");
+	std::copy(EcProbDensity.begin(), EcProbDensity.end(), EcPoutput_iterator);
+	EcPoutput_file.close();
+
+	std::ofstream EcGridoutput_file("./EcGrid.dat");
+	std::ostream_iterator<double> EcGridoutput_iterator(EcGridoutput_file, "\n");
+	std::copy(EcGrid.begin(), EcGrid.end(), EcGridoutput_iterator);
+	EcGridoutput_file.close();
 	
+	std::ofstream EvPoutput_file("./EvProbDensity.dat");
+	std::ostream_iterator<double> EvPoutput_iterator(EvPoutput_file, "\n");
+	std::copy(EvProbDensity.begin(), EvProbDensity.end(), EvPoutput_iterator);
+	EvPoutput_file.close();
+
+	std::ofstream EvGridoutput_file("./EvGrid.dat");
+	std::ostream_iterator<double> EvGridoutput_iterator(EvGridoutput_file, "\n");
+	std::copy(EvGrid.begin(), EvGrid.end(), EvGridoutput_iterator);
+	EvGridoutput_file.close();
+*/
+
 	finalizeSystem();
 }
