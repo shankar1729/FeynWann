@@ -9,10 +9,9 @@
 //---------------------------- class bandStruct---------------------------------
 
 //Constructor 
-bandStruct::bandStruct(string prefix)
+bandStruct::bandStruct(string prefix, double mu)
 {	// Read cell map
-	string filePrefix = prefix;
-	ifstream readCellMap(filePrefix + ".mlwfCellMap");
+	ifstream readCellMap(prefix + ".mlwfCellMap");
 	string headerLine; getline(readCellMap, headerLine); //read and ignore header line
 	vector3<int> cm;
 	double x,y,z;
@@ -21,18 +20,29 @@ bandStruct::bandStruct(string prefix)
 	readCellMap.close();
 
 	// Read wannier hamiltonian
-	string hFile = filePrefix + ".mlwfH";
+	string hFile = prefix + ".mlwfH";
 	nBands = sqrt(fileSize(hFile.c_str())/(16*cellMap.size())); //16 converts from bytes to number of complex numbers
 	hWannier.init(nBands*nBands, cellMap.size()); hWannier.read(hFile.c_str());
 
+	// Offset wannier Hamiltonian by mu:
+	for(size_t ic=0; ic<cellMap.size(); ic++)
+		if(!cellMap[ic].length_squared()) //diagonal element
+		{	matrix id = eye(nBands); id.reshape(nBands*nBands, 1);
+			hWannier.set(0,nBands*nBands, ic,ic+1, hWannier(0,nBands*nBands, ic,ic+1) - mu * id);
+		}
+	
 	// Read momentum matrix elements
-	pxWannier.init(nBands*nBands, cellMap.size()); pxWannier.read((filePrefix + ".mlwfPx").c_str());
-	pyWannier.init(nBands*nBands, cellMap.size()); pyWannier.read((filePrefix + ".mlwfPz").c_str());
-	pzWannier.init(nBands*nBands, cellMap.size()); pzWannier.read((filePrefix + ".mlwfPz").c_str());        
+	pxWannier.init(nBands*nBands, cellMap.size()); pxWannier.read((prefix + ".mlwfPx").c_str());
+	pyWannier.init(nBands*nBands, cellMap.size()); pyWannier.read((prefix + ".mlwfPz").c_str());
+	pzWannier.init(nBands*nBands, cellMap.size()); pzWannier.read((prefix + ".mlwfPz").c_str());
+	
+	kPointCache *= NAN; //indicate that cache is invalid
 }
 
 diagMatrix bandStruct::getStates(vector3<double> kPoint)
-{   static StopWatch watch("bandStruct::getStates"); watch.start();
+{   static StopWatch watch("bandStruct::getStates");
+	if(kPoint == kPointCache) return eigs;
+	watch.start();
 	//Calculate phase factors for each cell:
 	phase.init(cellMap.size(), 1);
 	for(size_t ic=0; ic<cellMap.size(); ic++)
@@ -42,16 +52,15 @@ diagMatrix bandStruct::getStates(vector3<double> kPoint)
 	Hk.reshape(nBands, nBands);
 	Hk = dagger_symmetrize(Hk);
 	//Diagonalize:
-	diagMatrix eigs; //Note evecs is remembered for use in kPoint
 	Hk.diagonalize(evecs, eigs);
-	kPoint_evecs = kPoint;
+	kPointCache = kPoint;
 	watch.stop();
 	return eigs;
 }
 
 std::vector<matrix> bandStruct::getTransitions(vector3<double> kPoint)
 {	static StopWatch watch("bandStruct::getTransitions"); watch.start();
-	if(!(kPoint == kPoint_evecs)) getStates(kPoint); //Update evecs and phase if necessary
+	if(!(kPoint == kPointCache)) getStates(kPoint); //Update evecs and phase if necessary
 	// Compute transitions at kPoint
 	matrix Pkx = pxWannier * phase; Pkx.reshape(nBands, nBands);
 	matrix Pky = pyWannier * phase; Pky.reshape(nBands, nBands);
@@ -63,4 +72,15 @@ std::vector<matrix> bandStruct::getTransitions(vector3<double> kPoint)
 	pk[2] = transpose(evecs) * Pkz * evecs;
 	watch.stop();
 	return pk;
+}
+
+double bandStruct::get_mk(vector3<double> kPoint, double omega, double T)
+{	diagMatrix E = getStates(kPoint);
+	double mk = INFINITY;
+	for(int v=0; v<nBands; v++) if(E[v]<0.)
+	{	for(int c=0; c<nBands; c++) if(E[c]>0.)
+		{	mk = std::min(mk, std::pow((E[c] - E[v] - omega),2));
+		}
+	}
+	return mk;
 }

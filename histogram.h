@@ -11,10 +11,13 @@
 
 class histogram
 {
+private:
+	double Emin, dE, normFac;
+	std::vector<double> out;
 public:
-        double Emin, dE, Emax;
-	std::vector<double> Egrid, out;
-        histogram(double emin, double de, double emax);
-        void addEvent(double energy, double weight);
+	histogram(double Emin, double dE, double Emax);
+	void addEvent(double E, double weight);
+	void allReduce(MPIUtil::ReduceOp op, bool safeMode=false); //collect over MPI
+	void print(string fname, double Eunit=1.) const; //write to file (with optional unit conversion)
 };
 #endif

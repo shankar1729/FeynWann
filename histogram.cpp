@@ -9,23 +9,27 @@
 
 //-------------------------- class histogram ------------------------------------------------
 
-// Constructor
-histogram::histogram(double emin, double de, double emax)
-{	// Make uniform energy gric
-	dE = de; Emin = emin; Emax = emax;
-	int numBins = (Emax - Emin)/dE;
-	double val = Emin;
-	for(int i =0; i<numBins; i++, val += dE){
-		Egrid.push_back(val);
-	}
-	Egrid.push_back(Emax);
-	out.assign(Egrid.size(),0);
+histogram::histogram(double Emin, double dE, double Emax)
+: Emin(Emin), dE(dE), normFac(1./(dE*sqrt(2*M_PI))), out(ceil((Emax-Emin)/dE), 0.)
+{
 }
 
-void histogram::addEvent(double energy, double weight)
-{	double Energy = energy;
-	int index = floor((Energy-Emin)/dE);
-	//std::cout << "val before = " << out[index] << std::endl;
-	out[index] +=weight;
-	//std::cout << "val after = " << out[index] << std::endl;
+void histogram::addEvent(double E, double weight)
+{	//Gauss smoothed histogram (analagous to whist.oct)
+	double iCenter = (E-Emin)/dE;
+	int iStart = std::max(0, int(floor(iCenter-5)));
+	int iStop = std::min(int(out.size())-1, int(ceil(iCenter+5)));
+	for(int i=iStart; i<iStop; i++)
+		out[i] += weight * normFac * exp(-0.5*std::pow(i-iCenter,2));
+}
+
+void histogram::allReduce(MPIUtil::ReduceOp op, bool safeMode)
+{	if(mpiUtil->nProcesses()>1)
+		mpiUtil->allReduce(out.data(), out.size(), op, safeMode);
+}
+
+void histogram::print(string fname, double Eunit) const
+{	ofstream ofs(fname.c_str());
+	for(size_t i=0; i<out.size(); i++)
+		ofs << (Emin+i*dE)/Eunit << "\t" << out[i]*Eunit << '\n';
 }

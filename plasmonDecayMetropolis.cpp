@@ -38,10 +38,10 @@ int main(int argc, char** argv)
 	systemFile.close();    
 	
 	const int nKptsN1 = inputMap.get("nKptsN1");
-	const int totalBlocks = inputMap.get("totalBlocks");
+	const int totalBlocks = inputMap.get("totalBlocks"); assert(totalBlocks>0);
 	const int nKptsMetro = inputMap.get("nKptsMetro");
 	const double dk = inputMap.get("dk");
-	const int totalWalkers = inputMap.get("totalWalkers");
+	const int totalWalkers = inputMap.get("totalWalkers"); assert(totalWalkers>0);
 	const double kPhi = inputMap.get("kPhi");
 	const double Eplasmon = inputMap.get("Eplasmon") * eV;
 	const double mu = inputMap.get("mu");
@@ -70,9 +70,15 @@ int main(int argc, char** argv)
 		return 0;
 	}
 	logPrintf("\n");
+
+	//Initialize dielectric model:
+	logPrintf("---- Initializing dielectric model ----\n");
+	epsilon eps("epsilon.txt");
+	double omega = Eplasmon;
+	eps.setFrequency(omega);
 	
 	//Initialize Wannier bandstructure:
-	bandStruct bs("wannier");
+	bandStruct bs("wannier", mu);
 
 	//Compute the normalization factor
 	int blockStart = (totalBlocks * (mpiUtil->iProcess())) / mpiUtil->nProcesses(); //MPI division
@@ -82,21 +88,11 @@ int main(int argc, char** argv)
 	StopWatch watchNorm("normalization"); watchNorm.start();
 	logPrintf("Calculating normalization factor ... "); logFlush();
 	for(int block=blockStart; block<blockStop; block++)
-	{	double N1block = 0.;
+	{	Random::seed(block);
+		double N1block = 0.;
 		for(int nk =0; nk<nKpts; nk++)
 		{	vector3<> kpnt; for(int j=0; j<3; j++) kpnt[j] = Random::uniform();
-			diagMatrix eigs = bs.getStates(kpnt);
-			double mk = INFINITY;
-			for(int indV = 0; indV < eigs.nCols(); indV++)
-			{	double Ev = eigs[indV] - mu;
-				if (Ev<0) // for every Ev<0
-				{	for(int indC = 0; indC < eigs.nRows(); indC++)
-					{	double Ec = eigs[indC] - mu;
-						if (Ec>0) // for every Ec>0
-							mk = std::min(mk, std::pow((Ec - Ev - Eplasmon),2));
-					}
-				}
-			}
+			double mk = bs.get_mk(kpnt, omega, T);
 			N1block += exp(-0.5*mk/(T*T));
 		}
 		N1block /=  nKpts;
@@ -110,112 +106,71 @@ int main(int argc, char** argv)
 	double N1std = sqrt(N1sumSq/totalBlocks - N1*N1);
 	logPrintf("N1 = %lg +/- %lg\n", N1, N1std);
 
-
-	//Initialize dielectric model:
-	double omega = Eplasmon;
-	epsilon eps("epsilon.txt");
-	eps.setFrequency(omega);
-	double Lquant = eps.Lquant;
-	double modGammaMinus = eps.modGammaMinus;
-	double k = eps.k;
-
 	// For plasmon collect, Plasmon direction
-	vector3<complex> kHat(cos(kPhi), sin(kPhi), 0.0);
-
+	
 	// Metropolis sampling of BZ:
 	logPrintf("Starting Metropolis sampling of BZ\n");
-	//int numWalkers = floor((totalWalkers*(mpiUtil->iProcess()+1.0))/mpiUtil->nProcesses()) - floor ((totalWalkers*mpiUtil->iProcess()*1.0)/mpiUtil->nProcesses());
 	std::vector<double> Econserve_rate;
-	//FILE * eigsTxt = fopen("WannierBandstruct.eigenvals","w+");
-	int nKptsW = nKptsMetro/totalWalkers;
 	
 	// Compute effective mode vector
 	complex one(1.0,0.0);
-	vector3<complex> oneVec(0.0, 0.0, one);
+	vector3<complex> zHat(0.0, 0.0, one);
+	vector3<complex> kHat(cos(kPhi), sin(kPhi), 0.0);
 	complex I(0.0,1.0);
-	//logPrintf("nKptsW = %d abs(det(R)) = %lg modGammaMinus = %lg omega = %lg Lquant = %lg\n", nKptsW, abs(det(R)), modGammaMinus, omega, Lquant);
-	vector3<complex> sqrtGammaPrefac = (M_PI/(sqrt((nKptsW*abs(det(R)))*modGammaMinus*omega*Lquant))) * (kHat - I*(k/modGammaMinus)*oneVec);
+	vector3<complex> sqrtGammaPrefac = (M_PI * sqrt(N1/((nKptsMetro*fabs(det(R)))*eps.modGammaMinus*omega*eps.Lquant)) ) * (kHat - I*(eps.k/eps.modGammaMinus)*zHat);
 	logPrintf("sqrtGammaPrefac Real = %lg %lg %lg\n",  real(sqrtGammaPrefac[0]), real(sqrtGammaPrefac[1]), real(sqrtGammaPrefac[2]));
 	logPrintf("sqrtGammaPrefac Imag = %lg %lg %lg\n",  imag(sqrtGammaPrefac[0]), imag(sqrtGammaPrefac[1]), imag(sqrtGammaPrefac[2]));
 
-	const double weightCut = 1e-6; // Ignore states with filling weight below this threshold
-	vector3<double> kpnt, kpntPrev;
-	diagMatrix eigs;
-	double acceptProb, acceptBar, LineWidth_in_eV_from_1_Proc_soFar, weight, Ev, Ec , Econserve_rateSingle, Econserve_rateSum = 0, Esigma = T;
-	int ik, nKptsTot, equib, totalMetroSteps=0;
-	histogram EcHist(-10*Esigma, Esigma, Eplasmon+5*Esigma);
-	histogram EvHist(-Eplasmon-5*Esigma, Esigma, 10*Esigma);
-	StopWatch watchMet("metropolis"); watchMet.start();
+	const double weightCut = 1e-6;
+	double Gamma = 0.;
+	histogram EcHist(-10*T, T, Eplasmon+5*T);
+	histogram EvHist(-Eplasmon-5*T, T, 10*T);
+	double acceptRatioSum = 0., acceptRatioSumSq = 0.;
 	int walkerStart = (totalWalkers * (mpiUtil->iProcess())) / mpiUtil->nProcesses(); // MPI division
 	int walkerStop = (totalWalkers * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
-	int numWalkers = walkerStop - walkerStart;
-	for(int walk=walkerStart; walk<walkerStop; walk++)
-	{	logPrintf("... metropolis sampling for one walker ...");
-		ik = 0; nKptsTot = 0; equib=0;
-		srand(walk); // srand(mpiUtil->iProcess() + walk);
+	nKpts = nKptsMetro / totalWalkers;
+	StopWatch watchMet("metropolis"); watchMet.start();
+	for(int walker=walkerStart; walker<walkerStop; walker++)
+	{	Random::seed(walker);
+		logPrintf("Metropolis walk# %d ... ", walker); fflush(stdout);
+		vector3<> kpntPrev;
 		for(int j=0; j<3; j++)
 			kpntPrev[j] = Random::uniform();
-		kpnt = kpntPrev;
-		double mkPrev = INFINITY, mk;
-		std::vector<double> acceptRatio;
-		std::vector<matrix> Pk;
-		matrix px, py, pz;
-		while(ik<nKptsW)
+		vector3<> kpnt = kpntPrev;
+		int nKptsTot = 0; //denominator of accept ratio
+		bool equib = false;
+		double mkPrev = INFINITY;
+
+		for(int ik=0; ik<nKpts; )
 		{	// Calculate mk:
-			mk = INFINITY;
-			eigs = bs.getStates(kpnt);
-			//eigs.print(eigsTxt);
-			for( int indV = 0; indV < eigs.nCols(); indV++)
-			{	Ev = eigs[indV] - mu;
-				if (Ev<0) // for every Ev<0
-				{	for (int indC = 0; indC < eigs.nRows(); indC++)
-					{	Ec = eigs[indC] - mu;
-						if (Ec>0) // for every Ec>0
-						{	mk = std::min( mk, std::pow((Ec - Ev - Eplasmon),2));
-							//logPrintf("mk = %lg\n", mk);
-						}
-					}
-				}
-			}
+			double mk = bs.get_mk(kpnt, omega, T);
 
 			// Metropolis accept - reject:
-			acceptProb = exp(0.5*(mkPrev - mk)/(T*T));
-			acceptBar = Random::uniform();
-			//logPrintf("mk = %lg   mkPrev = %lg   acceptProb = %lg   acceptBar = %lg\n", mk, mkPrev, acceptProb, acceptBar);
-			if (acceptProb > acceptBar)
-			{	//logPrintf("loop entered\n");
-				mkPrev = mk;
+			if(exp(0.5*(mkPrev - mk)/(T*T)) > Random::uniform())
+			{	mkPrev = mk;
 				kpntPrev = kpnt;
 				
-				if( mk < 2*T*T)
-					equib = 1;
+				if(mk < 2*T*T) equib = true;
 			
-				if(equib==1)
+				if(equib)
 				{	ik++;
 					// Calculate transitions at current k-point:
-					for( int indV = 0; indV < eigs.nCols(); indV++)
-					{	Ev = eigs[indV] - mu;
-						if (Ev<0) // for every Ev<0
-						{	for( int indC = 0; indC < eigs.nRows(); indC++){
-								Ec = eigs[indC] - mu;
-								if ( Ec > 0) // for every Ec > 0
-								{	weight=exp(0.5*(mk-std::pow((Ec-Ev-Eplasmon),2))/(T*T))/(T*sqrt(2*M_PI));
-									if ( weight > weightCut )
-									{	// Effective matrix elements
-										Pk = bs.getTransitions(kpnt);
-										px = Pk[0]; py = Pk[1]; pz = Pk[2];
-										Econserve_rateSingle = (0.5*spinWeight) * weight * std::pow(abs( px(indC,indV) * sqrtGammaPrefac[0] + py(indC,indV) * sqrtGammaPrefac[1] + pz(indC,indV) * sqrtGammaPrefac[2] ),2);
-										Econserve_rateSum += Econserve_rateSingle;
-										//logPrintf("Econserve_rate = %lg\n", Econserve_rateSingle);
-										//logPrintf("Econserve_rateSum = %lg\n", Econserve_rateSum);
-									
-										// Histogram energies, weights
-										EcHist.addEvent(Ec, weight);
-										EvHist.addEvent(Ev, weight);
-										//logPrintf("Ec = %lg Ev = %lg weight = %lg\n", Ec, Ev, weight);
-									}
-								}
-							}
+					diagMatrix E = bs.getStates(kpnt);
+					std::vector<matrix> Pk = bs.getTransitions(kpnt);
+					for(int v=0; v<E.nRows(); v++) if(E[v]<0.)
+					{	for(int c=0; c<E.nRows(); c++) if(E[c]>0.)
+						{	double mk_cv = std::pow(E[c] - E[v] - Eplasmon,2);
+							double weightEconserve = exp(0.5*(mk-mk_cv)/(T*T))/(T*sqrt(2*M_PI)); //weight contribution due to energy conservation
+							if(weightEconserve < weightCut) continue;
+							// Effective matrix elements
+							complex prefacDotP = 0.;
+							for(int j=0; j<3; j++)
+								prefacDotP += sqrtGammaPrefac[j] * Pk[j](c,v);
+							double weight = (0.5*spinWeight) * weightEconserve * prefacDotP.norm(); //norm = abs^2
+							//Include in statistics:
+							Gamma += weight;
+							EcHist.addEvent(E[c], weight);
+							EvHist.addEvent(E[v], weight);
 						}
 					}
 				}
@@ -223,40 +178,30 @@ int main(int argc, char** argv)
 			// Generate next kpoint
 			for(int j=0; j<3; j++)
 				kpnt[j] = kpntPrev[j] + dk * Random::normal();
-			if( equib == 1)
-				nKptsTot++;
-
-			totalMetroSteps++;
+			if(equib) nKptsTot++;
 		}
-		acceptRatio.push_back( (double)nKptsW/nKptsTot );
-		logPrintf("\nacceptRatio = %lg  nKptsTot = %d total Metro Steps = %d\n", (double)nKptsW/nKptsTot, nKptsTot, totalMetroSteps);
-		LineWidth_in_eV_from_1_Proc_soFar = N1/(walk - walkerStart +1) * Econserve_rateSum/eV;
-		logPrintf("LineWidth so far =  %lg\n", LineWidth_in_eV_from_1_Proc_soFar);
+		double acceptRatio = (double)nKpts/nKptsTot;
+		acceptRatioSum += acceptRatio;
+		acceptRatioSumSq += std::pow(acceptRatio,2);
+		double GammaSoFar = totalWalkers * Gamma / (walker - walkerStart + 1); //current estimate from this process
+		logPrintf("acceptRatio = %lg  nKptsTot = %d  Gamma = %lg eV\n", acceptRatio, nKptsTot, GammaSoFar/eV);
 	}
 	watchMet.stop();
-	watchMet.print();
-	//fclose(eigsTxt);
 	
-	// For plasmon collect
-	double LineWidth_in_eV_from_1_Proc = N1/numWalkers * Econserve_rateSum/eV;
-	logPrintf("Econserve_rateSum = %lg\n", Econserve_rateSum);
-	logPrintf("LineWidth_in_eV_from_1_Proc = %lg\n", LineWidth_in_eV_from_1_Proc);
-	std::vector<double> EcProbDensity = EcHist.out;
-	std::vector<double> EcGrid = EcHist.Egrid;
-	std::vector<double> EvProbDensity = EvHist.out;
-	std::vector<double> EvGrid = EvHist.Egrid;
+	//Acceptance ratio:
+	mpiUtil->allReduce(acceptRatioSum, MPIUtil::ReduceSum);
+	mpiUtil->allReduce(acceptRatioSumSq, MPIUtil::ReduceSum);
+	double acceptRatio = acceptRatioSum / totalWalkers;
+	double acceptRatioStd = sqrt(acceptRatioSumSq/totalWalkers - acceptRatio*acceptRatio);
+	logPrintf("acceptRatio = %lg +/- %lg\n", acceptRatio, acceptRatioStd);
 
-
-	// output histogram results to text file
-	ofstream EcDataFile, EvDataFile;
-	EcDataFile.open ("eDistrib-2.8eV-metro.dat");
-	EvDataFile.open ("hDistrib-2.8eV-metro.dat");
-	for(int ii = 0; ii<EcGrid.size(); ii++)
-	{	EcDataFile << EcGrid[ii]/eV << "\t" << EcProbDensity[ii]*eV <<std::endl;
-		EvDataFile << EvGrid[ii]/eV << "\t" << EvProbDensity[ii]*eV <<std::endl;
-	}
-	EcDataFile.close();
-	EvDataFile.close();
+	//Decay rate:
+	mpiUtil->allReduce(Gamma, MPIUtil::ReduceSum);
+	logPrintf("Linewidth = %lg eV\n", Gamma/eV);
+	
+	//Carrier distributions:
+	EcHist.allReduce(MPIUtil::ReduceSum); EcHist.print("eDistrib-2.8eV-metro.dat", eV);
+	EvHist.allReduce(MPIUtil::ReduceSum); EvHist.print("hDistrib-2.8eV-metro.dat", eV);
 
 	finalizeSystem();
 }
