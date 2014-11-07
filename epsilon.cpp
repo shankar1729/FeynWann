@@ -63,8 +63,9 @@ void epsilon::setFrequency(double omegaIn)
 	k = (omega/c) * sqrt(realEpsilon/(realEpsilon+1));
 	modGammaPlus = sqrt(k*k - (omega/c)*(omega/c));
 	modGammaMinus = sqrt(k*k - (realEpsilon*(omega/c)*(omega/c)));
-	logPrintf("k = %lg omega = %lg c = %lg modGammaMinus  = %lg modGammaPlus = %lg\n", k, omega, c, modGammaMinus, modGammaPlus);
-	Lquant = (1/(4*std::pow(modGammaPlus,3))) * (std::pow(modGammaPlus,2) + k*k + std::pow((omega/c),2)) + (1/(4*std::pow(modGammaPlus,3))) * ((std::pow(modGammaMinus,2)+k*k)*real(omegaEpsilonPrime)+(std::pow((real(epsilon*omega/c)),2)));
+	Lquant = (1/(4*std::pow(modGammaPlus,3))) * (std::pow(modGammaPlus,2) + k*k + std::pow((omega/c),2))
+		+ (1/(4*std::pow(modGammaMinus,3))) * ((std::pow(modGammaMinus,2)+k*k)*real(omegaEpsilonPrime)+(std::pow((real(epsilon*omega/c)),2)));
+	logPrintf("omega = %lg  k = %lg  modGammaMinus  = %lg  modGammaPlus = %lg  Lquant = %lg\n", omega, k, modGammaMinus, modGammaPlus, Lquant);
 }
 
 
