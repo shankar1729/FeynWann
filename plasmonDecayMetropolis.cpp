@@ -134,7 +134,7 @@ int main(int argc, char** argv)
 	vector3<complex> oneVec(0.0, 0.0, one);
 	complex I(0.0,1.0);
 	double absdetR = abs(det(R));
-	logPrintf("nKptsW = %d abs(det(R)) = %lg modGammaMinus = %lg omega = %lg Lquant = %lg\n", nKptsW, absdetR, modGammaMinus, omega, Lquant);
+	//logPrintf("nKptsW = %d abs(det(R)) = %lg modGammaMinus = %lg omega = %lg Lquant = %lg\n", nKptsW, absdetR, modGammaMinus, omega, Lquant);
 	vector3<complex> sqrtGammaPrefac = (M_PI/(sqrt((nKptsW*abs(det(R)))*modGammaMinus*omega*Lquant))) * (kHat - I*(k/modGammaMinus)*oneVec);
 	logPrintf("sqrtGammaPrefac Real = %lg %lg %lg\n",  real(sqrtGammaPrefac[0]), real(sqrtGammaPrefac[1]), real(sqrtGammaPrefac[2]));
 	logPrintf("sqrtGammaPrefac Imag = %lg %lg %lg\n",  imag(sqrtGammaPrefac[0]), imag(sqrtGammaPrefac[1]), imag(sqrtGammaPrefac[2]));
@@ -258,28 +258,6 @@ int main(int argc, char** argv)
 	}
 	EcDataFile.close();
 	EvDataFile.close();
-
-/*
-	std::ofstream EcPoutput_file("./EcProbDensity.dat");
-	std::ostream_iterator<double> EcPoutput_iterator(EcPoutput_file, "\n");
-	std::copy(EcProbDensity.begin(), EcProbDensity.end(), EcPoutput_iterator);
-	EcPoutput_file.close();
-
-	std::ofstream EcGridoutput_file("./EcGrid.dat");
-	std::ostream_iterator<double> EcGridoutput_iterator(EcGridoutput_file, "\n");
-	std::copy(EcGrid.begin(), EcGrid.end(), EcGridoutput_iterator);
-	EcGridoutput_file.close();
-	
-	std::ofstream EvPoutput_file("./EvProbDensity.dat");
-	std::ostream_iterator<double> EvPoutput_iterator(EvPoutput_file, "\n");
-	std::copy(EvProbDensity.begin(), EvProbDensity.end(), EvPoutput_iterator);
-	EvPoutput_file.close();
-
-	std::ofstream EvGridoutput_file("./EvGrid.dat");
-	std::ostream_iterator<double> EvGridoutput_iterator(EvGridoutput_file, "\n");
-	std::copy(EvGrid.begin(), EvGrid.end(), EvGridoutput_iterator);
-	EvGridoutput_file.close();
-*/
 
 	finalizeSystem();
 }
