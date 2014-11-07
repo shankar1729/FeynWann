@@ -77,9 +77,9 @@ std::vector<matrix> bandStruct::getTransitions(vector3<double> kPoint)
 double bandStruct::get_mk(vector3<double> kPoint, double omega, double T)
 {	diagMatrix E = getStates(kPoint);
 	double mk = INFINITY;
-	for(int v=0; v<nBands; v++) if(E[v]<0.)
-	{	for(int c=0; c<nBands; c++) if(E[c]>0.)
-		{	mk = std::min(mk, std::pow((E[c] - E[v] - omega),2));
+	for(int v=0; v<nBands; v++) if(E[v]<10.*T)
+	{	for(int c=0; c<nBands; c++) if(E[c]>-10.*T)
+		{	mk = std::min(mk, mk_sub(E[c], E[v], omega, T));
 		}
 	}
 	return mk;

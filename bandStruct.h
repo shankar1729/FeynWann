@@ -19,5 +19,13 @@ public:
 	diagMatrix getStates(vector3<double> kPoint);
 	std::vector<matrix> getTransitions(vector3<double> kPoint);
 	double get_mk(vector3<double> kPoint, double omega, double T); //calculate the energy conservation weight at a given k-point
+	
+	inline static double mk_sub(double Ec, double Ev, double omega, double T)
+	{	return std::pow((Ec - Ev - omega),2) - 2*T*T * (logFermi(Ev/T) + logFermi(-Ec/T));
+	}
+	
+	inline static double logFermi(double x) //calculate log(1/(1+exp(x)))
+	{	return (x>30.) ? -x : -log(1+exp(x)); //avoid overflow issues
+	}
 };
 #endif

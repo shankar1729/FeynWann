@@ -132,12 +132,13 @@ int main(int argc, char** argv)
 	StopWatch watchMet("metropolis"); watchMet.start();
 	for(int walker=walkerStart; walker<walkerStop; walker++)
 	{	Random::seed(walker);
-		logPrintf("Metropolis walk# %d ... ", walker); fflush(stdout);
+		logPrintf("Metropolis walk# %d ... ", walker); logFlush();
 		vector3<> kpntPrev;
 		for(int j=0; j<3; j++)
 			kpntPrev[j] = Random::uniform();
 		vector3<> kpnt = kpntPrev;
 		int nKptsTot = 0; //denominator of accept ratio
+		int nKptsEquib = 0;
 		bool equib = false;
 		double mkPrev = INFINITY;
 
@@ -157,9 +158,9 @@ int main(int argc, char** argv)
 					// Calculate transitions at current k-point:
 					diagMatrix E = bs.getStates(kpnt);
 					std::vector<matrix> Pk = bs.getTransitions(kpnt);
-					for(int v=0; v<E.nRows(); v++) if(E[v]<0.)
-					{	for(int c=0; c<E.nRows(); c++) if(E[c]>0.)
-						{	double mk_cv = std::pow(E[c] - E[v] - Eplasmon,2);
+					for(int v=0; v<E.nRows(); v++) if(E[v]<10.*T)
+					{	for(int c=0; c<E.nRows(); c++) if(E[c]>-10.*T)
+						{	double mk_cv = bandStruct::mk_sub(E[c], E[v], Eplasmon, T);
 							double weightEconserve = exp(0.5*(mk-mk_cv)/(T*T))/(T*sqrt(2*M_PI)); //weight contribution due to energy conservation
 							if(weightEconserve < weightCut) continue;
 							// Effective matrix elements
@@ -179,12 +180,22 @@ int main(int argc, char** argv)
 			for(int j=0; j<3; j++)
 				kpnt[j] = kpntPrev[j] + dk * Random::normal();
 			if(equib) nKptsTot++;
+			else
+			{	nKptsEquib++;
+				if(nKptsEquib > nKpts/2) //heuristic to prevent getting stuck in local pockets
+				{	logPrintf("\n\tReseting walker due to too many equilibration steps.\n");
+					for(int j=0; j<3; j++) kpntPrev[j] = Random::uniform();
+					kpnt = kpntPrev;
+					mkPrev = INFINITY;
+					nKptsEquib = 0;
+				}
+			}
 		}
 		double acceptRatio = (double)nKpts/nKptsTot;
 		acceptRatioSum += acceptRatio;
 		acceptRatioSumSq += std::pow(acceptRatio,2);
 		double GammaSoFar = totalWalkers * Gamma / (walker - walkerStart + 1); //current estimate from this process
-		logPrintf("acceptRatio = %lg  nKptsTot = %d  Gamma = %lg eV\n", acceptRatio, nKptsTot, GammaSoFar/eV);
+		logPrintf("acceptRatio = %lg  nKptsTot = %d  Gamma = %lg eV\n", acceptRatio, nKptsTot, GammaSoFar/eV); logFlush();
 	}
 	watchMet.stop();
 	
