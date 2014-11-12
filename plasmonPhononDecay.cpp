@@ -158,22 +158,26 @@ int main(int argc, char** argv)
 				if(equib)
 				{	ik++;
 					// Calculate transitions at current k-point:
-					diagMatrix E1 = bs.getStates(kpnt1) E2 = bs.getStates(kpnt2);
-					std::vector<matrix> Pk = bs.getTransitions(kpnt);
-					for(int v=0; v<E.nRows(); v++) if(E[v]<10.*T)
-					{	for(int c=0; c<E.nRows(); c++) if(E[c]>-10.*T)
-						{	double mk_cv = bandStruct::mk_sub(E[c], E[v], Eplasmon, T);
-							double weightEconserve = exp(0.5*(mk-mk_cv)/(T*T))/(T*sqrt(2*M_PI)); //weight contribution due to energy conservation
-							if(weightEconserve < weightCut) continue;
-							// Effective matrix elements
-							complex prefacDotP = 0.;
-							for(int j=0; j<3; j++)
-								prefacDotP += sqrtGammaPrefac[j] * Pk[j](c,v);
-							double weight = (0.5*spinWeight) * weightEconserve * prefacDotP.norm(); //norm = abs^2
-							//Include in statistics:
-							Gamma += weight;
-							EcHist.addEvent(E[c], weight);
-							EvHist.addEvent(E[v], weight);
+					diagMatrix E1 = bs.getStates(kpnt1), E2 = bs.getStates(kpnt2);
+					std::vector<matrix> Pk1 = bs.getTransitions(kpnt1), Pk2 = bs.getTransitions(kpnt2);
+					for(int v1=0; v1<E1.nRows(); v1++) if(E1[v1]<10.*T)
+					{	for(int v2=0; v2<E2.nRows(); v2++) if(E2[v2]<10.*T)
+						{	for(int c1=0; c1<E1.nRows(); c1++) if(E1[c1]>-10.*T)
+							{	for(int c2=0; c2<E2.nRows(); c2++) if(E2[c2]>-10.*T)
+								{	double mk_cvs = bandStruct::mk_subs(E1[c1], E1[v1], E2[c2], E2[v2], Eplasmon, T); // NOT SURE ABOUT THIS LINE.......??????????
+									double weightEconserve = exp(0.5*(mk-mk_cvs)/(T*T))/(T*sqrt(2*M_PI)); //weight contribution due to energy conservation
+									if(weightEconserve < weightCut) continue;
+									// Effective matrix elements
+									complex prefacDotP = 0.;
+									for(int j=0; j<3; j++)
+										prefacDotP += sqrtGammaPrefac[j] * Pk[j](c,v);
+									double weight = (0.5*spinWeight) * weightEconserve * prefacDotP.norm(); //norm = abs^2
+									//Include in statistics:
+									Gamma += weight;
+									EcHist.addEvent(E[c], weight);
+									EvHist.addEvent(E[v], weight);
+								}
+							}
 						}
 					}
 				}
