@@ -89,10 +89,13 @@ int main(int argc, char** argv)
 	for(int block=blockStart; block<blockStop; block++)
 	{	Random::seed(block);
 		double N1block = 0.;
-		for(int nk =0; nk<nKpts; nk++)
-		{	vector3<> kpnt; for(int j=0; j<3; j++) kpnt[j] = Random::uniform();
-			double mk = bs.get_mk(kpnt, omega, T);
-			N1block += exp(-0.5*mk/(T*T));
+		for(int nk1 =0; nk1<nKpts; nk1++)
+		{	vector3<> kpnt1; for(int j=0; j<3; j++) kpnt1[j] = Random::uniform();
+			for(int nk2=0; nk2<nKpts; nk2++)
+			{	vector3<> kpnt2; for(int j=0; j<3; j++) kpnt2[j] = Random::uniform();
+				double mk1k2 = bs.get_mk1k2(kpnt1, kpnt2, omega, T);
+				N1block += exp(-0.5*mk1k2/(T*T));
+			}
 		}
 		N1block /=  nKpts;
 		N1sum += N1block;
@@ -114,7 +117,8 @@ int main(int argc, char** argv)
 	vector3<complex> zHat(0.0, 0.0, one);
 	vector3<complex> kHat(cos(kPhi), sin(kPhi), 0.0);
 	complex I(0.0,1.0);
-	vector3<complex> sqrtGammaPrefac = (M_PI * sqrt(N1/((nKptsMetro*fabs(det(R)))*eps.modGammaMinus*omega*eps.Lquant)) ) * (kHat - I*(eps.k/eps.modGammaMinus)*zHat);
+	// WHY IS N1 INSIDE THE SQUARE_ROOT, SHOULD IT STILL BE??????????????????????????????
+	vector3<complex> sqrtGammaPrefac = ((M_PI/nKptsMetro) * sqrt(N1/(4*(fabs(det(R)))*eps.modGammaMinus*omega*eps.Lquant)) ) * (kHat - I*(eps.k/eps.modGammaMinus)*zHat);
 	logPrintf("sqrtGammaPrefac Real = %lg %lg %lg\n",  real(sqrtGammaPrefac[0]), real(sqrtGammaPrefac[1]), real(sqrtGammaPrefac[2]));
 	logPrintf("sqrtGammaPrefac Imag = %lg %lg %lg\n",  imag(sqrtGammaPrefac[0]), imag(sqrtGammaPrefac[1]), imag(sqrtGammaPrefac[2]));
 
@@ -130,25 +134,25 @@ int main(int argc, char** argv)
 	for(int walker=walkerStart; walker<walkerStop; walker++)
 	{	Random::seed(walker);
 		logPrintf("Metropolis walk# %d ... ", walker); logFlush();
-		vector3<> kpntPrev;
+		vector3<> kpnt1Prev, kpnt2Prev;
 		for(int j=0; j<3; j++)
-			kpntPrev[j] = Random::uniform();
-		vector3<> kpnt = kpntPrev;
+			kpnt1Prev[j] = Random::uniform(); kpnt2Prev[j] = Random::uniform;
+		vector3<> kpnt1 = kpnt1Prev, kpnt2 = kpnt2Prev;
 		int nKptsTot = 0; //denominator of accept ratio
 		int nKptsEquib = 0;
 		bool equib = false;
-		double mkPrev = INFINITY;
+		double mk1k2Prev = INFINITY;
 
 		for(int ik=0; ik<nKpts; )
 		{	// Calculate mk:
-			double mk = bs.get_mk(kpnt, omega, T);
+			double mk1k2 = bs.get_mk1k2(kpnt1, kpnt2, omega, T);
 
 			// Metropolis accept - reject:
-			if(exp(0.5*(mkPrev - mk)/(T*T)) > Random::uniform())
-			{	mkPrev = mk;
-				kpntPrev = kpnt;
+			if(exp(0.5*(mk1k2Prev - mk1k2)/(T*T)) > Random::uniform())
+			{	mk1k2Prev = mk1k2;
+				kpnt1Prev = kpnt1; kpnt2Prev = kpnt2;
 				
-				if(mk < 2*T*T) equib = true;
+				if(mk1k2 < 2*T*T) equib = true;
 			
 				if(equib)
 				{	ik++;
@@ -208,8 +212,8 @@ int main(int argc, char** argv)
 	logPrintf("Linewidth = %lg eV\n", Gamma/eV);
 	
 	//Carrier distributions:
-	EcHist.allReduce(MPIUtil::ReduceSum); EcHist.print("eDistrib-2.8eV-metro.dat", eV);
-	EvHist.allReduce(MPIUtil::ReduceSum); EvHist.print("hDistrib-2.8eV-metro.dat", eV);
+	EcHist.allReduce(MPIUtil::ReduceSum); EcHist.print("eDistrib-2.8eV-metro17.dat", eV);
+	EvHist.allReduce(MPIUtil::ReduceSum); EvHist.print("hDistrib-2.8eV-metro17.dat", eV);
 
 	finalizeSystem();
 }
