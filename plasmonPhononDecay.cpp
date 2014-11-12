@@ -90,12 +90,13 @@ int main(int argc, char** argv)
 	{	Random::seed(block);
 		double N1block = 0.;
 		for(int nk1 =0; nk1<nKpts; nk1++)
-		{	vector3<> kpnt1; for(int j=0; j<3; j++) kpnt1[j] = Random::uniform();
-			for(int nk2=0; nk2<nKpts; nk2++)
-			{	vector3<> kpnt2; for(int j=0; j<3; j++) kpnt2[j] = Random::uniform();
-				double mk1k2 = bs.get_mk1k2(kpnt1, kpnt2, omega, T);
-				N1block += exp(-0.5*mk1k2/(T*T));
+		{	vector3<> kpnt1, kpn2;
+			for(int j=0; j<3; j++)
+			{	kpnt1[j] = Random::uniform();
+				kpnt2[j] = Random::uniform();
 			}
+			double mk1k2 = bs.get_mk1k2(kpnt1, kpnt2, omega, T);
+			N1block += exp(-0.5*mk1k2/(T*T));
 		}
 		N1block /=  nKpts;
 		N1sum += N1block;
@@ -157,7 +158,7 @@ int main(int argc, char** argv)
 				if(equib)
 				{	ik++;
 					// Calculate transitions at current k-point:
-					diagMatrix E = bs.getStates(kpnt);
+					diagMatrix E1 = bs.getStates(kpnt1) E2 = bs.getStates(kpnt2);
 					std::vector<matrix> Pk = bs.getTransitions(kpnt);
 					for(int v=0; v<E.nRows(); v++) if(E[v]<10.*T)
 					{	for(int c=0; c<E.nRows(); c++) if(E[c]>-10.*T)
