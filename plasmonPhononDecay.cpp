@@ -161,7 +161,7 @@ int main(int argc, char** argv)
 				{	ik++;
 					// Calculate transitions at current k-point:
 					diagMatrix E1 = bs.getStates(kpnt1);
-					std::vector<matrix> Pk1 = bs.getTransitions(kpnt1)
+					std::vector<matrix> Pk1 = bs.getTransitions(kpnt1);
 					diagMatrix E2 = bs.getStates(kpnt2);
 					std::vector<matrix> Pk2 = bs.getTransitions(kpnt2);
 					for(int v=0; v<E1.nRows(); v++) if(E1[v]<10.*T)
