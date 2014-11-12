@@ -124,7 +124,7 @@ int main(int argc, char** argv)
 	logPrintf("sqrtGammaPrefac Imag = %lg %lg %lg\n",  imag(sqrtGammaPrefac[0]), imag(sqrtGammaPrefac[1]), imag(sqrtGammaPrefac[2]));
 
 	const double weightCut = 1e-6;
-	double Gamma = 0.;
+	double Gamma = 0., M = 0.15;// FOR NOW DEFINE M AS A CONSTANT
 	histogram EcHist(-10*T, 0.5*T, Eplasmon+5*T);
 	histogram EvHist(-Eplasmon-5*T, 0.5*T, 10*T);
 	double acceptRatioSum = 0., acceptRatioSumSq = 0.;
@@ -160,8 +160,10 @@ int main(int argc, char** argv)
 				if(equib)
 				{	ik++;
 					// Calculate transitions at current k-point:
-					diagMatrix E1 = bs.getStates(kpnt1), E2 = bs.getStates(kpnt2);
-					std::vector<matrix> Pk1 = bs.getTransitions(kpnt1), Pk2 = bs.getTransitions(kpnt2);
+					diagMatrix E1 = bs.getStates(kpnt1);
+					std::vector<matrix> Pk1 = bs.getTransitions(kpnt1)
+					diagMatrix E2 = bs.getStates(kpnt2);
+					std::vector<matrix> Pk2 = bs.getTransitions(kpnt2);
 					for(int v=0; v<E1.nRows(); v++) if(E1[v]<10.*T)
 					{	for(int c=0; c<E2.nRows(); c++) if(E2[c]>-10.*T)
 						{	double mk_cv = bandStruct::mk_sub(E2[c], E1[v], Eplasmon, T);
