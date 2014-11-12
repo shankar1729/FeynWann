@@ -90,7 +90,7 @@ int main(int argc, char** argv)
 	{	Random::seed(block);
 		double N1block = 0.;
 		for(int nk1 =0; nk1<nKpts; nk1++)
-		{	vector3<> kpnt1, kpn2;
+		{	vector3<> kpnt1, kpnt2;
 			for(int j=0; j<3; j++)
 			{	kpnt1[j] = Random::uniform();
 				kpnt2[j] = Random::uniform();
@@ -137,7 +137,9 @@ int main(int argc, char** argv)
 		logPrintf("Metropolis walk# %d ... ", walker); logFlush();
 		vector3<> kpnt1Prev, kpnt2Prev;
 		for(int j=0; j<3; j++)
-			kpnt1Prev[j] = Random::uniform(); kpnt2Prev[j] = Random::uniform;
+		{	kpnt1Prev[j] = Random::uniform();
+			kpnt2Prev[j] = Random::uniform();
+		}
 		vector3<> kpnt1 = kpnt1Prev, kpnt2 = kpnt2Prev;
 		int nKptsTot = 0; //denominator of accept ratio
 		int nKptsEquib = 0;
@@ -163,17 +165,19 @@ int main(int argc, char** argv)
 					for(int v=0; v<E1.nRows(); v++) if(E1[v]<10.*T)
 					{	for(int c=0; c<E2.nRows(); c++) if(E2[c]>-10.*T)
 						{	double mk_cv = bandStruct::mk_sub(E2[c], E1[v], Eplasmon, T);
-							double weightEconserve = exp(0.5*(mk-mk_cvs)/(T*T))/(T*sqrt(2*M_PI)); //weight contribution due to energy conservation
+							double weightEconserve = exp(0.5*(mk1k2-mk_cv)/(T*T))/(T*sqrt(2*M_PI)); //weight contribution due to energy conservation
 							if(weightEconserve < weightCut) continue;
 							// Effective matrix elements
 							complex prefacDotP = 0.;
-							for(int j=0; j<3; j++)
-								prefacDotP += sqrtGammaPrefac[j] * Pk[j](c,v);
+							for(int i=0; i<E1.nRows(); i++) // sum over the intermediate states
+							{	for(int j=0; j<3; j++)
+									prefacDotP += sqrtGammaPrefac[j] * ((Pk2[j](c,i)*(1-1/(exp(E2[i]/T)+1)) * M)/(E2[i]-E1[v]) + (Pk1[j](i,v)*(1-1/(exp(E1[i]/T)+1))*M)/(E1[i]-E1[v]-Eplasmon));
+							}
 							double weight = (0.5*spinWeight) * weightEconserve * prefacDotP.norm(); //norm = abs^2
 							//Include in statistics:
 							Gamma += weight;
-							EcHist.addEvent(E[c], weight);
-							EvHist.addEvent(E[v], weight);
+							EcHist.addEvent(E2[c], weight);
+							EvHist.addEvent(E1[v], weight);
 						}
 					}
 				}
@@ -188,7 +192,10 @@ int main(int argc, char** argv)
 			{	nKptsEquib++;
 				if(nKptsEquib > nKpts/2) //heuristic to prevent getting stuck in local pockets
 				{	logPrintf("\n\tReseting walker due to too many equilibration steps.\n");
-					for(int j=0; j<3; j++) kpnt1Prev[j] = Random::uniform(); kpnt2Prev[j] = Random::uniform();
+					for(int j=0; j<3; j++)
+					{	kpnt1Prev[j] = Random::uniform();
+						kpnt2Prev[j] = Random::uniform();
+					}
 					kpnt1 = kpnt1Prev; kpnt2 = kpnt2Prev;
 					mk1k2Prev = INFINITY;
 					nKptsEquib = 0;
