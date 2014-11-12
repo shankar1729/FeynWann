@@ -85,11 +85,11 @@ double bandStruct::get_mk(vector3<double> kPoint, double omega, double T)
 	return mk;
 }
 
-double bandStruct::get_mk1k2(vector3<double> kPoint1, vector3<double> kPoint1, double omega, double T)
+double bandStruct::get_mk1k2(vector3<double> kPoint1, vector3<double> kPoint2, double omega, double T)
 {       diagMatrix E1 = getStates(kPoint1), E2 = getStates(kPoint2);
         double mk1k2 = INFINITY;
-        for(int v=0; v<nBands; v++) if(E[v]<10.*T)
-        {       for(int c=0; c<nBands; c++) if(E[c]>-10.*T)
+        for(int v=0; v<nBands; v++) if(E1[v]<10.*T)
+        {       for(int c=0; c<nBands; c++) if(E2[c]>-10.*T)
                 {       mk1k2 = std::min(mk1k2, mk_sub(E2[c], E1[v], omega, T));
                 }
         }
