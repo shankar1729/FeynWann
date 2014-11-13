@@ -124,7 +124,7 @@ int main(int argc, char** argv)
 	logPrintf("sqrtGammaPrefac Imag = %lg %lg %lg\n",  imag(sqrtGammaPrefac[0]), imag(sqrtGammaPrefac[1]), imag(sqrtGammaPrefac[2]));
 
 	const double weightCut = 1e-6;
-	double Gamma = 0., M = 0.15;// FOR NOW DEFINE M AS A CONSTANT
+	double Gamma = 0., M = 1;// FOR NOW DEFINE M AS A CONSTANT
 	histogram EcHist(-10*T, 0.5*T, Eplasmon+5*T);
 	histogram EvHist(-Eplasmon-5*T, 0.5*T, 10*T);
 	double acceptRatioSum = 0., acceptRatioSumSq = 0.;
@@ -172,8 +172,12 @@ int main(int argc, char** argv)
 							// Effective matrix elements
 							complex prefacDotP = 0.;
 							for(int i=0; i<E1.nRows(); i++) // sum over the intermediate states
-							{	for(int j=0; j<3; j++)
-									prefacDotP += sqrtGammaPrefac[j] * ((Pk2[j](c,i)*(1-1/(exp(E2[i]/T)+1)) * M)/(E2[i]-E1[v]) + (Pk1[j](i,v)*(1-1/(exp(E1[i]/T)+1))*M)/(E1[i]-E1[v]-Eplasmon));
+							{	//double dK  = sqrt(std::pow(kpnt2[1]-knpt1[1],2) + 
+								//double n_i = 1/(exp(c*(kpnt2-kpnt1)/T)-1)
+								complex E1i(E1[i], 0.25*std::pow((E1[i] - mu),2));
+								complex E2i(E2[i], 0.25*std::pow((E2[i] - mu),2));
+								for(int j=0; j<3; j++)
+									prefacDotP += sqrtGammaPrefac[j] * ((Pk2[j](c,i)*(1-1/(exp(E2[i]/T)+1)) * M)/(E2i-E2[c]+Eplasmon) + (Pk1[j](i,v)*(1-1/(exp(E1[i]/T)+1))*M)/(E1i-E1[v]-Eplasmon));
 							}
 							double weight = (0.5*spinWeight) * weightEconserve * prefacDotP.norm(); //norm = abs^2
 							//Include in statistics:
@@ -224,8 +228,8 @@ int main(int argc, char** argv)
 	logPrintf("Linewidth = %lg eV\n", Gamma/eV);
 	
 	//Carrier distributions:
-	EcHist.allReduce(MPIUtil::ReduceSum); EcHist.print("eDistrib-2.8eV-metro17.dat", eV);
-	EvHist.allReduce(MPIUtil::ReduceSum); EvHist.print("hDistrib-2.8eV-metro17.dat", eV);
+	EcHist.allReduce(MPIUtil::ReduceSum); EcHist.print("eDistrib-2.8eV-phonon3.dat", eV);
+	EvHist.allReduce(MPIUtil::ReduceSum); EvHist.print("hDistrib-2.8eV-phonon3.dat", eV);
 
 	finalizeSystem();
 }
