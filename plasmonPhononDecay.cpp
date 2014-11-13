@@ -10,6 +10,7 @@
 #include "bandStruct.h"
 #include "histogram.h"
 #include "epsilon.h"
+#include "lifeTime.h"
 
 int main(int argc, char** argv)
 {   string inputFilename; bool dryRun, printDefaults;
@@ -76,6 +77,9 @@ int main(int argc, char** argv)
 	double omega = Eplasmon;
 	eps.setFrequency(omega);
 	
+	//Initalize lifetime of intermediate energy state
+	lifeTime tau("ImSigma.dat");
+
 	//Initialize Wannier bandstructure:
 	bandStruct bs("wannier", mu);
 
@@ -118,7 +122,6 @@ int main(int argc, char** argv)
 	vector3<complex> zHat(0.0, 0.0, one);
 	vector3<complex> kHat(cos(kPhi), sin(kPhi), 0.0);
 	complex I(0.0,1.0);
-	// WHY IS N1 INSIDE THE SQUARE_ROOT, SHOULD IT STILL BE??????????????????????????????
 	vector3<complex> sqrtGammaPrefac = ((M_PI/nKptsMetro) * sqrt(N1/(4*(fabs(det(R)))*eps.modGammaMinus*omega*eps.Lquant)) ) * (kHat - I*(eps.k/eps.modGammaMinus)*zHat);
 	logPrintf("sqrtGammaPrefac Real = %lg %lg %lg\n",  real(sqrtGammaPrefac[0]), real(sqrtGammaPrefac[1]), real(sqrtGammaPrefac[2]));
 	logPrintf("sqrtGammaPrefac Imag = %lg %lg %lg\n",  imag(sqrtGammaPrefac[0]), imag(sqrtGammaPrefac[1]), imag(sqrtGammaPrefac[2]));
@@ -174,8 +177,8 @@ int main(int argc, char** argv)
 							for(int i=0; i<E1.nRows(); i++) // sum over the intermediate states
 							{	//double dK  = sqrt(std::pow(kpnt2[1]-knpt1[1],2) + 
 								//double n_i = 1/(exp(c*(kpnt2-kpnt1)/T)-1)
-								complex E1i(E1[i], 0.25*std::pow((E1[i] - mu),2));
-								complex E2i(E2[i], 0.25*std::pow((E2[i] - mu),2));
+								complex E1i(E1[i], tau.get_lifeTime(E1[i]));
+								complex E2i(E2[i], tau.get_lifeTime(E2[i]));
 								for(int j=0; j<3; j++)
 									prefacDotP += sqrtGammaPrefac[j] * ((Pk2[j](c,i)*(1-1/(exp(E2[i]/T)+1)) * M)/(E2i-E2[c]+Eplasmon) + (Pk1[j](i,v)*(1-1/(exp(E1[i]/T)+1))*M)/(E1i-E1[v]-Eplasmon));
 							}
@@ -228,8 +231,8 @@ int main(int argc, char** argv)
 	logPrintf("Linewidth = %lg eV\n", Gamma/eV);
 	
 	//Carrier distributions:
-	EcHist.allReduce(MPIUtil::ReduceSum); EcHist.print("eDistrib-2.8eV-phonon3.dat", eV);
-	EvHist.allReduce(MPIUtil::ReduceSum); EvHist.print("hDistrib-2.8eV-phonon3.dat", eV);
+	EcHist.allReduce(MPIUtil::ReduceSum); EcHist.print("eDistrib-2.8eV-phonon4.dat", eV);
+	EvHist.allReduce(MPIUtil::ReduceSum); EvHist.print("hDistrib-2.8eV-phonon4.dat", eV);
 
 	finalizeSystem();
 }

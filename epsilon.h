@@ -2,13 +2,13 @@
 #define EPSILON_H
 
 #include <core/Util.h>
-#include <electronic/matrix.h>
 #include <iostream>
+#include <electronic/matrix.h>
 #include <fstream>
 #include <vector>
 #include <math.h>
 // ------------------------------------ class epsilon ---------------------------------------------------
-
+ 
 class epsilon
 {
 public:

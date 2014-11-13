@@ -18,5 +18,5 @@ testBandStructClass: testBandStructClass.cpp bandStruct.h bandStruct.cpp
 plasmonDecayMetropolis: plasmonDecayMetropolis.cpp bandStruct.h bandStruct.cpp histogram.h histogram.cpp epsilon.h epsilon.cpp
 	mpicxx -o plasmonDecayMetropolis plasmonDecayMetropolis.cpp bandStruct.cpp histogram.cpp epsilon.cpp $(CXX_FLAGS) $(LINK_FLAGS) -DMPI_ENABLED
 
-plasmonPhononDecay: plasmonPhononDecay.cpp bandStruct.h bandStruct.cpp histogram.h histogram.cpp epsilon.h epsilon.cpp
-	mpicxx -o plasmonPhononDecay plasmonPhononDecay.cpp bandStruct.cpp histogram.cpp epsilon.cpp $(CXX_FLAGS) $(LINK_FLAGS) -DMPI_ENABLED
+plasmonPhononDecay: plasmonPhononDecay.cpp bandStruct.h bandStruct.cpp histogram.h histogram.cpp epsilon.h epsilon.cpp lifeTime.h lifeTime.cpp
+	mpicxx -o plasmonPhononDecay plasmonPhononDecay.cpp bandStruct.cpp histogram.cpp epsilon.cpp lifeTime.cpp $(CXX_FLAGS) $(LINK_FLAGS) -DMPI_ENABLED
