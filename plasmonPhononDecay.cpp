@@ -158,7 +158,8 @@ int main(int argc, char** argv)
 			// Metropolis accept - reject:
 			if(exp(0.5*(mk1k2Prev - mk1k2)/(T*T)) > Random::uniform())
 			{	mk1k2Prev = mk1k2;
-				kpnt1Prev = kpnt1; kpnt2Prev = kpnt2;
+				kpnt1Prev = kpnt1;
+				kpnt2Prev = kpnt2;
 				
 				if(mk1k2 < 2*T*T) equib = true;
 			
