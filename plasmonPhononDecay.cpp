@@ -122,12 +122,13 @@ int main(int argc, char** argv)
 	vector3<complex> zHat(0.0, 0.0, one);
 	vector3<complex> kHat(cos(kPhi), sin(kPhi), 0.0);
 	complex I(0.0,1.0);
-	vector3<complex> sqrtGammaPrefac = ((M_PI/nKptsMetro) * sqrt(N1/(4*(fabs(det(R)))*eps.modGammaMinus*omega*eps.Lquant)) ) * (kHat - I*(eps.k/eps.modGammaMinus)*zHat);
+	double Mo = 0.011551;// FOR NOW DEFINE M AS A CONSTANT
+	vector3<complex> sqrtGammaPrefac = ((Mo/nKptsMetro) * sqrt(N1*M_PI/(4*(fabs(det(R)))*eps.modGammaMinus*omega*eps.Lquant)) ) * (kHat - I*(eps.k/eps.modGammaMinus)*zHat);
 	logPrintf("sqrtGammaPrefac Real = %lg %lg %lg\n",  real(sqrtGammaPrefac[0]), real(sqrtGammaPrefac[1]), real(sqrtGammaPrefac[2]));
 	logPrintf("sqrtGammaPrefac Imag = %lg %lg %lg\n",  imag(sqrtGammaPrefac[0]), imag(sqrtGammaPrefac[1]), imag(sqrtGammaPrefac[2]));
 
 	const double weightCut = 1e-6;
-	double Gamma = 0., M = 1;// FOR NOW DEFINE M AS A CONSTANT
+	double Gamma = 0.;
 	histogram EcHist(-10*T, 0.5*T, Eplasmon+5*T);
 	histogram EvHist(-Eplasmon-5*T, 0.5*T, 10*T);
 	double acceptRatioSum = 0., acceptRatioSumSq = 0.;
@@ -173,16 +174,18 @@ int main(int argc, char** argv)
 							double weightEconserve = exp(0.5*(mk1k2-mk_cv)/(T*T))/(T*sqrt(2*M_PI)); //weight contribution due to energy conservation
 							if(weightEconserve < weightCut) continue;
 							// Effective matrix elements
-							complex prefacDotP = 0.;
+							complex prefacDotP1 = 0., prefacDotP2=0.;
 							for(int i=0; i<E1.nRows(); i++) // sum over the intermediate states
 							{	//double dK  = sqrt(std::pow(kpnt2[1]-knpt1[1],2) + 
 								//double n_i = 1/(exp(c*(kpnt2-kpnt1)/T)-1)
 								complex E1i(E1[i], tau.get_lifeTime(E1[i]));
 								complex E2i(E2[i], tau.get_lifeTime(E2[i]));
 								for(int j=0; j<3; j++)
-									prefacDotP += sqrtGammaPrefac[j] * ((Pk2[j](c,i)*(1-1/(exp(E2[i]/T)+1)) * M)/(E2i-E2[c]+Eplasmon) + (Pk1[j](i,v)*(1-1/(exp(E1[i]/T)+1))*M)/(E1i-E1[v]-Eplasmon));
+								{	prefacDotP1 += sqrtGammaPrefac[j] * (Pk2[j](c,i)*(1-1/(exp(E2[i]/T)+1)))/(E2i-E2[c]+Eplasmon);
+									prefacDotP2 += sqrtGammaPrefac[j] * (Pk1[j](i,v)*(1-1/(exp(E1[i]/T)+1)))/(E1i-E1[v]-Eplasmon);
+								}
 							}
-							double weight = (0.5*spinWeight) * weightEconserve * prefacDotP.norm(); //norm = abs^2
+							double weight = (0.5*spinWeight) * weightEconserve * (prefacDotP1.norm() + prefacDotP2.norm()); //norm = abs^2
 							//Include in statistics:
 							Gamma += weight;
 							EcHist.addEvent(E2[c], weight);
