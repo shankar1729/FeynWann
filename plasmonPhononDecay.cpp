@@ -114,6 +114,11 @@ int main(int argc, char** argv)
 	double N1 = N1sum / totalBlocks;
 	double N1std = sqrt(N1sumSq/totalBlocks - N1*N1);
 	logPrintf("N1 = %lg +/- %lg\n", N1, N1std);
+	bool skipMetro = false;
+	if(fabs(N1) < 1e-8)
+	{	skipMetro = true;
+		logPrintf("Warning: N1 is too small => no allowed transitions; skipping Metropolis sampling.\n");
+	}
 
 	// Metropolis sampling of BZ:
 	logPrintf("Starting Metropolis sampling of BZ\n");
@@ -137,7 +142,7 @@ int main(int argc, char** argv)
 	int walkerStop = (totalWalkers * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
 	nKpts = nKptsMetro / totalWalkers;
 	StopWatch watchMet("metropolis"); watchMet.start();
-	for(int walker=walkerStart; walker<walkerStop; walker++)
+	if(!skipMetro) for(int walker=walkerStart; walker<walkerStop; walker++)
 	{	Random::seed(walker);
 		logPrintf("Metropolis walk# %d ... ", walker); logFlush();
 		vector3<> kpnt1Prev, kpnt2Prev;
