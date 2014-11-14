@@ -1,4 +1,4 @@
-#include "bandStruct.h"
+#include "BandStruct.h"
 #include <core/Util.h>
 #include <electronic/matrix.h>
 #include <iostream>
@@ -6,10 +6,7 @@
 #include <vector>
 #include <math.h>
 
-//---------------------------- class bandStruct---------------------------------
-
-//Constructor 
-bandStruct::bandStruct(string prefix, double mu)
+BandStruct::BandStruct(string prefix, double mu)
 {	// Read cell map
 	ifstream readCellMap(prefix + ".mlwfCellMap");
 	string headerLine; getline(readCellMap, headerLine); //read and ignore header line
@@ -39,8 +36,8 @@ bandStruct::bandStruct(string prefix, double mu)
 	kPointCache *= NAN; //indicate that cache is invalid
 }
 
-diagMatrix bandStruct::getStates(vector3<double> kPoint)
-{   static StopWatch watch("bandStruct::getStates");
+diagMatrix BandStruct::getStates(vector3<double> kPoint)
+{   static StopWatch watch("BandStruct::getStates");
 	if(kPoint == kPointCache) return eigs;
 	watch.start();
 	//Calculate phase factors for each cell:
@@ -58,8 +55,8 @@ diagMatrix bandStruct::getStates(vector3<double> kPoint)
 	return eigs;
 }
 
-std::vector<matrix> bandStruct::getTransitions(vector3<double> kPoint)
-{	static StopWatch watch("bandStruct::getTransitions"); watch.start();
+std::vector<matrix> BandStruct::getTransitions(vector3<double> kPoint)
+{	static StopWatch watch("BandStruct::getTransitions"); watch.start();
 	if(!(kPoint == kPointCache)) getStates(kPoint); //Update evecs and phase if necessary
 	// Compute transitions at kPoint
 	matrix Pkx = pxWannier * phase; Pkx.reshape(nBands, nBands);
@@ -74,7 +71,7 @@ std::vector<matrix> bandStruct::getTransitions(vector3<double> kPoint)
 	return pk;
 }
 
-double bandStruct::get_mk(vector3<double> kPoint, double omega, double T)
+double BandStruct::get_mk(vector3<double> kPoint, double omega, double T)
 {	diagMatrix E = getStates(kPoint);
 	double mk = INFINITY;
 	for(int v=0; v<nBands; v++) if(E[v]<10.*T)
@@ -85,7 +82,7 @@ double bandStruct::get_mk(vector3<double> kPoint, double omega, double T)
 	return mk;
 }
 
-double bandStruct::get_mk1k2(vector3<double> kPoint1, vector3<double> kPoint2, double omega, double T)
+double BandStruct::get_mk1k2(vector3<double> kPoint1, vector3<double> kPoint2, double omega, double T)
 {       diagMatrix E1 = getStates(kPoint1), E2 = getStates(kPoint2);
         double mk1k2 = INFINITY;
         for(int v=0; v<nBands; v++) if(E1[v]<10.*T)

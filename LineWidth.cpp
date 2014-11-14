@@ -1,4 +1,4 @@
-#include "lifeTime.h"
+#include "LineWidth.h"
 #include <core/Util.h>
 #include <core/Units.h>
 #include <electronic/matrix.h>
@@ -8,7 +8,7 @@
 #include <math.h>
 #include <algorithm>
 
-lifeTime::lifeTime(string inputFilename)
+LineWidth::LineWidth(string inputFilename)
 {	std::ifstream ltFile(inputFilename.c_str());
 	if(!ltFile.is_open())
 		die("Could not open system file '%s' for reading.\n", inputFilename.c_str());
@@ -29,7 +29,7 @@ lifeTime::lifeTime(string inputFilename)
 	}
 }
 
-double lifeTime::operator()(double energy) const
+double LineWidth::operator()(double energy) const
 {	double x = (energy - Emin) / dE;
 	if(x <= 0.) return imSigma.front();
 	if(x >= imSigma.size()-1) return imSigma.back();

@@ -1,4 +1,3 @@
-#include "epsilon.h"
 #include <core/Util.h>
 #include <core/Units.h>
 #include <electronic/matrix.h>
@@ -6,11 +5,10 @@
 #include <fstream>
 #include <vector>
 #include <math.h>
-// -------------------------------------------- class epsilon --------------------------------------------
+#include "Epsilon.h"
 
-// Constructor
-epsilon::epsilon(string inputFilename)
-{	//Get the epsilon parameters
+Epsilon::Epsilon(string inputFilename)
+{	//Get the Epsilon parameters
 	std::ifstream epsFile(inputFilename.c_str());
 	if(!epsFile.is_open())
 		die("Could not open system file '%s' for reading.\n", inputFilename.c_str());
@@ -42,10 +40,10 @@ epsilon::epsilon(string inputFilename)
 	epsFile.close();
 }
 
-void epsilon::setFrequency(double omegaIn)
+void Epsilon::setFrequency(double omegaIn)
 {	// Calculate the dielectric at omega = Eplasmon
 	double omega = omegaIn;
-	complex epsilon(1.0,0.0), omegaEpsilonPrime(1.0,0.0), one(1.0,0.0), den;
+	complex Epsilon(1.0,0.0), omegaEpsilonPrime(1.0,0.0), one(1.0,0.0), den;
 	double num;
 	vector3<double> epsParam;
 	complex I(0.0,1.0);
@@ -53,18 +51,18 @@ void epsilon::setFrequency(double omegaIn)
 	{	epsParam = epsParams[iPole];
 		num = epsParam[0]*(std::pow(omega_p,2));
 		den = one/(std::pow(epsParam[2],2) - omega*omega - I * omega * epsParam[1]);
-		epsilon += num *den;
+		Epsilon += num *den;
 		omegaEpsilonPrime += num * den*den * (std::pow(epsParam[2],2) + omega*omega);
 	}
 
 	// Plasmon mode deatils
 	const double c = 1./7.29735257e-3;
-	double realEpsilon = real(epsilon);
+	double realEpsilon = real(Epsilon);
 	k = (omega/c) * sqrt(realEpsilon/(realEpsilon+1));
 	modGammaPlus = sqrt(k*k - (omega/c)*(omega/c));
 	modGammaMinus = sqrt(k*k - (realEpsilon*(omega/c)*(omega/c)));
 	Lquant = (1/(4*std::pow(modGammaPlus,3))) * (std::pow(modGammaPlus,2) + k*k + std::pow((omega/c),2))
-		+ (1/(4*std::pow(modGammaMinus,3))) * ((std::pow(modGammaMinus,2)+k*k)*real(omegaEpsilonPrime)+(std::pow((real(epsilon*omega/c)),2)));
+		+ (1/(4*std::pow(modGammaMinus,3))) * ((std::pow(modGammaMinus,2)+k*k)*real(omegaEpsilonPrime)+(std::pow((real(Epsilon*omega/c)),2)));
 	logPrintf("omega = %lg  k = %lg  modGammaMinus  = %lg  modGammaPlus = %lg  Lquant = %lg\n", omega, k, modGammaMinus, modGammaPlus, Lquant);
 }
 

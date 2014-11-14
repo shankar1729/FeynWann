@@ -7,9 +7,9 @@
 #include <core/Random.h>
 #include <core/string.h>
 #include <core/Units.h>
-#include "bandStruct.h"
-#include "histogram.h"
-#include "epsilon.h"
+#include "BandStruct.h"
+#include "Histogram.h"
+#include "Epsilon.h"
 
 int main(int argc, char** argv)
 {   string inputFilename; bool dryRun, printDefaults;
@@ -72,12 +72,12 @@ int main(int argc, char** argv)
 	logPrintf("\n");
 
 	//Initialize dielectric model:
-	epsilon eps("epsilon.txt");
+	Epsilon eps("epsilon.txt");
 	double omega = Eplasmon;
 	eps.setFrequency(omega);
 	
 	//Initialize Wannier bandstructure:
-	bandStruct bs("wannier", mu);
+	BandStruct bs("wannier", mu);
 
 	//Compute the normalization factor
 	int blockStart = (totalBlocks * (mpiUtil->iProcess())) / mpiUtil->nProcesses(); //MPI division
@@ -120,8 +120,8 @@ int main(int argc, char** argv)
 
 	const double weightCut = 1e-6;
 	double Gamma = 0.;
-	histogram EcHist(-10*T, 0.5*T, Eplasmon+5*T);
-	histogram EvHist(-Eplasmon-5*T, 0.5*T, 10*T);
+	Histogram EcHist(-10*T, 0.5*T, Eplasmon+5*T);
+	Histogram EvHist(-Eplasmon-5*T, 0.5*T, 10*T);
 	double acceptRatioSum = 0., acceptRatioSumSq = 0.;
 	int walkerStart = (totalWalkers * (mpiUtil->iProcess())) / mpiUtil->nProcesses(); // MPI division
 	int walkerStop = (totalWalkers * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
@@ -157,7 +157,7 @@ int main(int argc, char** argv)
 					std::vector<matrix> Pk = bs.getTransitions(kpnt);
 					for(int v=0; v<E.nRows(); v++) if(E[v]<10.*T)
 					{	for(int c=0; c<E.nRows(); c++) if(E[c]>-10.*T)
-						{	double mk_cv = bandStruct::mk_sub(E[c], E[v], Eplasmon, T);
+						{	double mk_cv = BandStruct::mk_sub(E[c], E[v], Eplasmon, T);
 							double weightEconserve = exp(0.5*(mk-mk_cv)/(T*T))/(T*sqrt(2*M_PI)); //weight contribution due to energy conservation
 							if(weightEconserve < weightCut) continue;
 							// Effective matrix elements

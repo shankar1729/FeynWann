@@ -1,5 +1,5 @@
-#ifndef HISTOGRAM_H
-#define HISTOGRAM_H
+#ifndef WANNIERMETROPOLIS_HISTOGRAM_H
+#define WANNIERMETROPOLIS_HISTOGRAM_H
 
 #include <core/Util.h>
 #include <electronic/matrix.h>
@@ -7,17 +7,15 @@
 #include <math.h>
 #include <algorithm>
 
-//---------------------------- class bandStruct---------------------------------
-
-class histogram
+class Histogram
 {
 private:
 	double Emin, dE, normFac;
 	std::vector<double> out;
 public:
-	histogram(double Emin, double dE, double Emax);
+	Histogram(double Emin, double dE, double Emax);
 	void addEvent(double E, double weight);
 	void allReduce(MPIUtil::ReduceOp op, bool safeMode=false); //collect over MPI
 	void print(string fname, double Eunit=1.) const; //write to file (with optional unit conversion)
 };
-#endif
+#endif //WANNIERMETROPOLIS_HISTOGRAM_H
