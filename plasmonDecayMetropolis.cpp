@@ -208,8 +208,10 @@ int main(int argc, char** argv)
 	logPrintf("Linewidth = %lg eV\n", Gamma/eV);
 	
 	//Carrier distributions:
-	EcHist.allReduce(MPIUtil::ReduceSum); EcHist.print("eDistrib-2.8eV-metro.dat", eV);
-	EvHist.allReduce(MPIUtil::ReduceSum); EvHist.print("hDistrib-2.8eV-metro.dat", eV);
+	char fname[256];
+	sprintf(fname, "Distrib-%.1lfeV-metro.dat", Eplasmon/eV);
+	EcHist.allReduce(MPIUtil::ReduceSum); EcHist.print(string("e")+fname, eV);
+	EvHist.allReduce(MPIUtil::ReduceSum); EvHist.print(string("h")+fname, eV);
 
 	finalizeSystem();
 }

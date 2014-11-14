@@ -1,19 +1,16 @@
 #ifndef LIFETIME_H
 #define LIFETIME_H
 
-#include <core/Util.h>
-#include <electronic/matrix.h>
-#include <iostream>
-#include <fstream>
+#include <core/string.h>
 #include <vector>
-#include <math.h>
-// ------------------------------------ class lifeTime -- ---------------------------------------------------
 
 class lifeTime
 {
+	double Emin, dE;
+	std::vector<double> imSigma;
 public:
-	std::vector<double> E, imSigma;
 	lifeTime(string inputFilename);
-	double get_lifeTime( double energy);
+	double operator()(double energy) const;
 };
+
 #endif

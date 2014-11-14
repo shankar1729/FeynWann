@@ -49,6 +49,7 @@ int main(int argc, char** argv)
 	const double T = inputMap.get("T") * eV;
 	const double Eplasmon2 = inputMap.get("Eplasmon2") * eV;
 	const double spinWeight = inputMap.get("spinWeight");
+	const double M0 = inputMap.get("M0");
 	matrix3<> R = matrix3<>(0,1,1, 1,0,1, 1,1,0) * (0.5*inputMap.get("aCubic")*Angstrom);
 
 	logPrintf("\nInputs after conversion to atomic units:\n");
@@ -63,6 +64,7 @@ int main(int argc, char** argv)
 	logPrintf("T = %lg\n", T);
 	logPrintf("Eplamson2 = %lg\n", Eplasmon2);
 	logPrintf("spinWeight = %lg\n", spinWeight);
+	logPrintf("M0 = %lg\n", M0);
 	logPrintf("R:\n");
 	R.print(globalLog, " %lg ");
 	if(dryRun)
@@ -77,8 +79,8 @@ int main(int argc, char** argv)
 	double omega = Eplasmon;
 	eps.setFrequency(omega);
 	
-	//Initalize lifetime of intermediate energy state
-	lifeTime tau("ImSigma.dat");
+	//Initalize line width of intermediate electronic states
+	lifeTime lineWidth("ImSigma.dat");
 
 	//Initialize Wannier bandstructure:
 	bandStruct bs("wannier", mu);
@@ -122,8 +124,7 @@ int main(int argc, char** argv)
 	vector3<complex> zHat(0.0, 0.0, one);
 	vector3<complex> kHat(cos(kPhi), sin(kPhi), 0.0);
 	complex I(0.0,1.0);
-	double Mo = 0.011551;// FOR NOW DEFINE M AS A CONSTANT
-	vector3<complex> sqrtGammaPrefac = ((Mo/nKptsMetro) * sqrt(N1*M_PI/(4*(fabs(det(R)))*eps.modGammaMinus*omega*eps.Lquant)) ) * (kHat - I*(eps.k/eps.modGammaMinus)*zHat);
+	vector3<complex> sqrtGammaPrefac = ( M0 * sqrt(N1*M_PI/(nKptsMetro*4*fabs(det(R))*eps.modGammaMinus*omega*eps.Lquant)) ) * (kHat - I*(eps.k/eps.modGammaMinus)*zHat);
 	logPrintf("sqrtGammaPrefac Real = %lg %lg %lg\n",  real(sqrtGammaPrefac[0]), real(sqrtGammaPrefac[1]), real(sqrtGammaPrefac[2]));
 	logPrintf("sqrtGammaPrefac Imag = %lg %lg %lg\n",  imag(sqrtGammaPrefac[0]), imag(sqrtGammaPrefac[1]), imag(sqrtGammaPrefac[2]));
 
@@ -178,8 +179,8 @@ int main(int argc, char** argv)
 							for(int i=0; i<E1.nRows(); i++) // sum over the intermediate states
 							{	//double dK  = sqrt(std::pow(kpnt2[1]-knpt1[1],2) + 
 								//double n_i = 1/(exp(c*(kpnt2-kpnt1)/T)-1)
-								complex E1i(E1[i], tau.get_lifeTime(E1[i]));
-								complex E2i(E2[i], tau.get_lifeTime(E2[i]));
+								complex E1i(E1[i], lineWidth(E1[i]));
+								complex E2i(E2[i], lineWidth(E2[i]));
 								for(int j=0; j<3; j++)
 								{	prefacDotP1 += sqrtGammaPrefac[j] * (Pk2[j](c,i)*(1-1/(exp(E2[i]/T)+1)))/(E2i-E2[c]+Eplasmon);
 									prefacDotP2 += sqrtGammaPrefac[j] * (Pk1[j](i,v)*(1-1/(exp(E1[i]/T)+1)))/(E1i-E1[v]-Eplasmon);
@@ -234,8 +235,10 @@ int main(int argc, char** argv)
 	logPrintf("Linewidth = %lg eV\n", Gamma/eV);
 	
 	//Carrier distributions:
-	EcHist.allReduce(MPIUtil::ReduceSum); EcHist.print("eDistrib-2.8eV-phonon4.dat", eV);
-	EvHist.allReduce(MPIUtil::ReduceSum); EvHist.print("hDistrib-2.8eV-phonon4.dat", eV);
+	char fname[256];
+	sprintf(fname, "Distrib-%.1lfeV-phonon.dat", Eplasmon/eV);
+	EcHist.allReduce(MPIUtil::ReduceSum); EcHist.print(string("e")+fname, eV);
+	EvHist.allReduce(MPIUtil::ReduceSum); EvHist.print(string("h")+fname, eV);
 
 	finalizeSystem();
 }
