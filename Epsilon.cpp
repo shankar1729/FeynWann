@@ -43,27 +43,26 @@ Epsilon::Epsilon(string inputFilename)
 void Epsilon::setFrequency(double omegaIn)
 {	// Calculate the dielectric at omega = Eplasmon
 	double omega = omegaIn;
-	complex Epsilon(1.0,0.0), omegaEpsilonPrime(1.0,0.0), one(1.0,0.0), den;
+	complex omegaEpsilonPrime(1.0,0.0), one(1.0,0.0), den;
 	double num;
 	vector3<double> epsParam;
 	complex I(0.0,1.0);
+	epsilon = one;
 	for(size_t iPole = 0; iPole < epsParams.size(); iPole++)
 	{	epsParam = epsParams[iPole];
 		num = epsParam[0]*(std::pow(omega_p,2));
 		den = one/(std::pow(epsParam[2],2) - omega*omega - I * omega * epsParam[1]);
-		Epsilon += num *den;
+		epsilon += num *den;
 		omegaEpsilonPrime += num * den*den * (std::pow(epsParam[2],2) + omega*omega);
 	}
 
 	// Plasmon mode deatils
 	const double c = 1./7.29735257e-3;
-	double realEpsilon = real(Epsilon);
+	double realEpsilon = real(epsilon);
 	k = (omega/c) * sqrt(realEpsilon/(realEpsilon+1));
 	modGammaPlus = sqrt(k*k - (omega/c)*(omega/c));
 	modGammaMinus = sqrt(k*k - (realEpsilon*(omega/c)*(omega/c)));
 	Lquant = (1/(4*std::pow(modGammaPlus,3))) * (std::pow(modGammaPlus,2) + k*k + std::pow((omega/c),2))
-		+ (1/(4*std::pow(modGammaMinus,3))) * ((std::pow(modGammaMinus,2)+k*k)*real(omegaEpsilonPrime)+(std::pow((real(Epsilon*omega/c)),2)));
+		+ (1/(4*std::pow(modGammaMinus,3))) * ((std::pow(modGammaMinus,2)+k*k)*real(omegaEpsilonPrime)+(std::pow((real(epsilon*omega/c)),2)));
 	logPrintf("omega = %lg  k = %lg  modGammaMinus  = %lg  modGammaPlus = %lg  Lquant = %lg\n", omega, k, modGammaMinus, modGammaPlus, Lquant);
 }
-
-

@@ -3,6 +3,8 @@
 #include <fstream>
 #include <iterator>
 #include <sstream>
+#include <math.h>
+#include <iostream>
 #include <core/scalar.h>
 #include <core/Random.h>
 #include <core/string.h>
@@ -246,5 +248,24 @@ int main(int argc, char** argv)
 	EcHist.allReduce(MPIUtil::ReduceSum); EcHist.print(string("e")+fname, eV);
 	EvHist.allReduce(MPIUtil::ReduceSum); EvHist.print(string("h")+fname, eV);
 
+	//Experimental lineWidth
+	complex arg = eps.epsilon / (eps.epsilon + 1);
+	double omegaIm = abs(sin(0.5*atan2(real(arg),imag(arg)))) * omega;
+	logPrintf("Experimental Linewidth = %lg eV\n", omegaIm);
+/*	double omega_p = 9.03*eV;
+	std::vector<double> omegaExp, omegaIm;
+	for (int ii = 0; ii<1000; ii++)
+	{	double omegaE = 0.1*eV + ii*(omega_p - 0.1*eV)/1000;
+		eps.setFrequency(omegaE);
+		omegaExp.push_back(omegaE);
+		complex arg = eps.epsilon / (eps.epsilon + 1);
+		double argg = abs(sin(0.5*atan2(real(arg),imag(arg)))) * omegaE;
+		omegaIm.push_back(argg);
+	}
+	string ffname = string("expWidth")+fname;
+	ofstream ofs(ffname.c_str());
+	for(size_t i=0; i<omegaExp.size(); i++)
+		ofs << omegaExp[i]/eV  << "\t" << omegaIm[i]/eV << '\n';
+*/
 	finalizeSystem();
 }

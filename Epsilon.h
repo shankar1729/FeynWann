@@ -9,6 +9,7 @@ class Epsilon
 {	std::vector<vector3<double>> epsParams;
 public:
 	double omega_p, omega, Eplasmon, modGammaPlus, modGammaMinus, Lquant, k;
+	complex epsilon;
 	Epsilon(string inputFilename);
 	void setFrequency(double omegaIn);
 };
