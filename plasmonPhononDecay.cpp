@@ -248,7 +248,7 @@ int main(int argc, char** argv)
 
 	//Experimental lineWidth
 	complex arg = eps.epsilon / (eps.epsilon + 1);
-	double omegaIm = fabs(sin(0.5*atan2(real(arg),imag(arg)))) * omega;
+	double omegaIm = fabs(sin(0.5*atan2(imag(arg),real(arg)))) * omega;
 	logPrintf("Experimental Linewidth = %lg eV\n", omegaIm/eV);
 
 	finalizeSystem();

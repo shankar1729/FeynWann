@@ -10,7 +10,7 @@ testBandStruct: testBandStruct.cpp BandStruct.h BandStruct.cpp
 	g++ -o testBandStruct testBandStruct.cpp BandStruct.cpp $(CXX_FLAGS) $(LINK_FLAGS)
 
 testEpsilon: testEpsilon.cpp Epsilon.h Epsilon.cpp
-	g++ -o testEpsilon Epsilon.cpp $(CXX_FLAGS) $(LINK_FLAGS)
+	g++ -o testEpsilon testEpsilon.cpp Epsilon.cpp $(CXX_FLAGS) $(LINK_FLAGS)
 
 plasmonDecayMetropolis: plasmonDecayMetropolis.cpp BandStruct.h BandStruct.cpp Histogram.h Histogram.cpp Epsilon.h Epsilon.cpp
 	mpicxx -o plasmonDecayMetropolis plasmonDecayMetropolis.cpp BandStruct.cpp Histogram.cpp Epsilon.cpp $(CXX_FLAGS) $(LINK_FLAGS) -DMPI_ENABLED
