@@ -183,15 +183,12 @@ int main(int argc, char** argv)
 							// Effective matrix elements
 							complex prefacDotP1 = 0., prefacDotP2=0.;
 							for(int i=0; i<E1.nRows(); i++) // sum over the intermediate states
-							{	if (E1[i] < energyCut && E2[i] < energyCut) continue;
-								//double dK  = sqrt(std::pow(kpnt2[1]-knpt1[1],2) + 
+							{	//double dK  = sqrt(std::pow(kpnt2[1]-knpt1[1],2) + 
 								//double n_i = 1/(exp(c*(kpnt2-kpnt1)/T)-1)
 								complex E1i(E1[i], lineWidth(E1[i]));
 								complex E2i(E2[i], lineWidth(E2[i]));
-								for(int j=0; j<3; j++)
-								{	prefacDotP1 += sqrtGammaPrefac[j] * (Pk2[j](c,i)*(1-1/(exp(E2[i]/T)+1)))/(E2i-E2[c]+Eplasmon);
-									prefacDotP2 += sqrtGammaPrefac[j] * (Pk1[j](i,v)*(1-1/(exp(E1[i]/T)+1)))/(E1i-E1[v]-Eplasmon);
-								}
+								if(E2[i] < energyCut) for(int j=0; j<3; j++) prefacDotP1 += sqrtGammaPrefac[j] * (Pk2[j](c,i)*(1-1/(exp(E2[i]/T)+1)))/(E2i-E2[c]+Eplasmon);
+								if(E1[i] < energyCut) for(int j=0; j<3; j++) prefacDotP2 += sqrtGammaPrefac[j] * (Pk1[j](i,v)*(1-1/(exp(E1[i]/T)+1)))/(E1i-E1[v]-Eplasmon);
 							}
 							double weight = (0.5*spinWeight) * weightEconserve * (prefacDotP1.norm() + prefacDotP2.norm()); //norm = abs^2
 							//Include in statistics:
