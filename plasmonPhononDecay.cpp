@@ -133,7 +133,7 @@ int main(int argc, char** argv)
 	logPrintf("sqrtGammaPrefac Real = %lg %lg %lg\n",  real(sqrtGammaPrefac[0]), real(sqrtGammaPrefac[1]), real(sqrtGammaPrefac[2]));
 	logPrintf("sqrtGammaPrefac Imag = %lg %lg %lg\n",  imag(sqrtGammaPrefac[0]), imag(sqrtGammaPrefac[1]), imag(sqrtGammaPrefac[2]));
 
-	const double weightCut = 1e-6;
+	const double weightCut = 1e-6, energyCut = 40*eV;
 	double Gamma = 0.;
 	Histogram EcHist(-10*T, 0.5*T, Eplasmon+5*T);
 	Histogram EvHist(-Eplasmon-5*T, 0.5*T, 10*T);
@@ -183,7 +183,8 @@ int main(int argc, char** argv)
 							// Effective matrix elements
 							complex prefacDotP1 = 0., prefacDotP2=0.;
 							for(int i=0; i<E1.nRows(); i++) // sum over the intermediate states
-							{	//double dK  = sqrt(std::pow(kpnt2[1]-knpt1[1],2) + 
+							{	if (E1[i] < energyCut && E2[i] < energyCut) continue;
+								//double dK  = sqrt(std::pow(kpnt2[1]-knpt1[1],2) + 
 								//double n_i = 1/(exp(c*(kpnt2-kpnt1)/T)-1)
 								complex E1i(E1[i], lineWidth(E1[i]));
 								complex E2i(E2[i], lineWidth(E2[i]));
