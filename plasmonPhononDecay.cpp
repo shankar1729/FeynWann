@@ -106,8 +106,8 @@ int main(int argc, char** argv)
 			N1block += exp(-0.5*mk1k2/(T*T));
 			diagMatrix Ek = bs.getStates(kpnt1);
 			for(int n = 0; n<Ek.nRows(); n++)
-			{	double dFdE =(-1/T)*exp((Ek[n]-mu)/T)/std::pow(exp((Ek[n]-mu)/T)+1,2);
-				kappaSqrdBlock += fabs(4*M_PI*dFdE);
+			{	double dFdE =(-1/T)*exp((Ek[n])/T)/std::pow((exp((Ek[n])/T)+1),2);
+				kappaSqrdBlock += fabs(4*M_PI*spinWeight*dFdE);
 			}
 		}
 		N1block /=  nKpts;
