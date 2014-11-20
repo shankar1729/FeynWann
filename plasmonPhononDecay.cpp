@@ -50,7 +50,7 @@ int main(int argc, char** argv)
 	const double T = inputMap.get("T") * eV;
 	const double Eplasmon2 = inputMap.get("Eplasmon2") * eV;
 	const double spinWeight = inputMap.get("spinWeight");
-	const double M0 = inputMap.get("M0");
+	const double vl = inputMap.get("vl")* meter *2.41888e-17;// m/s in atomic units
 	const matrix3<> R = matrix3<>(0,1,1, 1,0,1, 1,1,0) * (0.5*inputMap.get("aCubic")*Angstrom);
 
 	logPrintf("\nInputs after conversion to atomic units:\n");
@@ -65,7 +65,7 @@ int main(int argc, char** argv)
 	logPrintf("T = %lg\n", T);
 	logPrintf("Eplamson2 = %lg\n", Eplasmon2);
 	logPrintf("spinWeight = %lg\n", spinWeight);
-	logPrintf("M0 = %lg\n", M0);
+	logPrintf("vl = %lg\n", vl);
 	logPrintf("R:\n");
 	R.print(globalLog, " %lg ");
 	if(dryRun)
@@ -90,12 +90,12 @@ int main(int argc, char** argv)
 	int blockStart = (totalBlocks * (mpiUtil->iProcess())) / mpiUtil->nProcesses(); //MPI division
 	int blockStop = (totalBlocks * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
 	int nKpts = nKptsN1/totalBlocks;
-	double N1sum = 0., N1sumSq = 0.;
+	double N1sum = 0., N1sumSq = 0., kappaSum = 0., kappaSumSq = 0.;
 	StopWatch watchNorm("normalization"); watchNorm.start();
 	logPrintf("Calculating normalization factor ... "); logFlush();
 	for(int block=blockStart; block<blockStop; block++)
 	{	Random::seed(block);
-		double N1block = 0.;
+		double N1block = 0., kappaSqrdBlock = 0.;
 		for(int nk1 =0; nk1<nKpts; nk1++)
 		{	vector3<> kpnt1, kpnt2;
 			for(int j=0; j<3; j++)
@@ -104,17 +104,28 @@ int main(int argc, char** argv)
 			}
 			double mk1k2 = bs.get_mk1k2(kpnt1, kpnt2, omega, T);
 			N1block += exp(-0.5*mk1k2/(T*T));
+			diagMatrix Ek = bs.getStates(kpnt1);
+			for(int n = 0; n<Ek.nRows(); n++)
+			{	double dFdE =(-1/T)*exp((Ek[n]-mu)/T)/std::pow(exp((Ek[n]-mu)/T)+1,2);
+				kappaSqrdBlock += 4*M_PI*dFdE;
+			}
 		}
 		N1block /=  nKpts;
 		N1sum += N1block;
 		N1sumSq += std::pow(N1block,2);
+		kappaSqrdBlock /= nKpts;
+		kappaSum += sqrt(kappaSqrdBlock);
+		kappaSumSq +=kappaSqrdBlock;
 	}
 	watchNorm.stop();
 	mpiUtil->allReduce(N1sum, MPIUtil::ReduceSum);
 	mpiUtil->allReduce(N1sumSq, MPIUtil::ReduceSum);
 	double N1 = N1sum / totalBlocks;
 	double N1std = sqrt(N1sumSq/totalBlocks - N1*N1);
+	double kappa = kappaSum / totalBlocks;
+	double kappaStd = sqrt(kappaSumSq/totalBlocks - kappa*kappa);
 	logPrintf("N1 = %lg +/- %lg\n", N1, N1std);
+	logPrintf("kappa = %lg +/- %lg\n", kappa, kappaStd);
 	bool skipMetro = false;
 	if(fabs(N1) < 1e-8)
 	{	skipMetro = true;
@@ -177,10 +188,10 @@ int main(int argc, char** argv)
 				if(equib)
 				{	ik++;
 					// Calculate transitions at current k-point:
-					double kPh = wsCell.restrict(kpnt2)-wsCell.restrict(kpnt1);
+					vector3<> kPh = wsCell.restrict(kpnt2)-wsCell.restrict(kpnt1);
 					double kPhMag = sqrt(kPh[0]*kPh[0] + kPh[1]*kPh[1] + kPh[2]*kPh[3]);
 					double kPhFactor = kPhMag/(kPhMag*kPhMag + kappa*kappa);
-					double g_k = 1/(exp(vl*(kPhMag)/T)-1)
+					double g_k = 1/(exp(vl*(kPhMag)/T)-1);
 					diagMatrix E1 = bs.getStates(kpnt1);
 					std::vector<matrix> Pk1 = bs.getTransitions(kpnt1);
 					diagMatrix E2 = bs.getStates(kpnt2);
@@ -194,8 +205,8 @@ int main(int argc, char** argv)
 							complex prefacDotP1 = 0., prefacDotP2=0.;
 							for(int i=0; i<E1.nRows(); i++) // sum over the intermediate states
 							{	complex E2i(E2[i], lineWidth(E2[i])), E1i(E1[i], lineWidth(E1[i]));
-								if(E2[i] < energyCut) for(int j=0; j<3; j++) prefacDotP1 += sqrtGammaPrefac[j] * (Pk2[j](c,i)*(1-1/(exp(E2[i]/T)+1)))/(E2i-E2[c]+Eplasmon)*kfactor2;
-								if(E1[i] < energyCut) for(int j=0; j<3; j++) prefacDotP2 += sqrtGammaPrefac[j] * (Pk1[j](i,v)*(1-1/(exp(E1[i]/T)+1)))/(E1i-E1[v]-Eplasmon)*kfactor1;
+								if(E2[i] < energyCut) for(int j=0; j<3; j++) prefacDotP1 += sqrtGammaPrefac[j] * (Pk2[j](c,i)*(1-1/(exp(E2[i]/T)+1)))/(E2i-E2[c]+Eplasmon);
+								if(E1[i] < energyCut) for(int j=0; j<3; j++) prefacDotP2 += sqrtGammaPrefac[j] * (Pk1[j](i,v)*(1-1/(exp(E1[i]/T)+1)))/(E1i-E1[v]-Eplasmon);
 							}
 							double weight = (0.5*spinWeight) * weightEconserve * (2*g_k+1) * kPhFactor * (prefacDotP1.norm() + prefacDotP2.norm()); //norm = abs^2
 							//Include in statistics:
