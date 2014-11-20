@@ -107,7 +107,7 @@ int main(int argc, char** argv)
 			diagMatrix Ek = bs.getStates(kpnt1);
 			for(int n = 0; n<Ek.nRows(); n++)
 			{	double dFdE =(-1/T)*exp((Ek[n]-mu)/T)/std::pow(exp((Ek[n]-mu)/T)+1,2);
-				kappaSqrdBlock += 4*M_PI*dFdE;
+				kappaSqrdBlock += fabs(4*M_PI*dFdE);
 			}
 		}
 		N1block /=  nKpts;
