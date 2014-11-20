@@ -7,6 +7,7 @@
 #include <core/Random.h>
 #include <core/string.h>
 #include <core/Units.h>
+#include <core/WignerSeitz.h>
 #include "BandStruct.h"
 #include "Histogram.h"
 #include "Epsilon.h"
@@ -50,7 +51,7 @@ int main(int argc, char** argv)
 	const double Eplasmon2 = inputMap.get("Eplasmon2") * eV;
 	const double spinWeight = inputMap.get("spinWeight");
 	const double M0 = inputMap.get("M0");
-	matrix3<> R = matrix3<>(0,1,1, 1,0,1, 1,1,0) * (0.5*inputMap.get("aCubic")*Angstrom);
+	const matrix3<> R = matrix3<>(0,1,1, 1,0,1, 1,1,0) * (0.5*inputMap.get("aCubic")*Angstrom);
 
 	logPrintf("\nInputs after conversion to atomic units:\n");
 	logPrintf("nKptsN1 = %d\n", nKptsN1);
@@ -129,12 +130,15 @@ int main(int argc, char** argv)
 	vector3<complex> zHat(0.0, 0.0, one);
 	vector3<complex> kHat(cos(kPhi), sin(kPhi), 0.0);
 	complex I(0.0,1.0);
-	double const vl = c;
 	vector3<complex> sqrtGammaPrefac = ((1/fabs(det(R))) * sqrt(N1*std::pow(M_PI,3)*vl/(nKptsMetro*eps.modGammaMinus*omega*eps.Lquant)) ) * (kHat - I*(eps.k/eps.modGammaMinus)*zHat);
 	logPrintf("sqrtGammaPrefac Real = %lg %lg %lg\n",  real(sqrtGammaPrefac[0]), real(sqrtGammaPrefac[1]), real(sqrtGammaPrefac[2]));
 	logPrintf("sqrtGammaPrefac Imag = %lg %lg %lg\n",  imag(sqrtGammaPrefac[0]), imag(sqrtGammaPrefac[1]), imag(sqrtGammaPrefac[2]));
 
-	const double weightCut = 1e-6, energyCut = 40*eV, kappa = 2.50e10;
+	// Initalize Wigner-Seitz cell
+	WignerSeitz wsCell(R);
+	
+	// Values for use in metropolis sampling
+	const double weightCut = 1e-6, energyCut = 40*eV;
 	double Gamma = 0.;
 	Histogram EcHist(-10*T, 0.5*T, Eplasmon+5*T);
 	Histogram EvHist(-Eplasmon-5*T, 0.5*T, 10*T);
@@ -143,6 +147,7 @@ int main(int argc, char** argv)
 	int walkerStop = (totalWalkers * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
 	nKpts = nKptsMetro / totalWalkers;
 	StopWatch watchMet("metropolis"); watchMet.start();
+	//Start metropolis sampling
 	if(!skipMetro) for(int walker=walkerStart; walker<walkerStop; walker++)
 	{	Random::seed(walker);
 		logPrintf("Metropolis walk# %d ... ", walker); logFlush();
@@ -172,6 +177,10 @@ int main(int argc, char** argv)
 				if(equib)
 				{	ik++;
 					// Calculate transitions at current k-point:
+					double kPh = wsCell.restrict(kpnt2)-wsCell.restrict(kpnt1);
+					double kPhMag = sqrt(kPh[0]*kPh[0] + kPh[1]*kPh[1] + kPh[2]*kPh[3]);
+					double kPhFactor = kPhMag/(kPhMag*kPhMag + kappa*kappa);
+					double g_k = 1/(exp(vl*(kPhMag)/T)-1)
 					diagMatrix E1 = bs.getStates(kpnt1);
 					std::vector<matrix> Pk1 = bs.getTransitions(kpnt1);
 					diagMatrix E2 = bs.getStates(kpnt2);
@@ -184,22 +193,11 @@ int main(int argc, char** argv)
 							// Effective matrix elements
 							complex prefacDotP1 = 0., prefacDotP2=0.;
 							for(int i=0; i<E1.nRows(); i++) // sum over the intermediate states
-							{	//double dK  = sqrt(std::pow(kpnt2[1]-knpt1[1],2) + 
-								//double n_i = 1/(exp(c*(kpnt2-kpnt1)/T)-1)
-								if(E2[i] < energyCut)
-								{	double phononK2 = fabs(E2[c]-E2[i])/vl;
-									double kfactor2 = phononK2/(std::pow(phononK2,2)+std::pow(kappa,2));
-									complex E2i(E2[i], lineWidth(E2[i]));
-									for(int j=0; j<3; j++) prefacDotP1 += sqrtGammaPrefac[j] * (Pk2[j](c,i)*(1-1/(exp(E2[i]/T)+1)))/(E2i-E2[c]+Eplasmon)*kfactor2;
-								}
-								if(E1[i] < energyCut)
-								{	double phononK1 = fabs(E1[i]-E1[v])/vl;
-									double kfactor1 = phononK1/(std::pow(phononK1,2)+std::pow(kappa,2));
-									complex E1i(E1[i], lineWidth(E1[i]));
-									for(int j=0; j<3; j++) prefacDotP2 += sqrtGammaPrefac[j] * (Pk1[j](i,v)*(1-1/(exp(E1[i]/T)+1)))/(E1i-E1[v]-Eplasmon)*kfactor1;
-								}
+							{	complex E2i(E2[i], lineWidth(E2[i])), E1i(E1[i], lineWidth(E1[i]));
+								if(E2[i] < energyCut) for(int j=0; j<3; j++) prefacDotP1 += sqrtGammaPrefac[j] * (Pk2[j](c,i)*(1-1/(exp(E2[i]/T)+1)))/(E2i-E2[c]+Eplasmon)*kfactor2;
+								if(E1[i] < energyCut) for(int j=0; j<3; j++) prefacDotP2 += sqrtGammaPrefac[j] * (Pk1[j](i,v)*(1-1/(exp(E1[i]/T)+1)))/(E1i-E1[v]-Eplasmon)*kfactor1;
 							}
-							double weight = (0.5*spinWeight) * weightEconserve * (prefacDotP1.norm() + prefacDotP2.norm()); //norm = abs^2
+							double weight = (0.5*spinWeight) * weightEconserve * (2*g_k+1) * kPhFactor * (prefacDotP1.norm() + prefacDotP2.norm()); //norm = abs^2
 							//Include in statistics:
 							Gamma += weight;
 							EcHist.addEvent(E2[c], weight);
