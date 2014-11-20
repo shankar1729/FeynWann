@@ -129,11 +129,12 @@ int main(int argc, char** argv)
 	vector3<complex> zHat(0.0, 0.0, one);
 	vector3<complex> kHat(cos(kPhi), sin(kPhi), 0.0);
 	complex I(0.0,1.0);
-	vector3<complex> sqrtGammaPrefac = ( M0 * sqrt(N1*M_PI/(nKptsMetro*4*fabs(det(R))*eps.modGammaMinus*omega*eps.Lquant)) ) * (kHat - I*(eps.k/eps.modGammaMinus)*zHat);
+	double const vl = c;
+	vector3<complex> sqrtGammaPrefac = ((1/fabs(det(R))) * sqrt(N1*std::pow(M_PI,3)*vl/(nKptsMetro*eps.modGammaMinus*omega*eps.Lquant)) ) * (kHat - I*(eps.k/eps.modGammaMinus)*zHat);
 	logPrintf("sqrtGammaPrefac Real = %lg %lg %lg\n",  real(sqrtGammaPrefac[0]), real(sqrtGammaPrefac[1]), real(sqrtGammaPrefac[2]));
 	logPrintf("sqrtGammaPrefac Imag = %lg %lg %lg\n",  imag(sqrtGammaPrefac[0]), imag(sqrtGammaPrefac[1]), imag(sqrtGammaPrefac[2]));
 
-	const double weightCut = 1e-6, energyCut = 40*eV;
+	const double weightCut = 1e-6, energyCut = 40*eV, kappa = 2.50e10;
 	double Gamma = 0.;
 	Histogram EcHist(-10*T, 0.5*T, Eplasmon+5*T);
 	Histogram EvHist(-Eplasmon-5*T, 0.5*T, 10*T);
@@ -185,10 +186,18 @@ int main(int argc, char** argv)
 							for(int i=0; i<E1.nRows(); i++) // sum over the intermediate states
 							{	//double dK  = sqrt(std::pow(kpnt2[1]-knpt1[1],2) + 
 								//double n_i = 1/(exp(c*(kpnt2-kpnt1)/T)-1)
-								complex E1i(E1[i], lineWidth(E1[i]));
-								complex E2i(E2[i], lineWidth(E2[i]));
-								if(E2[i] < energyCut) for(int j=0; j<3; j++) prefacDotP1 += sqrtGammaPrefac[j] * (Pk2[j](c,i)*(1-1/(exp(E2[i]/T)+1)))/(E2i-E2[c]+Eplasmon);
-								if(E1[i] < energyCut) for(int j=0; j<3; j++) prefacDotP2 += sqrtGammaPrefac[j] * (Pk1[j](i,v)*(1-1/(exp(E1[i]/T)+1)))/(E1i-E1[v]-Eplasmon);
+								if(E2[i] < energyCut)
+								{	double phononK2 = fabs(E2[c]-E2[i])/vl;
+									double kfactor2 = phononK2/(std::pow(phononK2,2)+std::pow(kappa,2));
+									complex E2i(E2[i], lineWidth(E2[i]));
+									for(int j=0; j<3; j++) prefacDotP1 += sqrtGammaPrefac[j] * (Pk2[j](c,i)*(1-1/(exp(E2[i]/T)+1)))/(E2i-E2[c]+Eplasmon)*kfactor2;
+								}
+								if(E1[i] < energyCut)
+								{	double phononK1 = fabs(E1[i]-E1[v])/vl;
+									double kfactor1 = phononK1/(std::pow(phononK1,2)+std::pow(kappa,2));
+									complex E1i(E1[i], lineWidth(E1[i]));
+									for(int j=0; j<3; j++) prefacDotP2 += sqrtGammaPrefac[j] * (Pk1[j](i,v)*(1-1/(exp(E1[i]/T)+1)))/(E1i-E1[v]-Eplasmon)*kfactor1;
+								}
 							}
 							double weight = (0.5*spinWeight) * weightEconserve * (prefacDotP1.norm() + prefacDotP2.norm()); //norm = abs^2
 							//Include in statistics:
