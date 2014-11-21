@@ -145,8 +145,10 @@ int main(int argc, char** argv)
 	logPrintf("sqrtGammaPrefac Real = %lg %lg %lg\n",  real(sqrtGammaPrefac[0]), real(sqrtGammaPrefac[1]), real(sqrtGammaPrefac[2]));
 	logPrintf("sqrtGammaPrefac Imag = %lg %lg %lg\n",  imag(sqrtGammaPrefac[0]), imag(sqrtGammaPrefac[1]), imag(sqrtGammaPrefac[2]));
 
-	// Initalize Wigner-Seitz cell
-	WignerSeitz wsCell(R);
+	// Initalize Brillouin zone
+	matrix3<> GT = (2*M_PI)*inv(~R); //reciprocal lattice vectors
+	matrix3<> GGT = (~GT)*GT; //reciprocal space metric
+	WignerSeitz BZ(GT); //Wigner-Seitz cell on the reciprocal lattice vectors
 	
 	// Values for use in metropolis sampling
 	const double weightCut = 1e-6, energyCut = 40*eV;
@@ -188,10 +190,10 @@ int main(int argc, char** argv)
 				if(equib)
 				{	ik++;
 					// Calculate transitions at current k-point:
-					vector3<> kPh = wsCell.restrict(kpnt2)-wsCell.restrict(kpnt1);
-					double kPhMag = sqrt(kPh[0]*kPh[0] + kPh[1]*kPh[1] + kPh[2]*kPh[3]);
-					double kPhFactor = kPhMag/(kPhMag*kPhMag + kappa*kappa);
-					double g_k = 1/(exp(vl*(kPhMag)/T)-1);
+					double kPh = sqrt(GGT.metric_length_squared(BZ.restrict(kpnt2 - kpnt1)));
+					kPh = std::max(1e-7, kPh); //regularize phonon wavevector to avoid 0/0 in phonon factor
+					double g_kPh = 1./(exp(vl*kPh/T) - 1.);
+					double phononFactor = (2*g_kPh + 1) * kPh/(kPh*kPh + kappa*kappa);
 					diagMatrix E1 = bs.getStates(kpnt1);
 					std::vector<matrix> Pk1 = bs.getTransitions(kpnt1);
 					diagMatrix E2 = bs.getStates(kpnt2);
@@ -208,7 +210,7 @@ int main(int argc, char** argv)
 								if(E2[i] < energyCut) for(int j=0; j<3; j++) prefacDotP1 += sqrtGammaPrefac[j] * (Pk2[j](c,i)*(1-1/(exp(E2[i]/T)+1)))/(E2i-E2[c]+Eplasmon);
 								if(E1[i] < energyCut) for(int j=0; j<3; j++) prefacDotP2 += sqrtGammaPrefac[j] * (Pk1[j](i,v)*(1-1/(exp(E1[i]/T)+1)))/(E1i-E1[v]-Eplasmon);
 							}
-							double weight = (0.5*spinWeight) * weightEconserve * (2*g_k+1) * kPhFactor * (prefacDotP1.norm() + prefacDotP2.norm()); //norm = abs^2
+							double weight = (0.5*spinWeight) * weightEconserve * phononFactor * (prefacDotP1.norm() + prefacDotP2.norm()); //norm = abs^2
 							//Include in statistics:
 							Gamma += weight;
 							EcHist.addEvent(E2[c], weight);
