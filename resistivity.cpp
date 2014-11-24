@@ -119,12 +119,12 @@ int main(int argc, char** argv)
 			diagMatrix Ej = bs.getStates(kpntj);
 			std::vector<matrix> Pkj = bs.getTransitions(kpntj);
 			for(int v=0; v<Ei.nRows(); v++)
-			{	double dFdEi = 1/(T*std::pow(2*cosh(Ei[v]/(2*T)),2));
+			{	double dFdEi = -1/(T*std::pow(2*cosh(Ei[v]/(2*T)),2));
 				double fi  = 1/(exp(Ei[v]/T)+1);
-				Tblock += 2/3*spinWeight*viDotvi*(-dFdEi); // should spineWeight be included here?
+				Tblock += (2/3)*spinWeight*viDotvi*(-dFdEi); // should spineWeight be included here?
 				for(int c=0; c<Ej.nRows(); c++)
 				{	double fj = 1/(exp(Ej[c]/T)+1);
-					double dFdEj = 1/(T*std::pow(2*cosh(Ej[c]/(2*T)),2));
+					double dFdEj = -1/(T*std::pow(2*cosh(Ej[c]/(2*T)),2));
 					double deltam = 1/(1-exp(Ej[c]-Ei[v]-vl*kPh));
 					double deltap = 1/(1-exp(Ej[c]-Ei[v]+vl*kPh));
 					double term1 = prefac * (viDotvi*(-dFdEi)*(g_kPh+fj) -  viDotvj*(-dFdEj)*(g_kPh+1-fi)) * phononFactor * deltam;
@@ -149,4 +149,7 @@ int main(int argc, char** argv)
 	mpiUtil->allReduce(Gamma, MPIUtil::ReduceSum);
 	logPrintf("Linewidth = %lg eV\n", Gamma/eV);
 	
+	// Calculate Resistivity
+	double row = fabs(det(R))*Gamma/(Tt*Tt);
+	logPrintf("Resistivity = %lg\n", row);
 }
