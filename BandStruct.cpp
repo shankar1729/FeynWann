@@ -93,29 +93,22 @@ double BandStruct::get_mk1k2(vector3<double> kPoint1, vector3<double> kPoint2, d
         return mk1k2;
 }
 
-vector3<double> BandStruct::get_velocity(vector3<double> kPoint)
+std::vector< vector3<double> > BandStruct::get_velocity(vector3<double> kPoint)
 {	if(!(kPoint == kPointCache)) getStates(kPoint); //Update evecs and phase if necessary
-	matrix phasePrimeX, phasePrimeY, phasePrimeZ;
-	phasePrimeX.init(cellMap.size(), 1);
-	phasePrimeY.init(cellMap.size(), 1);
-	phasePrimeZ.init(cellMap.size(), 1);
-	complex I(0.0,1.0);
-	for(size_t ic=0; ic<cellMap.size(); ic++)
-	{	auto R = cellMap[ic];
-		phasePrimeX.set(ic,0, I*R[0]*cis(2*M_PI*dot(R,kPoint)));
-		phasePrimeY.set(ic,0, I*R[1]*cis(2*M_PI*dot(R,kPoint)));
-		phasePrimeZ.set(ic,0, I*R[2]*cis(2*M_PI*dot(R,kPoint)));
-	}
-	matrix dHdkX = hWannier * phasePrimeX;
-	matrix dHdkY = hWannier * phasePrimeY;
-	matrix dHdkZ = hWannier * phasePrimeZ;
-	dHdkX.reshape(nBands, nBands);
-	dHdkY.reshape(nBands, nBands);
-	dHdkZ.reshape(nBands, nBands);
+	std::vector< vector3<double> > v;
 	matrix Vk = evecs;
-	vector3<double> v;
-	diagMatrix v0 = diag(dagger(Vk) * dHdkX * Vk);
-	diagMatrix v1 = diag(dagger(Vk) * dHdkY * Vk);
-	diagMatrix v2 = diag(dagger(Vk) * dHdkZ * Vk);
+	matrix phasePrime;
+	complex I(0.0,1.0);
+	for(int j = 0; j < 3; j++)
+	{	phasePrime.init(cellMap.size(), 1);
+		for(size_t ic=0; ic<cellMap.size(); ic++)
+		{	auto R = cellMap[ic];
+			phasePrime.set(ic,0, I*R[j]*cis(2*M_PI*dot(R,kPoint)));
+		}
+		matrix dHdk = hWannier * phasePrime;
+		dHdk.reshape(nBands, nBands);
+		diagMatrix vj = diag(dagger(Vk) * dHdk * Vk);
+		for( int b = 0; b<nBands; b++) v[b][j] = vj[b];
+	}
 	return v;
 }

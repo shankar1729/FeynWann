@@ -75,7 +75,6 @@ int main(int argc, char** argv)
                 double kappaSqrdBlock = 0.;
                 for(int nk1 =0; nk1<nKpts; nk1++)
                 {       vector3<> kpnt1;
-			vector3<double> v = bs.get_velocity(kpnt1);
 			for(int j=0; j<3; j++) kpnt1[j] = Random::uniform();
 			diagMatrix Ek = bs.getStates(kpnt1);
 			for(int n = 0; n<Ek.nRows(); n++)
@@ -109,8 +108,8 @@ int main(int argc, char** argv)
 			{	kpnti[j] = Random::uniform();
 				kpntj[j] = Random::uniform();
 			}
-			double viDotvi = 1., viDotvj = 1.;
-
+			std::vector<vector3<double>> vi = bs.get_velocity(kpnti);
+			std::vector<vector3<double>> vj = bs.get_velocity(kpntj);
 
 			// Calculate transitions at current k-point:
 			double kPh = sqrt(GGT.metric_length_squared(BZ.restrict(kpntj - kpnti)));
@@ -124,9 +123,13 @@ int main(int argc, char** argv)
 			for(int v=0; v<Ei.nRows(); v++)
 			{	double dFdEi = -1/(T*std::pow(2*cosh(Ei[v]/(2*T)),2));
 				double fi  = 1/(exp(Ei[v]/T)+1);
+				vector3<double> viv = vi[v];
+				double viDotvi = viv[0]*viv[0] + viv[1]*viv[1] + viv[2]*viv[2];
 				Tblock += (2/3)*spinWeight*viDotvi*(-dFdEi); // should spineWeight be included here?
 				for(int c=0; c<Ej.nRows(); c++)
-				{	double fj = 1/(exp(Ej[c]/T)+1);
+				{	vector3<double> vjc = vj[c];
+					double viDotvj = viv[0]*vjc[0] + viv[1]*vjc[1] + viv[2]*vjc[2];
+					double fj = 1/(exp(Ej[c]/T)+1);
 					double dFdEj = -1/(T*std::pow(2*cosh(Ej[c]/(2*T)),2));
 					double deltam = 1/(1-exp(Ej[c]-Ei[v]-vl*kPh));
 					double deltap = 1/(1-exp(Ej[c]-Ei[v]+vl*kPh));
