@@ -43,7 +43,7 @@ diagMatrix BandStruct::getStates(vector3<double> kPoint)
 	//Calculate phase factors for each cell:
 	phase.init(cellMap.size(), 1);
 	for(size_t ic=0; ic<cellMap.size(); ic++)
-		phase.set(ic,0, cis(2*M_PI * dot(cellMap[ic],kPoint)));
+		phase.set(ic,0, cis(2*M_PI*dot(cellMap[ic],kPoint)));
 	//Compute Hamiltonian for kPoint:
 	matrix Hk = hWannier * phase;
 	Hk.reshape(nBands, nBands);
@@ -91,4 +91,31 @@ double BandStruct::get_mk1k2(vector3<double> kPoint1, vector3<double> kPoint2, d
                 }
         }
         return mk1k2;
+}
+
+vector3<double> BandStruct::get_velocity(vector3<double> kPoint)
+{	if(!(kPoint == kPointCache)) getStates(kPoint); //Update evecs and phase if necessary
+	matrix phasePrimeX, phasePrimeY, phasePrimeZ;
+	phasePrimeX.init(cellMap.size(), 1);
+	phasePrimeY.init(cellMap.size(), 1);
+	phasePrimeZ.init(cellMap.size(), 1);
+	complex I(0.0,1.0);
+	for(size_t ic=0; ic<cellMap.size(); ic++)
+	{	auto R = cellMap[ic];
+		phasePrimeX.set(ic,0, I*R[0]*cis(2*M_PI*dot(R,kPoint)));
+		phasePrimeY.set(ic,0, I*R[1]*cis(2*M_PI*dot(R,kPoint)));
+		phasePrimeZ.set(ic,0, I*R[2]*cis(2*M_PI*dot(R,kPoint)));
+	}
+	matrix dHdkX = hWannier * phasePrimeX;
+	matrix dHdkY = hWannier * phasePrimeY;
+	matrix dHdkZ = hWannier * phasePrimeZ;
+	dHdkX.reshape(nBands, nBands);
+	dHdkY.reshape(nBands, nBands);
+	dHdkZ.reshape(nBands, nBands);
+	matrix Vk = evecs;
+	vector3<double> v;
+	diagMatrix v0 = diag(dagger(Vk) * dHdkX * Vk);
+	diagMatrix v1 = diag(dagger(Vk) * dHdkY * Vk);
+	diagMatrix v2 = diag(dagger(Vk) * dHdkZ * Vk);
+	return v;
 }

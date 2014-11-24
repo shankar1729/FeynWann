@@ -63,31 +63,33 @@ int main(int argc, char** argv)
 	//Initialize Wannier bandstructure:
 	BandStruct bs("wannier", mu);
 
+
 	// Calculate kappa
 	int blockStart = (totalBlocks * (mpiUtil->iProcess())) / mpiUtil->nProcesses(); //MPI division
-        int blockStop = (totalBlocks * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
-        int nKpts = nKptsN1/totalBlocks;
-        double kappaSum = 0., kappaSumSq = 0.;
-        logPrintf("Calculating kappa ... "); logFlush();
+	int blockStop = (totalBlocks * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
+	int nKpts = nKptsN1/totalBlocks;
+	double kappaSum = 0., kappaSumSq = 0.;
+	logPrintf("Calculating kappa ... "); logFlush();
         for(int block=blockStart; block<blockStop; block++)
         {       Random::seed(block);
                 double kappaSqrdBlock = 0.;
                 for(int nk1 =0; nk1<nKpts; nk1++)
                 {       vector3<> kpnt1;
-                        for(int j=0; j<3; j++) kpnt1[j] = Random::uniform();
-                        diagMatrix Ek = bs.getStates(kpnt1);
-                        for(int n = 0; n<Ek.nRows(); n++)
-                        {       double dFdE =1/(T*std::pow(2*cosh(Ek[n]/(2*T)),2));
-                                kappaSqrdBlock += 4*M_PI*spinWeight*dFdE/fabs(det(R));
-                        }
-                }
-                kappaSqrdBlock /= nKpts;
-                kappaSum += sqrt(kappaSqrdBlock);
-                kappaSumSq +=kappaSqrdBlock;
-        }
-        double kappa = kappaSum / totalBlocks;
-        double kappaStd = sqrt(kappaSumSq/totalBlocks - kappa*kappa);
-        logPrintf("kappa = %lg +/- %lg\n", kappa, kappaStd);
+			vector3<double> v = bs.get_velocity(kpnt1);
+			for(int j=0; j<3; j++) kpnt1[j] = Random::uniform();
+			diagMatrix Ek = bs.getStates(kpnt1);
+			for(int n = 0; n<Ek.nRows(); n++)
+			{	double dFdE =1/(T*std::pow(2*cosh(Ek[n]/(2*T)),2));
+				kappaSqrdBlock += 4*M_PI*spinWeight*dFdE/fabs(det(R));
+			}
+		}
+		kappaSqrdBlock /= nKpts;
+		kappaSum += sqrt(kappaSqrdBlock);
+		kappaSumSq +=kappaSqrdBlock;
+	}
+	double kappa = kappaSum / totalBlocks;
+	double kappaStd = sqrt(kappaSumSq/totalBlocks - kappa*kappa);
+	logPrintf("kappa = %lg +/- %lg\n", kappa, kappaStd);
 
 	// Intalize Brillouin zone
 	matrix3<> GT = (2*M_PI)*inv(~R); //reciprocal lattice vectors
@@ -108,6 +110,7 @@ int main(int argc, char** argv)
 				kpntj[j] = Random::uniform();
 			}
 			double viDotvi = 1., viDotvj = 1.;
+
 
 			// Calculate transitions at current k-point:
 			double kPh = sqrt(GGT.metric_length_squared(BZ.restrict(kpntj - kpnti)));
