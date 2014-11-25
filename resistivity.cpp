@@ -101,7 +101,7 @@ int main(int argc, char** argv)
 	double Tsum = 0., TsumSq = 0., GammaSum = 0., GammaSumSq = 0.;
 	logPrintf("Calculating T and Gamma... "); logFlush();
 	double prefacT = spinWeight/(3*nKpts);
-	double prefacGamma = spinWeight*std::pow(2*M_PI,2)*vl/(3*fabs(det(R))*nKpts);
+	double prefacGamma = spinWeight*std::pow(2*M_PI,2)*vl/(3*nKpts);
 	double EconserveExpFac = -0.5/(T*T), EconservePrefac = 1./(sqrt(2*M_PI)*T); //energy conserving Gaussian parameters
 	for(int block=blockStart; block<blockStop; block++)
 	{	Random::seed(block);
@@ -168,7 +168,7 @@ int main(int argc, char** argv)
 	const double Ohm = Volt/Ampere;
 
 	// Calculate Resistivity
-	double rho = fabs(det(R))*Gamma/(Tt*Tt);
+	double rho = Gamma/(Tt*Tt);
 	logPrintf("Resistivity = %lg ohm-m\n", rho/(Ohm*meter));
 	
 	finalizeSystem();
