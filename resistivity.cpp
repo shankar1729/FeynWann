@@ -151,14 +151,14 @@ int main(int argc, char** argv)
 	mpiUtil->allReduce(Tsum, MPIUtil::ReduceSum);
 	mpiUtil->allReduce(TsumSq, MPIUtil::ReduceSum);
 	double Tt = Tsum / totalBlocks;
-	double Tstd = sqrt(TsumSq/totalBlocks - Tt*Tt);
+	double Tstd = sqrt(TsumSq/totalBlocks - Tt*Tt)/sqrt(totalBlocks);
 	logPrintf("T = %lg +/- %lg\n", Tt, Tstd);
 	
 	//Decay rate:
 	mpiUtil->allReduce(GammaSum, MPIUtil::ReduceSum);
 	mpiUtil->allReduce(GammaSumSq, MPIUtil::ReduceSum);
 	double Gamma = GammaSum / totalBlocks;
-	double GammaStd = sqrt(GammaSumSq/totalBlocks - Gamma*Gamma);
+	double GammaStd = sqrt(GammaSumSq/totalBlocks - Gamma*Gamma)/sqrt(totalBlocks);
 	logPrintf("Gamma = %lg +/- %lg\n", Gamma, GammaStd);
 	
 	const double invSeconds = 2.418884326505e-17;
