@@ -36,7 +36,7 @@ BandStruct::BandStruct(string prefix, double mu)
 	kPointCache *= NAN; //indicate that cache is invalid
 }
 
-diagMatrix BandStruct::getStates(vector3<double> kPoint)
+diagMatrix BandStruct::getStates(vector3<> kPoint)
 {   static StopWatch watch("BandStruct::getStates");
 	if(kPoint == kPointCache) return eigs;
 	watch.start();
@@ -55,7 +55,7 @@ diagMatrix BandStruct::getStates(vector3<double> kPoint)
 	return eigs;
 }
 
-std::vector<matrix> BandStruct::getTransitions(vector3<double> kPoint)
+std::vector<matrix> BandStruct::getTransitions(vector3<> kPoint)
 {	static StopWatch watch("BandStruct::getTransitions"); watch.start();
 	if(!(kPoint == kPointCache)) getStates(kPoint); //Update evecs and phase if necessary
 	// Compute transitions at kPoint
@@ -71,7 +71,7 @@ std::vector<matrix> BandStruct::getTransitions(vector3<double> kPoint)
 	return pk;
 }
 
-double BandStruct::get_mk(vector3<double> kPoint, double omega, double T)
+double BandStruct::get_mk(vector3<> kPoint, double omega, double T)
 {	diagMatrix E = getStates(kPoint);
 	double mk = INFINITY;
 	for(int v=0; v<nBands; v++) if(E[v]<10.*T)
@@ -82,7 +82,7 @@ double BandStruct::get_mk(vector3<double> kPoint, double omega, double T)
 	return mk;
 }
 
-double BandStruct::get_mk1k2(vector3<double> kPoint1, vector3<double> kPoint2, double omega, double T)
+double BandStruct::get_mk1k2(vector3<> kPoint1, vector3<> kPoint2, double omega, double T)
 {       diagMatrix E1 = getStates(kPoint1), E2 = getStates(kPoint2);
         double mk1k2 = INFINITY;
         for(int v=0; v<nBands; v++) if(E1[v]<10.*T)
@@ -93,9 +93,10 @@ double BandStruct::get_mk1k2(vector3<double> kPoint1, vector3<double> kPoint2, d
         return mk1k2;
 }
 
-std::vector< vector3<double> > BandStruct::get_velocity(vector3<double> kPoint)
-{	if(!(kPoint == kPointCache)) getStates(kPoint); //Update evecs and phase if necessary
-	std::vector< vector3<double> > v;
+std::vector< vector3<> > BandStruct::getVelocity(vector3<> kPoint)
+{	static StopWatch watch("BandStruct::getVelocity"); watch.start();
+	if(!(kPoint == kPointCache)) getStates(kPoint); //Update evecs and phase if necessary
+	std::vector< vector3<> > v(nBands);
 	matrix Vk = evecs;
 	complex I(0.0,1.0);
 	for(int j = 0; j < 3; j++)
@@ -110,5 +111,6 @@ std::vector< vector3<double> > BandStruct::get_velocity(vector3<double> kPoint)
 		diagMatrix vj = diag(dagger(Vk) * dHdk * Vk);
 		for( int b = 0; b<nBands; b++) v[b][j] = vj[b];
 	}
+	watch.stop();
 	return v;
 }

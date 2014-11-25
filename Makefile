@@ -13,7 +13,7 @@ testEpsilon: testEpsilon.cpp Epsilon.h Epsilon.cpp
 	g++ -o testEpsilon testEpsilon.cpp Epsilon.cpp $(CXX_FLAGS) $(LINK_FLAGS)
 
 resistivity: resistivity.cpp BandStruct.h BandStruct.cpp
-	g++ -o resistivity resistivity.cpp BandStruct.cpp $(CXX_FLAGS) $(LINK_FLAGS)
+	mpicxx -o resistivity resistivity.cpp BandStruct.cpp $(CXX_FLAGS) $(LINK_FLAGS) -DMPI_ENABLED
 
 plasmonDecayMetropolis: plasmonDecayMetropolis.cpp BandStruct.h BandStruct.cpp Histogram.h Histogram.cpp Epsilon.h Epsilon.cpp
 	mpicxx -o plasmonDecayMetropolis plasmonDecayMetropolis.cpp BandStruct.cpp Histogram.cpp Epsilon.cpp $(CXX_FLAGS) $(LINK_FLAGS) -DMPI_ENABLED

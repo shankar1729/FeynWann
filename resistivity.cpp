@@ -86,6 +86,8 @@ int main(int argc, char** argv)
 		kappaSum += sqrt(kappaSqrdBlock);
 		kappaSumSq +=kappaSqrdBlock;
 	}
+	mpiUtil->allReduce(kappaSum, MPIUtil::ReduceSum);
+	mpiUtil->allReduce(kappaSumSq, MPIUtil::ReduceSum);
 	double kappa = kappaSum / totalBlocks;
 	double kappaStd = sqrt(kappaSumSq/totalBlocks - kappa*kappa);
 	logPrintf("kappa = %lg +/- %lg\n", kappa, kappaStd);
@@ -98,7 +100,9 @@ int main(int argc, char** argv)
 	// Compute T and Gamma
 	double Tsum = 0., TsumSq = 0., Gamma = 0.;
 	logPrintf("Calculating T and Gamma... "); logFlush();
-	double prefac = 8*M_PI*M_PI*vl/(3*fabs(det(R))*nKpts);
+	double prefacT = spinWeight/(3*nKpts);
+	double prefacGamma = spinWeight*std::pow(2*M_PI,2)*vl/(3*fabs(det(R))*nKpts);
+	double EconserveExpFac = -0.5/(T*T), EconservePrefac = 1./(sqrt(2*M_PI)*T); //energy conserving Gaussian parameters
 	for(int block=blockStart; block<blockStop; block++)
 	{	Random::seed(block);
 		double Tblock = 0.;;
@@ -108,39 +112,31 @@ int main(int argc, char** argv)
 			{	kpnti[j] = Random::uniform();
 				kpntj[j] = Random::uniform();
 			}
-			std::vector<vector3<double>> vi = bs.get_velocity(kpnti);
-			std::vector<vector3<double>> vj = bs.get_velocity(kpntj);
+			diagMatrix Ei = bs.getStates(kpnti); std::vector<vector3<>> vi = bs.getVelocity(kpnti);
+			diagMatrix Ej = bs.getStates(kpntj); std::vector<vector3<>> vj = bs.getVelocity(kpntj);
 
-			// Calculate transitions at current k-point:
 			double kPh = sqrt(GGT.metric_length_squared(BZ.restrict(kpntj - kpnti)));
 			kPh = std::max(1e-7, kPh); //regularize phonon wavevector to avoid 0/0 in phonon factor
 			double g_kPh = 1./(exp(vl*kPh/T) - 1.);
 			double phononFactor = kPh/(kPh*kPh + kappa*kappa);
-			diagMatrix Ei = bs.getStates(kpnti);
-			std::vector<matrix> Pki = bs.getTransitions(kpnti);
-			diagMatrix Ej = bs.getStates(kpntj);
-			std::vector<matrix> Pkj = bs.getTransitions(kpntj);
+			
 			for(int v=0; v<Ei.nRows(); v++)
-			{	double dFdEi = -1/(T*std::pow(2*cosh(Ei[v]/(2*T)),2));
-				double fi  = 1/(exp(Ei[v]/T)+1);
-				vector3<double> viv = vi[v];
-				double viDotvi = viv[0]*viv[0] + viv[1]*viv[1] + viv[2]*viv[2];
-				Tblock += (2/3)*spinWeight*viDotvi*(-dFdEi); // should spineWeight be included here?
+			{	double fi  = 1./(exp(Ei[v]/T)+1);
+				double dFdEi = -1/(T*std::pow(2*cosh(Ei[v]/(2*T)),2));
+				double viDotvi = vi[v].length_squared();
+				Tblock += prefacT * viDotvi*(-dFdEi);
 				for(int c=0; c<Ej.nRows(); c++)
-				{	vector3<double> vjc = vj[c];
-					double viDotvj = viv[0]*vjc[0] + viv[1]*vjc[1] + viv[2]*vjc[2];
-					double fj = 1/(exp(Ej[c]/T)+1);
-					double dFdEj = -1/(T*std::pow(2*cosh(Ej[c]/(2*T)),2));
-					double deltam = 1/(1-exp(Ej[c]-Ei[v]-vl*kPh));
-					double deltap = 1/(1-exp(Ej[c]-Ei[v]+vl*kPh));
-					double term1 = prefac * (viDotvi*(-dFdEi)*(g_kPh+fj) -  viDotvj*(-dFdEj)*(g_kPh+1-fi)) * phononFactor * deltam;
-					double term2 = prefac * (viDotvi*(-dFdEi)*(g_kPh+1-fj) -  viDotvj*(-dFdEj)*(g_kPh+fi)) * phononFactor * deltap;
+				{	double viDotvj = dot(vi[v], vj[c]);
+					double fj = 1./(exp(Ej[c]/T)+1);
+					double dFdEj = -1./(T*std::pow(2*cosh(Ej[c]/(2*T)),2));
+					double deltam = EconservePrefac * exp(EconserveExpFac * std::pow(Ej[c]-Ei[v]-vl*kPh,2));
+					double deltap = EconservePrefac * exp(EconserveExpFac * std::pow(Ej[c]-Ei[v]+vl*kPh,2));
+					double term1 = prefacGamma * (viDotvi*(-dFdEi)*(g_kPh+fj) -  viDotvj*(-dFdEj)*(g_kPh+1-fi)) * phononFactor * deltam;
+					double term2 = prefacGamma * (viDotvi*(-dFdEi)*(g_kPh+1-fj) -  viDotvj*(-dFdEj)*(g_kPh+fi)) * phononFactor * deltap;
 					Gamma += term1 + term2;
 				}
-			}		
-
+			}
 		}
-		Tblock /=  nKpts;
 		Tsum += Tblock;
 		TsumSq += std::pow(Tblock,2);
 	}
@@ -158,4 +154,6 @@ int main(int argc, char** argv)
 	// Calculate Resistivity
 	double row = fabs(det(R))*Gamma/(Tt*Tt);
 	logPrintf("Resistivity = %lg\n", row);
+	
+	finalizeSystem();
 }

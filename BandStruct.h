@@ -14,11 +14,11 @@ class BandStruct
 	vector3<> kPointCache; //value of kpoint for which evecs and phase was computed
 public:
 	BandStruct(string filePrefix, double mu);
-	diagMatrix getStates(vector3<double> kPoint);
-	std::vector<matrix> getTransitions(vector3<double> kPoint);
-	double get_mk(vector3<double> kPoint, double omega, double T); //calculate the energy conservation weight at a given k-point
-	double get_mk1k2(vector3<double> kPoint1, vector3<double> kPoint2, double omega, double T); //calculate the energy conservation weight at a given k-point pair
-	std::vector< vector3<double> > get_velocity(vector3<double> kPoint);
+	diagMatrix getStates(vector3<> kPoint);
+	std::vector<matrix> getTransitions(vector3<> kPoint);
+	double get_mk(vector3<> kPoint, double omega, double T); //calculate the energy conservation weight at a given k-point
+	double get_mk1k2(vector3<> kPoint1, vector3<> kPoint2, double omega, double T); //calculate the energy conservation weight at a given k-point pair
+	std::vector< vector3<> > getVelocity(vector3<> kPoint);
 	
 	inline static double mk_sub(double Ec, double Ev, double omega, double T)
 	{	return std::pow((Ec - Ev - omega),2) - 2*T*T * (logFermi(Ev/T) + logFermi(-Ec/T));

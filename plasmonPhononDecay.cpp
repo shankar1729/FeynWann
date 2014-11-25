@@ -120,6 +120,8 @@ int main(int argc, char** argv)
 	watchNorm.stop();
 	mpiUtil->allReduce(N1sum, MPIUtil::ReduceSum);
 	mpiUtil->allReduce(N1sumSq, MPIUtil::ReduceSum);
+	mpiUtil->allReduce(kappaSum, MPIUtil::ReduceSum);
+	mpiUtil->allReduce(kappaSumSq, MPIUtil::ReduceSum);
 	double N1 = N1sum / totalBlocks;
 	double N1std = sqrt(N1sumSq/totalBlocks - N1*N1);
 	double kappa = kappaSum / totalBlocks;
