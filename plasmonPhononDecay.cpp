@@ -123,9 +123,9 @@ int main(int argc, char** argv)
 	mpiUtil->allReduce(kappaSum, MPIUtil::ReduceSum);
 	mpiUtil->allReduce(kappaSumSq, MPIUtil::ReduceSum);
 	double N1 = N1sum / totalBlocks;
-	double N1std = sqrt(N1sumSq/totalBlocks - N1*N1);
+	double N1std = sqrt(N1sumSq/totalBlocks - N1*N1)/sqrt(totalBlocks);
 	double kappa = kappaSum / totalBlocks;
-	double kappaStd = sqrt(kappaSumSq/totalBlocks - kappa*kappa);
+	double kappaStd = sqrt(kappaSumSq/totalBlocks - kappa*kappa)/sqrt(totalBlocks);
 	logPrintf("N1 = %lg +/- %lg\n", N1, N1std);
 	logPrintf("kappa = %lg +/- %lg\n", kappa, kappaStd);
 	bool skipMetro = false;
@@ -253,7 +253,7 @@ int main(int argc, char** argv)
 	mpiUtil->allReduce(acceptRatioSum, MPIUtil::ReduceSum);
 	mpiUtil->allReduce(acceptRatioSumSq, MPIUtil::ReduceSum);
 	double acceptRatio = acceptRatioSum / totalWalkers;
-	double acceptRatioStd = sqrt(acceptRatioSumSq/totalWalkers - acceptRatio*acceptRatio);
+	double acceptRatioStd = sqrt(acceptRatioSumSq/totalWalkers - acceptRatio*acceptRatio)/sqrt(totalWalkers);
 	logPrintf("acceptRatio = %lg +/- %lg\n", acceptRatio, acceptRatioStd);
 
 	//Decay rate:

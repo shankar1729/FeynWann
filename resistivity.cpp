@@ -89,7 +89,7 @@ int main(int argc, char** argv)
 	mpiUtil->allReduce(kappaSum, MPIUtil::ReduceSum);
 	mpiUtil->allReduce(kappaSumSq, MPIUtil::ReduceSum);
 	double kappa = kappaSum / totalBlocks;
-	double kappaStd = sqrt(kappaSumSq/totalBlocks - kappa*kappa);
+	double kappaStd = sqrt(kappaSumSq/totalBlocks - kappa*kappa)/sqrt(totalBlocks);
 	logPrintf("kappa = %lg +/- %lg\n", kappa, kappaStd);
 
 	// Intalize Brillouin zone
