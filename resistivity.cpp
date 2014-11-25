@@ -98,14 +98,14 @@ int main(int argc, char** argv)
 	WignerSeitz BZ(GT); //Wigner-Seitz cell on the reciprocal lattice vectors
 
 	// Compute T and Gamma
-	double Tsum = 0., TsumSq = 0., Gamma = 0.;
+	double Tsum = 0., TsumSq = 0., GammaSum = 0., GammaSumSq = 0.;
 	logPrintf("Calculating T and Gamma... "); logFlush();
 	double prefacT = spinWeight/(3*nKpts);
 	double prefacGamma = spinWeight*std::pow(2*M_PI,2)*vl/(3*fabs(det(R))*nKpts);
 	double EconserveExpFac = -0.5/(T*T), EconservePrefac = 1./(sqrt(2*M_PI)*T); //energy conserving Gaussian parameters
 	for(int block=blockStart; block<blockStop; block++)
 	{	Random::seed(block);
-		double Tblock = 0.;;
+		double Tblock = 0., GammaBlock=0.;
 		for(int nk1 =0; nk1<nKpts; nk1++)
 		{	vector3<> kpnti, kpntj;
 			for(int j=0; j<3; j++) 
@@ -138,12 +138,14 @@ int main(int argc, char** argv)
 					double deltap = EconservePrefac * exp(EconserveExpFac * std::pow(Ej[c]-Ei[v]+vl*kPh,2));
 					double term1 = prefacGamma * (viDotvi*(-dFdEi)*(g_kPh+fj) -  viDotvj*(-dFdEj)*(g_kPh+1-fi)) * phononFactor * deltam;
 					double term2 = prefacGamma * (viDotvi*(-dFdEi)*(g_kPh+1-fj) -  viDotvj*(-dFdEj)*(g_kPh+fi)) * phononFactor * deltap;
-					Gamma += term1 + term2;
+					GammaBlock += term1 + term2;
 				}
 			}
 		}
 		Tsum += Tblock;
 		TsumSq += std::pow(Tblock,2);
+		GammaSum += GammaBlock;
+		GammaSumSq +=std::pow(GammaBlock,2);
 	}
 
 	mpiUtil->allReduce(Tsum, MPIUtil::ReduceSum);
@@ -153,8 +155,11 @@ int main(int argc, char** argv)
 	logPrintf("T = %lg +/- %lg\n", Tt, Tstd);
 	
 	//Decay rate:
-	mpiUtil->allReduce(Gamma, MPIUtil::ReduceSum);
-	logPrintf("Gamma = %lg\n", Gamma);
+	mpiUtil->allReduce(GammaSum, MPIUtil::ReduceSum);
+	mpiUtil->allReduce(GammaSumSq, MPIUtil::ReduceSum);
+	double Gamma = GammaSum / totalBlocks;
+	double GammaStd = sqrt(GammaSumSq/totalBlocks - Gamma*Gamma);
+	logPrintf("Gamma = %lg +/- %lg\n", Gamma, GammaStd);
 	
 	const double invSeconds = 2.418884326505e-17;
 	const double Coulomb = Joule/eV;
