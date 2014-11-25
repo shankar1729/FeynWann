@@ -112,9 +112,14 @@ int main(int argc, char** argv)
 			{	kpnti[j] = Random::uniform();
 				kpntj[j] = Random::uniform();
 			}
-			diagMatrix Ei = bs.getStates(kpnti); std::vector<vector3<>> vi = bs.getVelocity(kpnti);
-			diagMatrix Ej = bs.getStates(kpntj); std::vector<vector3<>> vj = bs.getVelocity(kpntj);
-
+			#define getStatesVelocities(suffix) \
+				diagMatrix E##suffix = bs.getStates(kpnt##suffix); \
+				std::vector<vector3<>> v##suffix = bs.getVelocity(kpnt##suffix); \
+				for(vector3<>& v: v##suffix) v = R * v; //Convert to Cartesian
+			getStatesVelocities(i)
+			getStatesVelocities(j)
+			#undef getStatesVelocities
+			
 			double kPh = sqrt(GGT.metric_length_squared(BZ.restrict(kpntj - kpnti)));
 			kPh = std::max(1e-7, kPh); //regularize phonon wavevector to avoid 0/0 in phonon factor
 			double g_kPh = 1./(exp(vl*kPh/T) - 1.);
