@@ -97,10 +97,10 @@ std::vector< vector3<double> > BandStruct::get_velocity(vector3<double> kPoint)
 {	if(!(kPoint == kPointCache)) getStates(kPoint); //Update evecs and phase if necessary
 	std::vector< vector3<double> > v;
 	matrix Vk = evecs;
-	matrix phasePrime;
 	complex I(0.0,1.0);
 	for(int j = 0; j < 3; j++)
-	{	phasePrime.init(cellMap.size(), 1);
+	{	matrix phasePrime;
+		phasePrime.init(cellMap.size(), 1);
 		for(size_t ic=0; ic<cellMap.size(); ic++)
 		{	auto R = cellMap[ic];
 			phasePrime.set(ic,0, I*R[j]*cis(2*M_PI*dot(R,kPoint)));
