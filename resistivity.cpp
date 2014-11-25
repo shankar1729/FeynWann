@@ -149,11 +149,17 @@ int main(int argc, char** argv)
 	
 	//Decay rate:
 	mpiUtil->allReduce(Gamma, MPIUtil::ReduceSum);
-	logPrintf("Linewidth = %lg eV\n", Gamma/eV);
+	logPrintf("Gamma = %lg\n", Gamma);
 	
+	const double invSeconds = 2.418884326505e-17;
+	const double Coulomb = Joule/eV;
+	const double Volt = Joule/Coulomb;
+	const double Ampere = Coulomb*invSeconds;
+	const double Ohm = Volt/Ampere;
+
 	// Calculate Resistivity
-	double row = fabs(det(R))*Gamma/(Tt*Tt);
-	logPrintf("Resistivity = %lg\n", row);
+	double rho = fabs(det(R))*Gamma/(Tt*Tt);
+	logPrintf("Resistivity = %lg ohm-m\n", rho/(Ohm*meter));
 	
 	finalizeSystem();
 }
