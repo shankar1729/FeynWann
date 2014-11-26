@@ -20,6 +20,9 @@ if(EnableMPI)
 	add_definitions("-DMPI_ENABLED")
 endif()
 
+find_package(GSL REQUIRED)
+include_directories(${GSL_INCLUDE_DIR})
+
 include_directories("${JDFTX_SRC}")
 include_directories(${CMAKE_SOURCE_DIR})
 add_definitions(-Wall -g -O3 -std=c++0x ${MPI_CXX_COMPILE_FLAGS})
