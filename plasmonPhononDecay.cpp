@@ -154,10 +154,9 @@ int main(int argc, char** argv)
 	
 	// Values for use in metropolis sampling
 	const double weightCut = 1e-6, energyCut = 40*eV;
-	double Gamma = 0.;
 	Histogram EcHist(-10*T, 0.5*T, Eplasmon+5*T);
 	Histogram EvHist(-Eplasmon-5*T, 0.5*T, 10*T);
-	double acceptRatioSum = 0., acceptRatioSumSq = 0.;
+	double acceptRatioSum = 0., acceptRatioSumSq = 0., GammaSum = 0., GammaSumSq = 0.;
 	int walkerStart = (totalWalkers * (mpiUtil->iProcess())) / mpiUtil->nProcesses(); // MPI division
 	int walkerStop = (totalWalkers * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
 	nKpts = nKptsMetro / totalWalkers;
@@ -175,7 +174,7 @@ int main(int argc, char** argv)
 		int nKptsTot = 0; //denominator of accept ratio
 		int nKptsEquib = 0;
 		bool equib = false;
-		double mk1k2Prev = INFINITY;
+		double mk1k2Prev = INFINITY, GammaBlock = 0.;
 
 		for(int ik=0; ik<nKpts; )
 		{	// Calculate mk:
@@ -214,7 +213,7 @@ int main(int argc, char** argv)
 							}
 							double weight = (0.5*spinWeight) * weightEconserve * phononFactor * (prefacDotP1.norm() + prefacDotP2.norm()); //norm = abs^2
 							//Include in statistics:
-							Gamma += weight;
+							GammaBlock += weight;
 							EcHist.addEvent(E2[c], weight);
 							EvHist.addEvent(E1[v], weight);
 						}
@@ -244,8 +243,10 @@ int main(int argc, char** argv)
 		double acceptRatio = (double)nKpts/nKptsTot;
 		acceptRatioSum += acceptRatio;
 		acceptRatioSumSq += std::pow(acceptRatio,2);
-		double GammaSoFar = totalWalkers * Gamma / (walker - walkerStart + 1); //current estimate from this process
+		double GammaSoFar = totalWalkers * GammaBlock / (walker - walkerStart + 1); //current estimate from this process
 		logPrintf("acceptRatio = %lg  nKptsTot = %d  Gamma = %lg eV\n", acceptRatio, nKptsTot, GammaSoFar/eV); logFlush();
+		GammaSum +=GammaBlock;
+		GammaSumSq +=std::pow(GammaBlock,2);
 	}
 	watchMet.stop();
 	
@@ -257,8 +258,11 @@ int main(int argc, char** argv)
 	logPrintf("acceptRatio = %lg +/- %lg\n", acceptRatio, acceptRatioStd);
 
 	//Decay rate:
-	mpiUtil->allReduce(Gamma, MPIUtil::ReduceSum);
-	logPrintf("Linewidth = %lg eV\n", Gamma/eV);
+	mpiUtil->allReduce(GammaSum, MPIUtil::ReduceSum);
+	mpiUtil->allReduce(GammaSumSq, MPIUtil::ReduceSum);
+	double Gamma = GammaSum / totalBlocks;
+	double GammaStd = sqrt(GammaSumSq/totalBlocks - Gamma*Gamma)/sqrt(totalBlocks);
+	logPrintf("Linewidth = %lg eV +/- %lg\n", Gamma/eV, GammaStd/eV);
 	
 	//Carrier distributions:
 	char fname[256];
