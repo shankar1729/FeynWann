@@ -260,8 +260,8 @@ int main(int argc, char** argv)
 	//Decay rate:
 	mpiUtil->allReduce(GammaSum, MPIUtil::ReduceSum);
 	mpiUtil->allReduce(GammaSumSq, MPIUtil::ReduceSum);
-	double Gamma = GammaSum / totalBlocks;
-	double GammaStd = sqrt(GammaSumSq/totalBlocks - Gamma*Gamma)/sqrt(totalBlocks);
+	double Gamma = GammaSum / totalWalkers;
+	double GammaStd = sqrt(GammaSumSq/totalWalkers - Gamma*Gamma)/sqrt(totalWalkers);
 	logPrintf("Linewidth = %lg eV +/- %lg\n", Gamma/eV, GammaStd/eV);
 	
 	//Carrier distributions:
