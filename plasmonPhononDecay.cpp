@@ -243,10 +243,10 @@ int main(int argc, char** argv)
 		double acceptRatio = (double)nKpts/nKptsTot;
 		acceptRatioSum += acceptRatio;
 		acceptRatioSumSq += std::pow(acceptRatio,2);
-		double GammaSoFar = totalWalkers * GammaBlock / (walker - walkerStart + 1); //current estimate from this process
-		logPrintf("acceptRatio = %lg  nKptsTot = %d  Gamma = %lg eV\n", acceptRatio, nKptsTot, GammaSoFar/eV); logFlush();
 		GammaSum +=GammaBlock;
 		GammaSumSq +=std::pow(GammaBlock,2);
+		double GammaSoFar = GammaSum / (walker - walkerStart + 1); //current estimate from this process
+		logPrintf("acceptRatio = %lg  nKptsTot = %d  Gamma = %lg eV\n", acceptRatio, nKptsTot, GammaSoFar/eV); logFlush();
 	}
 	watchMet.stop();
 	
@@ -262,7 +262,7 @@ int main(int argc, char** argv)
 	mpiUtil->allReduce(GammaSumSq, MPIUtil::ReduceSum);
 	double Gamma = GammaSum / totalWalkers;
 	double GammaStd = sqrt(GammaSumSq/totalWalkers - Gamma*Gamma)/sqrt(totalWalkers);
-	logPrintf("Linewidth = %lg eV +/- %lg\n", Gamma/eV, GammaStd/eV);
+	logPrintf("Gamma = %lg +/- %lg eV\n", Gamma/eV, GammaStd/eV);
 	
 	//Carrier distributions:
 	char fname[256];
