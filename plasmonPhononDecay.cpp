@@ -139,11 +139,12 @@ int main(int argc, char** argv)
 	std::vector<double> Econserve_rate;
 	
 	// Compute effective mode vector
+	nKpts = nKptsMetro / totalWalkers;
 	complex one(1.0,0.0);
 	vector3<complex> zHat(0.0, 0.0, one);
 	vector3<complex> kHat(cos(kPhi), sin(kPhi), 0.0);
 	complex I(0.0,1.0);
-	vector3<complex> sqrtGammaPrefac = ((1/fabs(det(R))) * sqrt(N1*std::pow(M_PI,3)*vl/(nKptsMetro*eps.modGammaMinus*omega*eps.Lquant)) ) * (kHat - I*(eps.k/eps.modGammaMinus)*zHat);
+	vector3<complex> sqrtGammaPrefac = ((1/fabs(det(R))) * sqrt(N1*std::pow(M_PI,3)*vl/(nKpts*eps.modGammaMinus*omega*eps.Lquant)) ) * (kHat - I*(eps.k/eps.modGammaMinus)*zHat);
 	logPrintf("sqrtGammaPrefac Real = %lg %lg %lg\n",  real(sqrtGammaPrefac[0]), real(sqrtGammaPrefac[1]), real(sqrtGammaPrefac[2]));
 	logPrintf("sqrtGammaPrefac Imag = %lg %lg %lg\n",  imag(sqrtGammaPrefac[0]), imag(sqrtGammaPrefac[1]), imag(sqrtGammaPrefac[2]));
 
@@ -159,7 +160,6 @@ int main(int argc, char** argv)
 	double acceptRatioSum = 0., acceptRatioSumSq = 0., GammaSum = 0., GammaSumSq = 0.;
 	int walkerStart = (totalWalkers * (mpiUtil->iProcess())) / mpiUtil->nProcesses(); // MPI division
 	int walkerStop = (totalWalkers * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
-	nKpts = nKptsMetro / totalWalkers;
 	StopWatch watchMet("metropolis"); watchMet.start();
 	//Start metropolis sampling
 	if(!skipMetro) for(int walker=walkerStart; walker<walkerStop; walker++)
