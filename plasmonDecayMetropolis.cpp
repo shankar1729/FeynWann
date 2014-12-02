@@ -29,6 +29,7 @@ int main(int argc, char** argv)
 	const double T = inputMap.get("T") * eV;
 	const double Eplasmon2 = inputMap.get("Eplasmon2") * eV;
 	const double spinWeight = inputMap.get("spinWeight");
+	const int eventSaveInterval = inputMap.get("eventSaveInterval", 0); //default 0 => no save
 	matrix3<> R = matrix3<>(0,1,1, 1,0,1, 1,1,0) * (0.5*inputMap.get("aCubic")*Angstrom);
 
 	logPrintf("\nInputs after conversion to atomic units:\n");
@@ -103,7 +104,17 @@ int main(int argc, char** argv)
 	vector3<complex> sqrtGammaPrefac = (M_PI * sqrt(N1/((nKptsMetro*fabs(det(R)))*eps.modGammaMinus*omega*eps.Lquant)) ) * (kHat - I*(eps.k/eps.modGammaMinus)*zHat);
 	logPrintf("sqrtGammaPrefac Real = %lg %lg %lg\n",  real(sqrtGammaPrefac[0]), real(sqrtGammaPrefac[1]), real(sqrtGammaPrefac[2]));
 	logPrintf("sqrtGammaPrefac Imag = %lg %lg %lg\n",  imag(sqrtGammaPrefac[0]), imag(sqrtGammaPrefac[1]), imag(sqrtGammaPrefac[2]));
-
+	
+	//Prepare for event collection:
+	double eventPrefac = N1*eventSaveInterval/(nKptsMetro*fabs(det(R)));
+	struct Event
+	{	double Ev, Ec;
+		vector3<> vv, vc;
+		vector3<complex> Pcv;
+	};
+	std::vector<Event> events;
+	if(eventSaveInterval) events.reserve(totalWalkers / mpiUtil->nProcesses());
+	
 	const double weightCut = 1e-6;
 	Histogram EcHist(-10*T, 0.5*T, Eplasmon+5*T);
 	Histogram EvHist(-Eplasmon-5*T, 0.5*T, 10*T);
@@ -137,23 +148,28 @@ int main(int argc, char** argv)
 			
 				if(equib)
 				{	ik++;
+					bool eventSave = eventSaveInterval && (ik % eventSaveInterval == 0);
 					// Calculate transitions at current k-point:
 					diagMatrix E = bs.getStates(kpnt);
 					std::vector<matrix> Pk = bs.getTransitions(kpnt);
+					std::vector<vector3<>> vk; if(eventSave) vk = bs.getVelocity(kpnt, R);
 					for(int v=0; v<E.nRows(); v++) if(E[v]<10.*T)
 					{	for(int c=0; c<E.nRows(); c++) if(E[c]>-10.*T)
 						{	double mk_cv = BandStruct::mk_sub(E[c], E[v], Eplasmon, T);
-							double weightEconserve = exp(0.5*(mk-mk_cv)/(T*T))/(T*sqrt(2*M_PI)); //weight contribution due to energy conservation
+							double weightEconserve = (0.5*spinWeight) * exp(0.5*(mk-mk_cv)/(T*T))/(T*sqrt(2*M_PI)); //weight contribution due to energy conservation (and spin)
 							if(weightEconserve < weightCut) continue;
 							// Effective matrix elements
-							complex prefacDotP = 0.;
-							for(int j=0; j<3; j++)
-								prefacDotP += sqrtGammaPrefac[j] * Pk[j](c,v);
-							double weight = (0.5*spinWeight) * weightEconserve * prefacDotP.norm(); //norm = abs^2
+							vector3<complex> Pk_cv; for(int j=0; j<3; j++) Pk_cv[j] = Pk[j](c,v);
+							double weight = weightEconserve * dot(sqrtGammaPrefac, Pk_cv).norm(); //norm = abs^2
 							//Include in statistics:
 							GammaBlock += weight;
 							EcHist.addEvent(E[c], weight);
 							EvHist.addEvent(E[v], weight);
+							//Save event if necessary:
+							if(eventSave)
+							{	Event event = { E[v], E[c], vk[v], vk[c], sqrt(eventPrefac * weightEconserve) * Pk_cv };
+								events.push_back(event);
+							}
 						}
 					}
 				}
@@ -204,5 +220,21 @@ int main(int argc, char** argv)
 	EcHist.allReduce(MPIUtil::ReduceSum); EcHist.print(string("e")+fname, eV);
 	EvHist.allReduce(MPIUtil::ReduceSum); EvHist.print(string("h")+fname, eV);
 
+	//Write events:
+	if(eventSaveInterval)
+	{	MPIUtil::File fpEvent;
+		sprintf(fname, "events-%.1lfeV-metro.dat", Eplasmon/eV);
+		unsigned long nEventsPrev = 0; //number of events from previous processes
+		for(int jProcess=0; jProcess<mpiUtil->nProcesses(); jProcess++)
+		{	unsigned long nEvents = events.size();
+			mpiUtil->bcast(nEvents, jProcess); //nEvents is now the number of events on jProcess
+			if(jProcess < mpiUtil->iProcess()) nEventsPrev += nEvents;
+		}
+		mpiUtil->fopenWrite(fpEvent, fname);
+		mpiUtil->fseek(fpEvent, nEventsPrev*sizeof(Event), SEEK_SET);
+		mpiUtil->fwrite(events.data(), sizeof(Event), events.size(), fpEvent);
+		mpiUtil->fclose(fpEvent);
+	}
+	
 	finalizeSystem();
 }

@@ -83,14 +83,14 @@ double BandStruct::get_mk(vector3<> kPoint, double omega, double T)
 }
 
 double BandStruct::get_mk1k2(vector3<> kPoint1, vector3<> kPoint2, double omega, double T)
-{       diagMatrix E1 = getStates(kPoint1), E2 = getStates(kPoint2);
-        double mk1k2 = INFINITY;
-        for(int v=0; v<nBands; v++) if(E1[v]<10.*T)
-        {       for(int c=0; c<nBands; c++) if(E2[c]>-10.*T)
-                {       mk1k2 = std::min(mk1k2, mk_sub(E2[c], E1[v], omega, T));
-                }
-        }
-        return mk1k2;
+{	diagMatrix E1 = getStates(kPoint1), E2 = getStates(kPoint2);
+	double mk1k2 = INFINITY;
+	for(int v=0; v<nBands; v++) if(E1[v]<10.*T)
+	{	for(int c=0; c<nBands; c++) if(E2[c]>-10.*T)
+		{	mk1k2 = std::min(mk1k2, mk_sub(E2[c], E1[v], omega, T));
+		}
+	}
+	return mk1k2;
 }
 
 std::vector< vector3<> > BandStruct::getVelocity(vector3<> kPoint, const matrix3<>& R)
