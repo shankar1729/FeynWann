@@ -9,33 +9,14 @@
 #include <core/Units.h>
 #include <core/WignerSeitz.h>
 #include "BandStruct.h"
+#include "InputMap.h"
 
 int main(int argc, char** argv)
 {   string inputFilename; bool dryRun, printDefaults;
 	initSystemCmdline(argc, argv, "Metropolis calculation of plasmon decay rate", inputFilename, dryRun, printDefaults);
 
 	//Get the system parameters (mu, T, lattice vectors etc.)
-	struct InputMap : std::map<string,double> //map class with a safe accessor that quits with error if key not found
-	{	double get(string key) const
-		{	auto iter = find(key);
-			if(iter == end()) die("\nCould not find required entry '%s' in input.\n", key.c_str());
-			return iter->second;
-		}
-	}
-	inputMap;
-	std::ifstream systemFile(inputFilename.c_str());
-	if(!systemFile.is_open())
-		die("Could not open system file '%s' for reading.\n", inputFilename.c_str());
-	while(!systemFile.eof())
-	{	string line; getline(systemFile, line); //line-by-line processing (comments can now be inline)
-		trim(line);
-		istringstream iss(line);
-		string name; double val;
-		if(iss >> name >> val)
-			inputMap[name] = val;
-	}
-	systemFile.close();    
-	
+	InputMap inputMap(inputFilename);
 	const int nKptsN1 = inputMap.get("nKptsN1");
 	const int totalBlocks = inputMap.get("totalBlocks"); assert(totalBlocks>0);
 	const double mu = inputMap.get("mu");
