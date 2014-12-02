@@ -105,10 +105,9 @@ int main(int argc, char** argv)
 	logPrintf("sqrtGammaPrefac Imag = %lg %lg %lg\n",  imag(sqrtGammaPrefac[0]), imag(sqrtGammaPrefac[1]), imag(sqrtGammaPrefac[2]));
 
 	const double weightCut = 1e-6;
-	double Gamma = 0.;
 	Histogram EcHist(-10*T, 0.5*T, Eplasmon+5*T);
 	Histogram EvHist(-Eplasmon-5*T, 0.5*T, 10*T);
-	double acceptRatioSum = 0., acceptRatioSumSq = 0.;
+	double acceptRatioSum = 0., acceptRatioSumSq = 0., GammaSum = 0., GammaSumSq = 0.;
 	int walkerStart = (totalWalkers * (mpiUtil->iProcess())) / mpiUtil->nProcesses(); // MPI division
 	int walkerStop = (totalWalkers * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
 	nKpts = nKptsMetro / totalWalkers;
@@ -123,7 +122,7 @@ int main(int argc, char** argv)
 		int nKptsTot = 0; //denominator of accept ratio
 		int nKptsEquib = 0;
 		bool equib = false;
-		double mkPrev = INFINITY;
+		double mkPrev = INFINITY, GammaBlock = 0.;
 
 		for(int ik=0; ik<nKpts; )
 		{	// Calculate mk:
@@ -152,7 +151,7 @@ int main(int argc, char** argv)
 								prefacDotP += sqrtGammaPrefac[j] * Pk[j](c,v);
 							double weight = (0.5*spinWeight) * weightEconserve * prefacDotP.norm(); //norm = abs^2
 							//Include in statistics:
-							Gamma += weight;
+							GammaBlock += weight;
 							EcHist.addEvent(E[c], weight);
 							EvHist.addEvent(E[v], weight);
 						}
@@ -177,8 +176,10 @@ int main(int argc, char** argv)
 		double acceptRatio = (double)nKpts/nKptsTot;
 		acceptRatioSum += acceptRatio;
 		acceptRatioSumSq += std::pow(acceptRatio,2);
-		double GammaSoFar = totalWalkers * Gamma / (walker - walkerStart + 1); //current estimate from this process
-		logPrintf("acceptRatio = %lg  nKptsTot = %d  Gamma = %lg eV\n", acceptRatio, nKptsTot, GammaSoFar/eV); logFlush();
+		GammaBlock *= totalWalkers; //prefactor is normalized for total kpts, not per block
+		GammaSum += GammaBlock;
+		GammaSumSq += std::pow(GammaBlock,2);
+		logPrintf("acceptRatio = %lg  nKptsTot = %d  Gamma = %lg eV\n", acceptRatio, nKptsTot, GammaBlock/eV); logFlush();
 	}
 	watchMet.stop();
 	
@@ -190,8 +191,12 @@ int main(int argc, char** argv)
 	logPrintf("acceptRatio = %lg +/- %lg\n", acceptRatio, acceptRatioStd);
 
 	//Decay rate:
-	mpiUtil->allReduce(Gamma, MPIUtil::ReduceSum);
-	logPrintf("Linewidth = %lg eV\n", Gamma/eV);
+	mpiUtil->allReduce(GammaSum, MPIUtil::ReduceSum);
+	mpiUtil->allReduce(GammaSumSq, MPIUtil::ReduceSum);
+	double Gamma = GammaSum / totalWalkers;
+	double GammaStd = sqrt(GammaSumSq/totalWalkers - Gamma*Gamma)/sqrt(totalWalkers);
+	GammaStd = hypot(GammaStd, Gamma*N1std/N1); //propagate error in N1
+	logPrintf("Gamma = %lg +/- %lg eV\n", Gamma/eV, GammaStd/eV);
 	
 	//Carrier distributions:
 	char fname[256];

@@ -125,7 +125,7 @@ int main(int argc, char** argv)
 	vector3<complex> zHat(0.0, 0.0, one);
 	vector3<complex> kHat(cos(kPhi), sin(kPhi), 0.0);
 	complex I(0.0,1.0);
-	vector3<complex> sqrtGammaPrefac = ((1/fabs(det(R))) * sqrt(N1*std::pow(M_PI,3)*vl/(nKpts*eps.modGammaMinus*omega*eps.Lquant)) ) * (kHat - I*(eps.k/eps.modGammaMinus)*zHat);
+	vector3<complex> sqrtGammaPrefac = ((1/fabs(det(R))) * sqrt(N1*std::pow(M_PI,3)*vl/(nKptsMetro*eps.modGammaMinus*omega*eps.Lquant)) ) * (kHat - I*(eps.k/eps.modGammaMinus)*zHat);
 	logPrintf("sqrtGammaPrefac Real = %lg %lg %lg\n",  real(sqrtGammaPrefac[0]), real(sqrtGammaPrefac[1]), real(sqrtGammaPrefac[2]));
 	logPrintf("sqrtGammaPrefac Imag = %lg %lg %lg\n",  imag(sqrtGammaPrefac[0]), imag(sqrtGammaPrefac[1]), imag(sqrtGammaPrefac[2]));
 
@@ -224,10 +224,10 @@ int main(int argc, char** argv)
 		double acceptRatio = (double)nKpts/nKptsTot;
 		acceptRatioSum += acceptRatio;
 		acceptRatioSumSq += std::pow(acceptRatio,2);
-		GammaSum +=GammaBlock;
-		GammaSumSq +=std::pow(GammaBlock,2);
-		double GammaSoFar = GammaSum / (walker - walkerStart + 1); //current estimate from this process
-		logPrintf("acceptRatio = %lg  nKptsTot = %d  Gamma = %lg eV\n", acceptRatio, nKptsTot, GammaSoFar/eV); logFlush();
+		GammaBlock *= totalWalkers; //prefactor is normalized for total kpts, not per block
+		GammaSum += GammaBlock;
+		GammaSumSq += std::pow(GammaBlock,2);
+		logPrintf("acceptRatio = %lg  nKptsTot = %d  Gamma = %lg eV\n", acceptRatio, nKptsTot, GammaBlock/eV); logFlush();
 	}
 	watchMet.stop();
 	
