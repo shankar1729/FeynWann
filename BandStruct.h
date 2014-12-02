@@ -18,7 +18,7 @@ public:
 	std::vector<matrix> getTransitions(vector3<> kPoint);
 	double get_mk(vector3<> kPoint, double omega, double T); //calculate the energy conservation weight at a given k-point
 	double get_mk1k2(vector3<> kPoint1, vector3<> kPoint2, double omega, double T); //calculate the energy conservation weight at a given k-point pair
-	std::vector< vector3<> > getVelocity(vector3<> kPoint); //calculate velocities (in lattice coordinates)
+	std::vector< vector3<> > getVelocity(vector3<> kPoint, const matrix3<>& R); //calculate velocities (in Cartesian coordinates; converted using lattice vectors R)
 	
 	inline static double mk_sub(double Ec, double Ev, double omega, double T)
 	{	return std::pow((Ec - Ev - omega),2) - 2*T*T * (logFermi(Ev/T) + logFermi(-Ec/T));

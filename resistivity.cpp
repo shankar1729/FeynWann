@@ -95,8 +95,7 @@ int main(int argc, char** argv)
 			}
 			#define getStatesVelocities(suffix) \
 				diagMatrix E##suffix = bs.getStates(kpnt##suffix); \
-				std::vector<vector3<>> v##suffix = bs.getVelocity(kpnt##suffix); \
-				for(vector3<>& v: v##suffix) v = R * v; //Convert to Cartesian
+				std::vector<vector3<>> v##suffix = bs.getVelocity(kpnt##suffix, R);
 			getStatesVelocities(i)
 			getStatesVelocities(j)
 			#undef getStatesVelocities

@@ -93,7 +93,7 @@ double BandStruct::get_mk1k2(vector3<> kPoint1, vector3<> kPoint2, double omega,
         return mk1k2;
 }
 
-std::vector< vector3<> > BandStruct::getVelocity(vector3<> kPoint)
+std::vector< vector3<> > BandStruct::getVelocity(vector3<> kPoint, const matrix3<>& R)
 {	static StopWatch watch("BandStruct::getVelocity"); watch.start();
 	if(!(kPoint == kPointCache)) getStates(kPoint); //Update evecs and phase if necessary
 	std::vector< vector3<> > v(nBands);
@@ -111,6 +111,7 @@ std::vector< vector3<> > BandStruct::getVelocity(vector3<> kPoint)
 		diagMatrix vj = diag(dagger(Vk) * dHdk * Vk);
 		for( int b = 0; b<nBands; b++) v[b][j] = vj[b];
 	}
+	for(vector3<>& vb: v) vb = R * vb; //Convert to Cartesian
 	watch.stop();
 	return v;
 }
