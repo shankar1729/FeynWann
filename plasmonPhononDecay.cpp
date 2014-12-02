@@ -243,6 +243,7 @@ int main(int argc, char** argv)
 	mpiUtil->allReduce(GammaSumSq, MPIUtil::ReduceSum);
 	double Gamma = GammaSum / totalWalkers;
 	double GammaStd = sqrt(GammaSumSq/totalWalkers - Gamma*Gamma)/sqrt(totalWalkers);
+	GammaStd = hypot(GammaStd, Gamma*N1std/N1);
 	logPrintf("Gamma = %lg +/- %lg eV\n", Gamma/eV, GammaStd/eV);
 	
 	//Carrier distributions:
