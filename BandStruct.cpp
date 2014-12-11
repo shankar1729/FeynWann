@@ -125,6 +125,17 @@ double BandStruct::get_mk1k2(vector3<> kPoint1, vector3<> kPoint2, double omega,
 	return mk1k2;
 }
 
+double BandStruct::get_mk1k2ph(vector3<> kPoint1, vector3<> kPoint2, double omega, doubleT)
+{	vector3<> qPoint = kPoint1 - kPoint2;
+	diagMatrix E1 = getStates(kPoint1), E2 = getStates(kPoint2), P = getPhStates(qPoint);
+ 	double mk1k2 = INFINITY;
+	for(int v=0; v<pnBands; v++) if (E1[v]<10.*T)
+		for(int c=0; c<nBands; c++) if(E2[c]>-10*T)
+		{	// mk1k2 = ...
+		}
+	return mk1k2;
+}
+
 std::vector< vector3<> > BandStruct::getVelocity(vector3<> kPoint, const matrix3<>& R)
 {	static StopWatch watch("BandStruct::getVelocity"); watch.start();
 	if(!(kPoint == kPointCache)) getStates(kPoint); //Update evecs and phase if necessary
