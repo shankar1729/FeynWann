@@ -6,7 +6,7 @@
 #include <vector>
 #include <math.h>
 
-BandStruct::BandStruct(string prefix, double mu)
+BandStruct::BandStruct(string prefix, double mu, bool usePhononStates=0)
 {	// Read cell map
 	ifstream readCellMap(prefix + ".mlwfCellMap");
 	string headerLine; getline(readCellMap, headerLine); //read and ignore header line
@@ -34,6 +34,22 @@ BandStruct::BandStruct(string prefix, double mu)
 	pzWannier.init(nBands*nBands, cellMap.size()); pzWannier.read((prefix + ".mlwfPz").c_str());
 	
 	kPointCache *= NAN; //indicate that cache is invalid
+	
+	if usePhononStates
+	{	// Read phonon cell map
+		ifstream readPhCellMap("totalE.phononCellMap");
+		string phHeaderLine; getline(readPhCellMap, phHeaderLine); //read and ignore header line
+		vector3<int> pcm;
+		double px,py,pz;
+		while(readPhononCellMap >> pcm[0] >> pcm[1] >> pcm[2] >> px >> py >> pz)
+			phCellMap.push_back(pcm);
+		readPhCellMap.close();
+	
+		// Read wannier phonon hamiltonian
+		string phFile = "totalE.phononOmegaSq";
+		pnBands = sqrt(fileSize(phFile.c_str())/(16*phCellMap.size())); //16 converts from bytes to number of complex numbers
+		phWannier.init(pnBands*pnBands, phCellMap.size()); phWannier.read(phFile.c_str());
+	}
 }
 
 diagMatrix BandStruct::getStates(vector3<> kPoint)
@@ -53,6 +69,22 @@ diagMatrix BandStruct::getStates(vector3<> kPoint)
 	kPointCache = kPoint;
 	watch.stop();
 	return eigs;
+}
+
+diagMatrix BandStruct::getPhStates(vector3<> qPoint)
+{	if(qPoint == qPointCace) return phEigs;
+	//Calculate phase factors for each cell:
+	phPhase.init(phCellMap.size(),1);
+	for(size_t ic=0; ic<phCellMap.size(); ic++)
+		phPhase.set(ic,0,cis(2*M_PI*dot(phCellMap[ic],Kpoint)));
+	//Compute Hamiltonian for qPoint:
+	matrix Hq = phWannier *phPhase;
+	Hq.reshape(npBands,npBands);
+	Hq = dagger_symmetrize(Hq);
+	//Diagonalize:
+	Hq.diagonalize(phEvecs, phEigs);
+	qPointCache = qPoint;
+	return phEigs;
 }
 
 std::vector<matrix> BandStruct::getTransitions(vector3<> kPoint)

@@ -7,13 +7,13 @@
 #include <math.h>
 
 class BandStruct
-{	std::vector< vector3<int> > cellMap;
-	int nBands;
-	matrix hWannier, pxWannier, pyWannier, pzWannier;
-	matrix phase, evecs; diagMatrix eigs;
-	vector3<> kPointCache; //value of kpoint for which evecs and phase was computed
+{	std::vector< vector3<int> > cellMap, phCellMap;
+	int nBands, npBands;
+	matrix hWannier, phWannier, pxWannier, pyWannier, pzWannier;
+	matrix phase, phPhase, evecs, phEvecs; diagMatrix eigs, phEigs;
+	vector3<> kPointCache, qPointCache; //value of kpoint for which evecs and phase was computed
 public:
-	BandStruct(string filePrefix, double mu);
+	BandStruct(string filePrefix, double mu, bool usePhononStates);
 	diagMatrix getStates(vector3<> kPoint);
 	std::vector<matrix> getTransitions(vector3<> kPoint);
 	double get_mk(vector3<> kPoint, double omega, double T); //calculate the energy conservation weight at a given k-point
