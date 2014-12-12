@@ -115,7 +115,7 @@ std::vector<matrix> BandStruct::getPhononMatElem(vector3<> k1, vector3<> k2) con
 	for(int alpha=0; alpha<nModes; alpha++)
 	{	result[alpha] = HePh(0,HePh.nRows(), alpha,alpha+1); //select the current mode
 		result[alpha].reshape(nBands, nBands);
-		result[alpha] = dagger(cEl1.evecs) * result[alpha] * cEl2.evecs;
+		result[alpha] = dagger(cEl1.evecs) * result[alpha] * cEl2.evecs; //electron unitary rotations
 	}
 	return result;
 }
