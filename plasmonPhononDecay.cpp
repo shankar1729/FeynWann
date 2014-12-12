@@ -83,7 +83,7 @@ int main(int argc, char** argv)
 			{	kpnt1[j] = Random::uniform();
 				kpnt2[j] = Random::uniform();
 			}
-			double mk1k2 = bs.get_mk1k2ph(kpnt1, kpnt2, omega, T);
+			double mk1k2 = bs.get_mk1k2(kpnt1, kpnt2, omega, T);
 			N1block += exp(-0.5*mk1k2/(T*T));
 			diagMatrix Ek = bs.getStates(kpnt1);
 			for(int n = 0; n<Ek.nRows(); n++)
@@ -129,11 +129,6 @@ int main(int argc, char** argv)
 	logPrintf("sqrtGammaPrefac Real = %lg %lg %lg\n",  real(sqrtGammaPrefac[0]), real(sqrtGammaPrefac[1]), real(sqrtGammaPrefac[2]));
 	logPrintf("sqrtGammaPrefac Imag = %lg %lg %lg\n",  imag(sqrtGammaPrefac[0]), imag(sqrtGammaPrefac[1]), imag(sqrtGammaPrefac[2]));
 
-	// Initalize Brillouin zone
-	matrix3<> GT = (2*M_PI)*inv(~R); //reciprocal lattice vectors
-	matrix3<> GGT = (~GT)*GT; //reciprocal space metric
-	WignerSeitz BZ(GT); //Wigner-Seitz cell on the reciprocal lattice vectors
-	
 	// Values for use in metropolis sampling
 	const double weightCut = 1e-6, energyCut = 40*eV;
 	Histogram EcHist(-10*T, 0.5*T, Eplasmon+5*T);
@@ -159,7 +154,7 @@ int main(int argc, char** argv)
 
 		for(int ik=0; ik<nKpts; )
 		{	// Calculate mk:
-			double mk1k2 = bs.get_mk1k2ph(kpnt1, kpnt2, omega, T);
+			double mk1k2 = bs.get_mk1k2(kpnt1, kpnt2, omega, T);
 
 			// Metropolis accept - reject:
 			if(exp(0.5*(mk1k2Prev - mk1k2)/(T*T)) > Random::uniform())
@@ -172,33 +167,37 @@ int main(int argc, char** argv)
 				if(equib)
 				{	ik++;
 					// Calculate transitions at current k-point:
-					double kPh = sqrt(GGT.metric_length_squared(BZ.restrict(kpnt2 - kpnt1)));
-					kPh = std::max(1e-7, kPh); //regularize phonon wavevector to avoid 0/0 in phonon factor
-					double g_kPh = 1./(exp(vl*kPh/T) - 1.);
-					double phononFactor = (2*g_kPh + 1) * kPh/(kPh*kPh + kappa*kappa);
 					diagMatrix E1 = bs.getStates(kpnt1);
 					std::vector<matrix> Pk1 = bs.getDipoleMatElem(kpnt1);
 					diagMatrix E2 = bs.getStates(kpnt2);
 					std::vector<matrix> Pk2 = bs.getDipoleMatElem(kpnt2);
-					diagMatrix P = getPhononModes(kpnt1-kpnt2);
+					diagMatrix P = bs.getPhononModes(kpnt1-kpnt2);
 					std::vector<matrix> PePh = bs.getPhononMatElem(kpnt1,kpnt2);
 					for(int v=0; v<E1.nRows(); v++) if(E1[v]<10.*T)
 					{	for(int c=0; c<E2.nRows(); c++) if(E2[c]>-10.*T)
-						{	for(int alpha = 0; alpha < PePh.size(); alpha ++)
-							{	for(int ae = -1; ae <=1; ae+=2) // +/- for phonon absorption or emmision
-								{	double mk_cv = BandStruct::mk_sub(E2[c], E1[v], Eplasmon+ae*P(c,v), T);
+						{	double weight = 0.;
+							for(int alpha=0; alpha<P.nRows(); alpha ++)
+							{	for(int ae=-1; ae<=+1; ae+=2) // +/- for phonon absorption or emmision
+								{	double mk_cv = BandStruct::mk_sub(E2[c], E1[v], Eplasmon + ae*P[alpha], T);
 									double weightEconserve = exp(0.5*(mk1k2-mk_cv)/(T*T))/(T*sqrt(2*M_PI)); //weight contribution due to energy conservation
 									if(weightEconserve < weightCut) continue;
 									// Effective matrix elements
 									complex prefacDotP = 0.;
 									for(int i=0; i<E1.nRows(); i++) // sum over the intermediate states
-									{	complex E2i(E2[i], lineWidth(E2[i])), E1i(E1[i], lineWidth(E1[i]));
-										if(E2[i] < energyCut && E1[i] < energyCut) for(int j=0; j<3; j++) 
-											prefacDotP += sqrtGammaPrefac[j] * (Pk2[j](c,i)*(1-1/(exp(E2[i]/T)+1))*PePh[alpha](c,i)/(E2i-E2[c]+Eplasmon) + sqrtGammaPrefac[j] * (Pk2[j](i,v)*(1-1/(exp(E1[i]/T)+1))*PePh[alpha](i,v)/(E1i-E1[v]-Eplasmon);
+									{	if(E2[i]<energyCut && E1[i]<energyCut)
+										{	complex E1i(E1[i], lineWidth(E1[i]));
+											complex E2i(E2[i], lineWidth(E2[i]));
+											double f1i = 1./(1.+exp(E1[i]/T));
+											double f2i = 1./(1.+exp(E2[i]/T));
+											for(int j=0; j<3; j++)
+												prefacDotP += sqrtGammaPrefac[j] * 
+													( Pk2[j](c,i) * (1.-f2i) * PePh[alpha](c,i) / (E2i-E2[c] + Eplasmon)
+													+ Pk2[j](i,v) * (1.-f1i) * PePh[alpha](i,v) / (E1i-E1[v] - Eplasmon) );
+										}
 									}
+									weight += (0.5*spinWeight) * weightEconserve * prefacDotP.norm(); //norm = abs^2
 								}
 							}
-							double weight = (0.5*spinWeight) * weightEconserve * prefacDotP.norm(); //norm = abs^2
 							//Include in statistics:
 							GammaBlock += weight;
 							EcHist.addEvent(E2[c], weight);
