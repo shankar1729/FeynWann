@@ -9,7 +9,7 @@
 class BandStruct
 {	std::vector< vector3<int> > cellMap, phCellMap;
 	int nBands, npBands;
-	matrix hWannier, phWannier, pxWannier, pyWannier, pzWannier;
+	matrix hWannier, phWannier, phWannierMatrix, pxWannier, pyWannier, pzWannier;
 	matrix phase, phPhase, evecs, phEvecs; diagMatrix eigs, phEigs;
 	vector3<> kPointCache, qPointCache; //value of kpoint for which evecs and phase was computed
 public:

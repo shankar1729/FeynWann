@@ -51,6 +51,10 @@ BandStruct::BandStruct(string prefix, double mu, bool usePhononStates=0)
 		phWannier.init(pnBands*pnBands, phCellMap.size()); phWannier.read_real(phFile.c_str());
 
 		qPointCache *=NAN; // indicate that cache is invalid
+		
+		// Read phonon matrix elements
+		phWannierMatrix.init(pbBands*pnBands, phCellMap.size(), nBands*nBands); phWannierMatrix.read(("totalE.mlwfHePh").c_str());
+
 	}
 }
 
