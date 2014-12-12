@@ -83,7 +83,7 @@ int main(int argc, char** argv)
 			{	kpnt1[j] = Random::uniform();
 				kpnt2[j] = Random::uniform();
 			}
-			double mk1k2 = bs.get_mk1k2ph(kpnt1, kpnt2, omega, T);
+			double mk1k2 = bs.get_mk1k2(kpnt1, kpnt2, omega, T);
 			N1block += exp(-0.5*mk1k2/(T*T));
 			diagMatrix Ek = bs.getStates(kpnt1);
 			for(int n = 0; n<Ek.nRows(); n++)
@@ -177,9 +177,9 @@ int main(int argc, char** argv)
 					double g_kPh = 1./(exp(vl*kPh/T) - 1.);
 					double phononFactor = (2*g_kPh + 1) * kPh/(kPh*kPh + kappa*kappa);
 					diagMatrix E1 = bs.getStates(kpnt1);
-					std::vector<matrix> Pk1 = bs.getTransitions(kpnt1);
+					std::vector<matrix> Pk1 = bs.getDipoleMatElem(kpnt1);
 					diagMatrix E2 = bs.getStates(kpnt2);
-					std::vector<matrix> Pk2 = bs.getTransitions(kpnt2);
+					std::vector<matrix> Pk2 = bs.getDipoleMatElem(kpnt2);
 					for(int v=0; v<E1.nRows(); v++) if(E1[v]<10.*T)
 					{	for(int c=0; c<E2.nRows(); c++) if(E2[c]>-10.*T)
 						{	double mk_cv = BandStruct::mk_sub(E2[c], E1[v], Eplasmon, T);
