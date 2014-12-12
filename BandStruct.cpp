@@ -86,6 +86,7 @@ diagMatrix BandStruct::getPhStates(vector3<> qPoint)
 	//Diagonalize:
 	Hq.diagonalize(phEvecs, phEigs);
 	qPointCache = qPoint;
+	for(double& x: phEigs) x = sqrt(x);
 	return phEigs;
 }
 
@@ -134,9 +135,8 @@ double BandStruct::get_mk1k2ph(vector3<> kPoint1, vector3<> kPoint2, double omeg
 	for(int v=0; v<pnBands; v++) if (E1[v]<10.*T)
 	{	for(int c=0; c<nBands; c++) if(E2[c]>-10*T)
 		{	for(int pn=0; pn<pnBands; pn++)
-			{	for(int ae = 0; ae<2; ae++)
-				{	if(ae==0) phOmega = P[pn] else phOmega = -P[pn];
-					mk1k2 = std::min(mk1k2, mk_sub(E2[c],E1[v],omega+phOmega, T)
+			{	for(int ae = -1; ae<=1; ae+=2)
+				{	mk1k2 = std::min(mk1k2, mk_sub(E2[c],E1[v],omega+ae*P[pn], T)
 				}
 			}	
 		}
