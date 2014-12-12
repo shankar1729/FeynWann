@@ -6,22 +6,23 @@
 #include <vector>
 #include <math.h>
 
-BandStruct::BandStruct(string prefix, double mu, bool usePhononStates)
-{	// Read cell map
-	ifstream readCellMap(prefix + ".mlwfCellMap");
-	string headerLine; getline(readCellMap, headerLine); //read and ignore header line
+BandStruct::BandStruct(string prefix, double mu, int spinWeight, string phononPrefix)
+{	//Read cell map
+	ifstream ifs(prefix + ".mlwfCellMap");
+	string headerLine; getline(ifs, headerLine); //read and ignore header line
 	vector3<int> cm;
 	double x,y,z;
-	while(readCellMap >> cm[0] >> cm[1] >> cm[2] >> x >> y >> z)
+	while(ifs >> cm[0] >> cm[1] >> cm[2] >> x >> y >> z)
 		cellMap.push_back(cm);
-	readCellMap.close();
+	ifs.close();
 
-	// Read wannier hamiltonian
+	//Read wannier hamiltonian
 	string hFile = prefix + ".mlwfH";
-	nBands = sqrt(fileSize(hFile.c_str())/(16*cellMap.size())); //16 converts from bytes to number of complex numbers
-	hWannier.init(nBands*nBands, cellMap.size()); hWannier.read(hFile.c_str());
+	nBands = sqrt(fileSize(hFile.c_str()) / ((spinWeight==1 ? sizeof(complex) : sizeof(double)) * cellMap.size()));
+	hWannier.init(nBands*nBands, cellMap.size());
+	if(spinWeight==1) hWannier.read(hFile.c_str()); else hWannier.read_real(hFile.c_str());
 
-	// Offset wannier Hamiltonian by mu:
+	//Offset wannier Hamiltonian by mu:
 	for(size_t ic=0; ic<cellMap.size(); ic++)
 		if(!cellMap[ic].length_squared()) //diagonal element
 		{	matrix id = eye(nBands); id.reshape(nBands*nBands, 1);
@@ -35,30 +36,37 @@ BandStruct::BandStruct(string prefix, double mu, bool usePhononStates)
 		pWannier[j].read((prefix + ".mlwfP" + dirNames[j]).c_str());
 	}
 	
-	if(usePhononStates)
-	{	// Read phonon cell map
-		ifstream readPhCellMap("totalE.phononCellMap");
-		string phHeaderLine; getline(readPhCellMap, phHeaderLine); //read and ignore header line
-		while(readPhCellMap >> cm[0] >> cm[1] >> cm[2] >> x >> y >> z)
+	if(phononPrefix.length())
+	{	//Read phonon cell map
+		ifs.open((phononPrefix + ".phononCellMap").c_str());
+		getline(ifs, headerLine); //read and ignore header line
+		while(ifs >> cm[0] >> cm[1] >> cm[2] >> x >> y >> z)
 			phononCellMap.push_back(cm);
-		readPhCellMap.close();
+		ifs.close();
 
-		// Read phononCellMapSqPh
-		ifstream readCellMapSq(prefix + ".mlwfCellMapSqPh");
-		string headerLineSq ; getline(readCellMapSq, headerLineSq); // read and ignore header line
-		CellPair cp;
-		while(readCellMapSq >> cp.iR1[0] >> cp.iR1[1] >> cp.iR1[2] >> cp.iR2[0] >> cp.iR2[1] >> cp.iR2[2])
-			phononCellMapSq.push_back(cp);
-	
-		// Read wannier phonon hamiltonian
-		string phFile = "totalE.phononOmegaSq";
-		nModes = sqrt(fileSize(phFile.c_str())/(8*phononCellMap.size())); //8 converts from bytes to number of complex numbers
-		omegaSqPh.init(nModes*nModes, phononCellMap.size()); omegaSqPh.read_real(phFile.c_str());
-
+		//Read phonon force matrix
+		string phFile = phononPrefix + ".phononOmegaSq";
+		nModes = sqrt(fileSize(phFile.c_str())/(sizeof(double)*phononCellMap.size())); //phonon omegaSq is always real
+		omegaSqPh.init(nModes*nModes, phononCellMap.size());
+		omegaSqPh.read_real(phFile.c_str());
 		
-		// Read phonon matrix elements
-		wannierHePh.init(nModes*nModes, phononCellMap.size(), nBands*nBands);
-		wannierHePh.read("wannier.mlwfHePh");
+		//Read phononCellMapSqPh
+		ifs.open((prefix + ".mlwfCellMapSqPh").c_str());
+		getline(ifs, headerLine); // read and ignore header line
+		CellPair cp;
+		while(ifs >> cp.iR1[0] >> cp.iR1[1] >> cp.iR1[2] >> cp.iR2[0] >> cp.iR2[1] >> cp.iR2[2])
+			phononCellMapSq.push_back(cp);
+		ifs.close();
+		
+		//Read phonon matrix elements
+		wannierHePh.init(nModes*nBands*nBands, phononCellMapSq.size());
+		matrix wannierHePh_mode(nBands*nBands, phononCellMapSq.size()); //matrix elements for a single mode (stored cotiguously)
+		FILE* fp = fopen((prefix + ".mlwfHePh").c_str(), "w");
+		for(int alpha=0; alpha<nModes; alpha++)
+		{	if(spinWeight==1) wannierHePh_mode.read(fp); else wannierHePh_mode.read_real(fp);
+			wannierHePh.set(alpha*nBands*nBands,(alpha+1)*nBands*nBands, 0,phononCellMapSq.size(), wannierHePh_mode);
+		}
+		fclose(fp);
 	}
 }
 

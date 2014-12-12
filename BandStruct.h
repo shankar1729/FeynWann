@@ -11,7 +11,7 @@
 class BandStruct
 {	
 public:
-	BandStruct(string filePrefix, double mu, bool usePhononStates=false);
+	BandStruct(string filePrefix, double mu, int spinWeight, string phononPrefix=string());
 	diagMatrix getStates(vector3<> k) const;
 	diagMatrix getPhononModes(vector3<> q) const;
 	std::vector<matrix> getDipoleMatElem(vector3<> k) const;

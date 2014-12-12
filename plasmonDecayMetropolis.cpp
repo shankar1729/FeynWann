@@ -28,7 +28,7 @@ int main(int argc, char** argv)
 	const double mu = inputMap.get("mu");
 	const double T = inputMap.get("T") * eV;
 	const double Eplasmon2 = inputMap.get("Eplasmon2") * eV;
-	const double spinWeight = inputMap.get("spinWeight");
+	const int spinWeight = round(inputMap.get("spinWeight"));
 	const int eventSaveInterval = inputMap.get("eventSaveInterval", 0); //default 0 => no save
 	matrix3<> R = matrix3<>(0,1,1, 1,0,1, 1,1,0) * (0.5*inputMap.get("aCubic")*Angstrom);
 
@@ -43,7 +43,7 @@ int main(int argc, char** argv)
 	logPrintf("mu = %lg\n", mu);
 	logPrintf("T = %lg\n", T);
 	logPrintf("Eplamson2 = %lg\n", Eplasmon2);
-	logPrintf("spinWeight = %lg\n", spinWeight);
+	logPrintf("spinWeight = %d\n", spinWeight);
 	logPrintf("R:\n");
 	R.print(globalLog, " %lg ");
 	if(dryRun)
@@ -59,7 +59,7 @@ int main(int argc, char** argv)
 	eps.setFrequency(omega);
 	
 	//Initialize Wannier bandstructure:
-	BandStruct bs("wannier", mu);
+	BandStruct bs("wannier", mu, spinWeight);
 
 	//Compute the normalization factor
 	int blockStart = (totalBlocks * (mpiUtil->iProcess())) / mpiUtil->nProcesses(); //MPI division

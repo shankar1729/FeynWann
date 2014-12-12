@@ -30,7 +30,7 @@ int main(int argc, char** argv)
 	const double mu = inputMap.get("mu");
 	const double T = inputMap.get("T") * eV;
 	const double Eplasmon2 = inputMap.get("Eplasmon2") * eV;
-	const double spinWeight = inputMap.get("spinWeight");
+	const int spinWeight = round(inputMap.get("spinWeight"));
 	const double vl = inputMap.get("vl")* meter *2.41888e-17;// m/s in atomic units
 	const matrix3<> R = matrix3<>(0,1,1, 1,0,1, 1,1,0) * (0.5*inputMap.get("aCubic")*Angstrom);
 
@@ -45,7 +45,7 @@ int main(int argc, char** argv)
 	logPrintf("mu = %lg\n", mu);
 	logPrintf("T = %lg\n", T);
 	logPrintf("Eplamson2 = %lg\n", Eplasmon2);
-	logPrintf("spinWeight = %lg\n", spinWeight);
+	logPrintf("spinWeight = %d\n", spinWeight);
 	logPrintf("vl = %lg\n", vl);
 	logPrintf("R:\n");
 	R.print(globalLog, " %lg ");
@@ -65,7 +65,7 @@ int main(int argc, char** argv)
 	LineWidth lineWidth("ImSigma.dat");
 
 	//Initialize Wannier bandstructure:
-	BandStruct bs("wannier", mu);
+	BandStruct bs("wannier", mu, spinWeight, "totalE");
 
 	//Compute the normalization factor
 	int blockStart = (totalBlocks * (mpiUtil->iProcess())) / mpiUtil->nProcesses(); //MPI division
