@@ -47,8 +47,10 @@ BandStruct::BandStruct(string prefix, double mu, bool usePhononStates=0)
 	
 		// Read wannier phonon hamiltonian
 		string phFile = "totalE.phononOmegaSq";
-		pnBands = sqrt(fileSize(phFile.c_str())/(16*phCellMap.size())); //16 converts from bytes to number of complex numbers
-		phWannier.init(pnBands*pnBands, phCellMap.size()); phWannier.read(phFile.c_str());
+		pnBands = sqrt(fileSize(phFile.c_str())/(8*phCellMap.size())); //8 converts from bytes to number of complex numbers
+		phWannier.init(pnBands*pnBands, phCellMap.size()); phWannier.read_real(phFile.c_str());
+
+		qPointCache *=NAN; // indicate that cache is invalid
 	}
 }
 
@@ -72,7 +74,7 @@ diagMatrix BandStruct::getStates(vector3<> kPoint)
 }
 
 diagMatrix BandStruct::getPhStates(vector3<> qPoint)
-{	if(qPoint == qPointCace) return phEigs;
+{	if(qPoint == qPointCache) return phEigs;
 	//Calculate phase factors for each cell:
 	phPhase.init(phCellMap.size(),1);
 	for(size_t ic=0; ic<phCellMap.size(); ic++)
@@ -130,9 +132,15 @@ double BandStruct::get_mk1k2ph(vector3<> kPoint1, vector3<> kPoint2, double omeg
 	diagMatrix E1 = getStates(kPoint1), E2 = getStates(kPoint2), P = getPhStates(qPoint);
  	double mk1k2 = INFINITY;
 	for(int v=0; v<pnBands; v++) if (E1[v]<10.*T)
-		for(int c=0; c<nBands; c++) if(E2[c]>-10*T)
-		{	// mk1k2 = ...
+	{	for(int c=0; c<nBands; c++) if(E2[c]>-10*T)
+		{	for(int pn=0; pn<pnBands; pn++)
+			{	for(int ae = 0; ae<2; ae++)
+				{	if(ae==0) phOmega = P[pn] else phOmega = -P[pn];
+					mk1k2 = std::min(mk1k2, mk_sub(E2[c],E1[v],omega+phOmega, T)
+				}
+			}	
 		}
+	}
 	return mk1k2;
 }
 
