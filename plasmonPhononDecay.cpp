@@ -167,7 +167,7 @@ int main(int argc, char** argv)
 							for(int alpha=0; alpha<P.nRows(); alpha ++)
 							{	for(int ae=-1; ae<=+1; ae+=2) // +/- for phonon absorption or emmision
 								{	double mk_cv = BandStruct::mk_sub(E2[c], E1[v], Eplasmon + ae*P[alpha], T);
-									double weightEconserve = exp(0.5*(mk1k2-mk_cv)/(T*T))/(T*sqrt(2*M_PI)); //weight contribution due to energy conservation
+									double weightEconserve = exp(0.5*(mk1k2-mk_cv)/(T*T))/(T*sqrt(2*M_PI)) * (g_kPh+0.5*(1.-ae))/P[alpha]; //weight contribution (including phonon and electron occupation factors) due to energy conservation
 									double g_kPh = 1./(exp(P[alpha]/T) - 1.);
 									if(weightEconserve < weightCut) continue;
 									// Effective matrix elements
@@ -179,9 +179,9 @@ int main(int argc, char** argv)
 											double f1i = 1./(1.+exp(E1[i]/T));
 											double f2i = 1./(1.+exp(E2[i]/T));
 											for(int j=0; j<3; j++)
-												prefacDotP += sqrtGammaPrefac[j] * (g_kPh+0.5*(1.-ae))/P[alpha] *
-													( Pk2[j](c,i) * (1.-f2i) * PePh[alpha](c,i) / (E2i-E2[c] - ae*P[alpha] )
-													+ Pk2[j](i,v) * (1.-f1i) * PePh[alpha](i,v) / (E1i-E1[v] - Eplasmon) );
+												prefacDotP += sqrtGammaPrefac[j] *
+													( Pk2[j](c,i) * (1.-f2i) * PePh[alpha](i,v) / (E2i-E2[c] - ae*P[alpha] )
+													+ Pk1[j](i,v) * (1.-f1i) * PePh[alpha](c,i) / (E1i-E1[v] - Eplasmon) );
 										}
 									}
 									weight += (0.5*spinWeight) * weightEconserve * prefacDotP.norm(); //norm = abs^2
