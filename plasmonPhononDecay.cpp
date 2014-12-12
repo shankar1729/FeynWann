@@ -71,12 +71,12 @@ int main(int argc, char** argv)
 	int blockStart = (totalBlocks * (mpiUtil->iProcess())) / mpiUtil->nProcesses(); //MPI division
 	int blockStop = (totalBlocks * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
 	int nKpts = nKptsN1/totalBlocks;
-	double N1sum = 0., N1sumSq = 0., kappaSum = 0., kappaSumSq = 0.;
+	double N1sum = 0., N1sumSq = 0.;
 	StopWatch watchNorm("normalization"); watchNorm.start();
 	logPrintf("Calculating normalization factor ... "); logFlush();
 	for(int block=blockStart; block<blockStop; block++)
 	{	Random::seed(block);
-		double N1block = 0., kappaSqrdBlock = 0.;
+		double N1block = 0.;
 		for(int nk1 =0; nk1<nKpts; nk1++)
 		{	vector3<> kpnt1, kpnt2;
 			for(int j=0; j<3; j++)
@@ -86,29 +86,17 @@ int main(int argc, char** argv)
 			double mk1k2 = bs.get_mk1k2(kpnt1, kpnt2, omega, T);
 			N1block += exp(-0.5*mk1k2/(T*T));
 			diagMatrix Ek = bs.getStates(kpnt1);
-			for(int n = 0; n<Ek.nRows(); n++)
-			{	double dFdE =1/(T*std::pow(2*cosh(Ek[n]/(2*T)),2));
-				kappaSqrdBlock += 4*M_PI*spinWeight*dFdE/fabs(det(R));
-			}
 		}
 		N1block /=  nKpts;
 		N1sum += N1block;
 		N1sumSq += std::pow(N1block,2);
-		kappaSqrdBlock /= nKpts;
-		kappaSum += sqrt(kappaSqrdBlock);
-		kappaSumSq +=kappaSqrdBlock;
 	}
 	watchNorm.stop();
 	mpiUtil->allReduce(N1sum, MPIUtil::ReduceSum);
 	mpiUtil->allReduce(N1sumSq, MPIUtil::ReduceSum);
-	mpiUtil->allReduce(kappaSum, MPIUtil::ReduceSum);
-	mpiUtil->allReduce(kappaSumSq, MPIUtil::ReduceSum);
 	double N1 = N1sum / totalBlocks;
 	double N1std = sqrt(N1sumSq/totalBlocks - N1*N1)/sqrt(totalBlocks);
-	double kappa = kappaSum / totalBlocks;
-	double kappaStd = sqrt(kappaSumSq/totalBlocks - kappa*kappa)/sqrt(totalBlocks);
 	logPrintf("N1 = %lg +/- %lg\n", N1, N1std);
-	logPrintf("kappa = %lg +/- %lg\n", kappa, kappaStd);
 	bool skipMetro = false;
 	if(fabs(N1) < 1e-8)
 	{	skipMetro = true;
