@@ -178,10 +178,15 @@ int main(int argc, char** argv)
 											complex E2i(E2[i], lineWidth(E2[i]));
 											double f1i = 1./(1.+exp(E1[i]/T));
 											double f2i = 1./(1.+exp(E2[i]/T));
+											complex sgpDotPk1_iv = 0.;
+											complex sgpDotPk2_ci = 0.;
 											for(int j=0; j<3; j++)
-												prefacDotP += sqrtGammaPrefac[j] *
-													( Pk2[j](c,i) * (1.-f2i) * PePh[alpha](i,v) / (E2i - (E2[c] - Eplasmon))
-													+ PePh[alpha](c,i) * (1.-f1i) * Pk1[j](i,v) / (E1i - (E1[v] + Eplasmon)) );
+											{	sgpDotPk1_iv += sqrtGammaPrefac[j] * Pk1[j](i,v);
+												sgpDotPk2_ci += sqrtGammaPrefac[j] * Pk2[j](c,i);
+											}
+											prefacDotP += 
+												( sgpDotPk2_ci * (1.-f2i) * PePh[alpha](i,v) / (E2i - (E2[c] - Eplasmon))
+												+ PePh[alpha](c,i) * (1.-f1i) * sgpDotPk1_iv / (E1i - (E1[v] + Eplasmon)) );
 										}
 									}
 									weight += (0.5*spinWeight) * weightEconserve * prefacDotP.norm(); //norm = abs^2
