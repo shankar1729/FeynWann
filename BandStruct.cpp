@@ -98,9 +98,26 @@ std::vector<matrix> BandStruct::getDipoleMatElem(vector3<> k) const
 }
 
 std::vector<matrix> BandStruct::getPhononMatElem(vector3<> k1, vector3<> k2) const
-{	//TODO
-	die("Not yet implemented.\n");
-	return std::vector<matrix>();
+{	const CacheEntry& cEl1 = getElectronCache(k1);
+	const CacheEntry& cEl2 = getElectronCache(k2);
+	const CacheEntry& cPh = getPhononCache(k1-k2);
+	//Compute double Fourier transform:
+	matrix phase(phononCellMapSq.size(),1);
+	for(size_t icp=0; icp<phononCellMapSq.size(); icp++)
+	{	const CellPair& cp = phononCellMapSq[icp];
+		phase.set(icp,0, cis(2*M_PI * (dot(cp.iR1,k1)) - dot(cp.iR2,k2)));
+	}
+	matrix HePh = wannierHePh * phase; //now a nModes*nBands*nBands column
+	HePh.reshape(nBands*nBands, nModes); //now each column is matrix elemenst for a specific nuclear displacement
+	//Apply unitary transformations:
+	HePh = HePh * cPh.evecs; //phonon unitary rotation
+	std::vector<matrix> result(nModes);
+	for(int alpha=0; alpha<nModes; alpha++)
+	{	result[alpha] = HePh(0,HePh.nRows(), alpha,alpha+1); //select the current mode
+		result[alpha].reshape(nBands, nBands);
+		result[alpha] = dagger(cEl1.evecs) * result[alpha] * cEl2.evecs;
+	}
+	return result;
 }
 
 double BandStruct::get_mk(vector3<> k, double omega, double T) const
@@ -113,8 +130,9 @@ double BandStruct::get_mk(vector3<> k, double omega, double T) const
 }
 
 double BandStruct::get_mk1k2(vector3<> k1, vector3<> k2, double omega, double T) const
-{	vector3<> q = k1 - k2;
-	diagMatrix E1 = getStates(k1), E2 = getStates(k2), P = getPhononModes(q);
+{	diagMatrix E1 = getStates(k1);
+	diagMatrix E2 = getStates(k2);
+	diagMatrix P = getPhononModes(k1-k2);
  	double mk1k2 = INFINITY;
 	for(int v=0; v<nModes; v++) if (E1[v]<10.*T)
 		for(int c=0; c<nBands; c++) if(E2[c]>-10*T)
