@@ -179,7 +179,7 @@ int main(int argc, char** argv)
 											double f1i = 1./(1.+exp(E1[i]/T));
 											double f2i = 1./(1.+exp(E2[i]/T));
 											for(int j=0; j<3; j++)
-												prefacDotP += sqrtGammaPrefac[j] * (g_kPh+1/2-ae/2)/P[alpha]
+												prefacDotP += sqrtGammaPrefac[j] * (g_kPh+0.5*(1.-ae))/P[alpha] *
 													( Pk2[j](c,i) * (1.-f2i) * PePh[alpha](c,i) / (E2i-E2[c] - ae*P[alpha] )
 													+ Pk2[j](i,v) * (1.-f1i) * PePh[alpha](i,v) / (E1i-E1[v] - Eplasmon) );
 										}
