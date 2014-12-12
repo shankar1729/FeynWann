@@ -180,7 +180,7 @@ int main(int argc, char** argv)
 					std::vector<matrix> Pk1 = bs.getDipoleMatElem(kpnt1);
 					diagMatrix E2 = bs.getStates(kpnt2);
 					std::vector<matrix> Pk2 = bs.getDipoleMatElem(kpnt2);
-					std::vector<matrix> PePh = bs.getTransitionsPh(kpnt1,kpnt2);
+					std::vector<matrix> PePh = bs.getPhononMatElem(kpnt1,kpnt2);
 					for(int v=0; v<E1.nRows(); v++) if(E1[v]<10.*T)
 					{	for(int c=0; c<E2.nRows(); c++) if(E2[c]>-10.*T)
 						{	double mk_cv = BandStruct::mk_sub(E2[c], E1[v], Eplasmon, T);
