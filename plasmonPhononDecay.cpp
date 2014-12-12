@@ -83,7 +83,7 @@ int main(int argc, char** argv)
 			{	kpnt1[j] = Random::uniform();
 				kpnt2[j] = Random::uniform();
 			}
-			double mk1k2 = bs.get_mk1k2(kpnt1, kpnt2, omega, T);
+			double mk1k2 = bs.get_mk1k2ph(kpnt1, kpnt2, omega, T);
 			N1block += exp(-0.5*mk1k2/(T*T));
 			diagMatrix Ek = bs.getStates(kpnt1);
 			for(int n = 0; n<Ek.nRows(); n++)
@@ -159,7 +159,7 @@ int main(int argc, char** argv)
 
 		for(int ik=0; ik<nKpts; )
 		{	// Calculate mk:
-			double mk1k2 = bs.get_mk1k2(kpnt1, kpnt2, omega, T);
+			double mk1k2 = bs.get_mk1k2ph(kpnt1, kpnt2, omega, T);
 
 			// Metropolis accept - reject:
 			if(exp(0.5*(mk1k2Prev - mk1k2)/(T*T)) > Random::uniform())
