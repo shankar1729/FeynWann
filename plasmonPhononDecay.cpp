@@ -125,7 +125,7 @@ int main(int argc, char** argv)
 	vector3<complex> zHat(0.0, 0.0, one);
 	vector3<complex> kHat(cos(kPhi), sin(kPhi), 0.0);
 	complex I(0.0,1.0);
-	vector3<complex> sqrtGammaPrefac = ((1/fabs(det(R))) * sqrt(N1*std::pow(M_PI,3)*vl/(nKptsMetro*eps.modGammaMinus*omega*eps.Lquant)) ) * (kHat - I*(eps.k/eps.modGammaMinus)*zHat);
+	vector3<complex> sqrtGammaPrefac = ( M_PI * sqrt(N1/(nKptsMetro*4*fabs(det(R))*eps.modGammaMinus*omega*eps.Lquant)) ) * (kHat - I*(eps.k/eps.modGammaMinus)*zHat);
 	logPrintf("sqrtGammaPrefac Real = %lg %lg %lg\n",  real(sqrtGammaPrefac[0]), real(sqrtGammaPrefac[1]), real(sqrtGammaPrefac[2]));
 	logPrintf("sqrtGammaPrefac Imag = %lg %lg %lg\n",  imag(sqrtGammaPrefac[0]), imag(sqrtGammaPrefac[1]), imag(sqrtGammaPrefac[2]));
 
@@ -180,17 +180,18 @@ int main(int argc, char** argv)
 					std::vector<matrix> Pk1 = bs.getDipoleMatElem(kpnt1);
 					diagMatrix E2 = bs.getStates(kpnt2);
 					std::vector<matrix> Pk2 = bs.getDipoleMatElem(kpnt2);
+					std::vector<matrix> PePh = bs.getTransitionsPh(kpnt1,kpnt2);
 					for(int v=0; v<E1.nRows(); v++) if(E1[v]<10.*T)
 					{	for(int c=0; c<E2.nRows(); c++) if(E2[c]>-10.*T)
 						{	double mk_cv = BandStruct::mk_sub(E2[c], E1[v], Eplasmon, T);
 							double weightEconserve = exp(0.5*(mk1k2-mk_cv)/(T*T))/(T*sqrt(2*M_PI)); //weight contribution due to energy conservation
 							if(weightEconserve < weightCut) continue;
 							// Effective matrix elements
-							complex prefacDotP1 = 0., prefacDotP2=0.;
+							complex prefacDotP = 0.;
 							for(int i=0; i<E1.nRows(); i++) // sum over the intermediate states
 							{	complex E2i(E2[i], lineWidth(E2[i])), E1i(E1[i], lineWidth(E1[i]));
-								if(E2[i] < energyCut) for(int j=0; j<3; j++) prefacDotP1 += sqrtGammaPrefac[j] * (Pk2[j](c,i)*(1-1/(exp(E2[i]/T)+1)))/(E2i-E2[c]+Eplasmon);
-								if(E1[i] < energyCut) for(int j=0; j<3; j++) prefacDotP2 += sqrtGammaPrefac[j] * (Pk1[j](i,v)*(1-1/(exp(E1[i]/T)+1)))/(E1i-E1[v]-Eplasmon);
+								if(E2[i] < energyCut && E1[i] < energyCut) for(int j=0; j<3; j++) 
+									prefacDotP += sqrtGammaPrefac[j] * (Pk2[j](c,i)*(1-1/(exp(E2[i]/T)+1))*PePh[alpha](c,i)/(E2i-E2[c]+Eplasmon) + sqrtGammaPrefac[j] * (Pk2[j](i,v)*(1-1/(exp(E1[i]/T)+1))*PePh[alpha](i,v)/(E1i-E1[v]-Eplasmon);
 							}
 							double weight = (0.5*spinWeight) * weightEconserve * phononFactor * (prefacDotP1.norm() + prefacDotP2.norm()); //norm = abs^2
 							//Include in statistics:
