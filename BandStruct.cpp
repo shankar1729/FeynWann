@@ -44,6 +44,17 @@ BandStruct::BandStruct(string prefix, double mu, bool usePhononStates=0)
 		while(readPhononCellMap >> pcm[0] >> pcm[1] >> pcm[2] >> px >> py >> pz)
 			phCellMap.push_back(pcm);
 		readPhCellMap.close();
+
+		// Read cellMapSqPh
+		ifstream readCellMapSq(prefix + ".mlwfCellMapSqPh");
+		string headerLineSq ; getline(readCellMapSq, headerLineSq); // read and ignore header line
+		struct CellPair { vector3<> iR1, iR2 }
+		std::vector<CellPair> cellMapSq;
+		vector3<int> iR1, iR2;
+		while(readCellMapSq >> iR1[0] >> iR1[1] >> iR1[2] >> iR2[0] >> iR2[1] >> iR2[2])
+		{	CellPair cellPair = {iR1,iR2};
+			cellMapSq.push_back(cellPair);
+		}
 	
 		// Read wannier phonon hamiltonian
 		string phFile = "totalE.phononOmegaSq";
@@ -53,8 +64,10 @@ BandStruct::BandStruct(string prefix, double mu, bool usePhononStates=0)
 		qPointCache *=NAN; // indicate that cache is invalid
 		
 		// Read phonon matrix elements
-		phWannierMatrix.init(pbBands*pnBands, phCellMap.size(), nBands*nBands); phWannierMatrix.read(("totalE.mlwfHePh").c_str());
+		phWannierMatrix.init(pbBands*pnBands, phCellMap.size(), nBands*nBands); phWannierMatrix.read(("wannier.mlwfHePh").c_str());
 
+		// Read phonon cell map
+		
 	}
 }
 
@@ -108,6 +121,11 @@ std::vector<matrix> BandStruct::getTransitions(vector3<> kPoint)
 	pk[2] = transpose(evecs) * Pkz * evecs;
 	watch.stop();
 	return pk;
+}
+
+std::vector<matrix> BandStruct::getPhTransitions(vector3<> kPoint1, kPoint2)
+{	if(!(kPoint1 == kPointCache)) getStates(kPoint1); // Update evecs and phase if necessary
+	matrix Pk1 = phWannierMatrix * phase;	
 }
 
 double BandStruct::get_mk(vector3<> kPoint, double omega, double T)
