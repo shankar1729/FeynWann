@@ -24,12 +24,11 @@ BandStruct::BandStruct(string prefix, double mu, int spinWeight, string phononPr
 
 	//Offset wannier Hamiltonian by mu:
 	for(size_t ic=0; ic<cellMap.size(); ic++)
-	{	if(!cellMap[ic].length_squared()) //diagonal element
+		if(!cellMap[ic].length_squared()) //diagonal element
 		{	matrix id = eye(nBands); id.reshape(nBands*nBands, 1);
 			hWannier.set(0,nBands*nBands, ic,ic+1, hWannier(0,nBands*nBands, ic,ic+1) - mu * id);
 		}
-	}
-
+	
 	// Read momentum matrix elements
 	string dirNames[3] = { "x", "y", "z" };
 	for(int j=0; j<3; j++)
@@ -62,11 +61,12 @@ BandStruct::BandStruct(string prefix, double mu, int spinWeight, string phononPr
 		//Read phonon matrix elements
 		wannierHePh.init(nModes*nBands*nBands, phononCellMapSq.size());
 		matrix wannierHePh_mode(nBands*nBands, phononCellMapSq.size()); //matrix elements for a single mode (stored cotiguously)
-		string fp = prefix + ".mlwfHePh";
+		FILE* fp = fopen((prefix + ".mlwfHePh").c_str(), "r");
 		for(int alpha=0; alpha<nModes; alpha++)
-		{	if(spinWeight==1) wannierHePh_mode.read(fp.c_str()); else wannierHePh_mode.read_real(fp.c_str());
+		{	if(spinWeight==1) wannierHePh_mode.read(fp); else wannierHePh_mode.read_real(fp);
 			wannierHePh.set(alpha*nBands*nBands,(alpha+1)*nBands*nBands, 0,phononCellMapSq.size(), wannierHePh_mode);
 		}
+		fclose(fp);
 	}
 }
 
