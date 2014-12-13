@@ -134,7 +134,7 @@ double BandStruct::get_mk1k2(vector3<> k1, vector3<> k2, double omega, double T)
 	diagMatrix E2 = getStates(k2);
 	diagMatrix P = getPhononModes(k1-k2);
  	double mk1k2 = INFINITY;
-	for(int v=0; v<nModes; v++) if (E1[v]<10.*T)
+	for(int v=0; v<nBands; v++) if (E1[v]<10.*T)
 		for(int c=0; c<nBands; c++) if(E2[c]>-10*T)
 			for(int alpha=0; alpha<nModes; alpha++)
 				for(int ae=-1; ae<=+1; ae+=2)
@@ -202,7 +202,7 @@ const BandStruct::CacheEntry& BandStruct::getPhononCache(vector3<> q) const
 	omegaSq_q.reshape(nModes,nModes);
 	omegaSq_q = dagger_symmetrize(omegaSq_q);
 	omegaSq_q.diagonalize(ce->evecs, ce->eigs);
-	for(double& x: ce->eigs) x = sqrt(x); //switch from omegaSq to omega
+	for(double& x: ce->eigs) x = sqrt(fabs(x)); //switch from omegaSq to omega
 	//--- update cache:
 	BandStruct& bs = *((BandStruct*)this); //modifiable version of this
 	if(phononCache.size() == 1) bs.phononCache.pop_front(); //discard oldest cache entries
