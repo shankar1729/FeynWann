@@ -49,6 +49,7 @@ int main(int argc, char** argv)
 	int blockStop = (totalBlocks * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
 	int nKpts = nKptsN1/totalBlocks;
 	double kappaSum = 0., kappaSumSq = 0.;
+	double Omega = fabs(det(R));
 	logPrintf("Calculating kappa ... "); logFlush();
         for(int block=blockStart; block<blockStop; block++)
         {       Random::seed(block);
@@ -59,7 +60,7 @@ int main(int argc, char** argv)
 			diagMatrix Ek = bs.getStates(kpnt1);
 			for(int n = 0; n<Ek.nRows(); n++)
 			{	double dFdE =1/(T*std::pow(2*cosh(Ek[n]/(2*T)),2));
-				kappaSqrdBlock += 4*M_PI*spinWeight*dFdE/fabs(det(R));
+				kappaSqrdBlock += 4*M_PI*spinWeight*dFdE/Omega;
 			}
 		}
 		kappaSqrdBlock /= nKpts;
@@ -79,13 +80,15 @@ int main(int argc, char** argv)
 
 	// Compute T and Gamma
 	double Tsum = 0., TsumSq = 0., GammaSum = 0., GammaSumSq = 0.;
+	double gSum = 0., gSumSq = 0., tauInvSum = 0., tauInvSumSq = 0.;
 	logPrintf("Calculating T and Gamma... "); logFlush();
 	double prefacT = spinWeight/(3.*nKpts);
-	double prefacGamma = spinWeight*std::pow(2*M_PI,2)*vl/(3*nKpts);
+	double prefacGamma = spinWeight*std::pow(2*M_PI,2)*vl/(3*nKpts*Omega);
 	double EconserveExpFac = -0.5/(T*T), EconservePrefac = 1./(sqrt(2*M_PI)*T); //energy conserving Gaussian parameters
 	for(int block=blockStart; block<blockStop; block++)
 	{	Random::seed(block);
 		double Tblock = 0., GammaBlock=0.;
+		double gBlock = 0., tauInvBlock=0.;
 		for(int nk1 =0; nk1<nKpts; nk1++)
 		{	vector3<> kpnti, kpntj;
 			for(int j=0; j<3; j++) 
@@ -105,26 +108,26 @@ int main(int argc, char** argv)
 			double phononFactor = kPh/(kPh*kPh + kappa*kappa);
 			
 			for(int v=0; v<Ei.nRows(); v++)
-			{	double fi  = 1./(exp(Ei[v]/T)+1);
-				double dFdEi = -1/(T*std::pow(2*cosh(Ei[v]/(2*T)),2));
+			{	double dFdEi = -1/(T*std::pow(2*cosh(Ei[v]/(2*T)),2));
 				double viDotvi = vi[v].length_squared();
 				Tblock += prefacT * viDotvi*(-dFdEi);
+				gBlock += prefacT * (-dFdEi);
 				for(int c=0; c<Ej.nRows(); c++)
 				{	double viDotvj = dot(vi[v], vj[c]);
 					double fj = 1./(exp(Ej[c]/T)+1);
-					double dFdEj = -1./(T*std::pow(2*cosh(Ej[c]/(2*T)),2));
-					double deltam = EconservePrefac * exp(EconserveExpFac * std::pow(Ej[c]-Ei[v]-vl*kPh,2));
-					double deltap = EconservePrefac * exp(EconserveExpFac * std::pow(Ej[c]-Ei[v]+vl*kPh,2));
-					double term1 = prefacGamma * (viDotvi*(-dFdEi)*(g_kPh+fj) -  viDotvj*(-dFdEj)*(g_kPh+1-fi)) * phononFactor * deltam;
-					double term2 = prefacGamma * (viDotvi*(-dFdEi)*(g_kPh+1-fj) -  viDotvj*(-dFdEj)*(g_kPh+fi)) * phononFactor * deltap;
-					GammaBlock += term1 + term2;
+					for(int ae=-1; ae<=+1; ae+=2)
+					{	double delta = EconservePrefac * exp(EconserveExpFac * std::pow(Ej[c]-Ei[v] - ae*vl*kPh,2));
+						double occFactors = (-dFdEi) * (g_kPh+0.5 - ae*(0.5-fj));
+						GammaBlock += prefacGamma * (viDotvi -  viDotvj) * occFactors * delta * phononFactor;
+						tauInvBlock += prefacGamma * occFactors * delta * phononFactor;
+					}
 				}
 			}
 		}
-		Tsum += Tblock;
-		TsumSq += std::pow(Tblock,2);
-		GammaSum += GammaBlock;
-		GammaSumSq +=std::pow(GammaBlock,2);
+		Tsum += Tblock; TsumSq += std::pow(Tblock,2);
+		GammaSum += GammaBlock; GammaSumSq +=std::pow(GammaBlock,2);
+		gSum += gBlock; gSumSq += std::pow(gBlock,2);
+		tauInvSum += tauInvBlock; tauInvSumSq +=std::pow(tauInvBlock,2);
 	}
 
 	mpiUtil->allReduce(Tsum, MPIUtil::ReduceSum);
@@ -147,8 +150,23 @@ int main(int argc, char** argv)
 	const double Ohm = Volt/Ampere;
 
 	// Calculate Resistivity
-	double rho = Gamma/(Tt*Tt);
-	logPrintf("Resistivity = %lg ohm-m\n", rho/(Ohm*meter));
+	double rho = Omega*Gamma/(Tt*Tt);
+	double rhoStd = rho * hypot(GammaStd/Gamma, sqrt(2.)*Tstd/Tt);
+	logPrintf("Resistivity = %lg +/- %lg ohm-m\n", rho/(Ohm*meter), rhoStd/(Ohm*meter));
+	
+	//Calculate lifetime:
+	mpiUtil->allReduce(gSum, MPIUtil::ReduceSum);
+	mpiUtil->allReduce(gSumSq, MPIUtil::ReduceSum);
+	mpiUtil->allReduce(tauInvSum, MPIUtil::ReduceSum);
+	mpiUtil->allReduce(tauInvSumSq, MPIUtil::ReduceSum);
+	double gMean = gSum / totalBlocks;
+	double gStd = sqrt(gSumSq/totalBlocks - gMean*gMean)/sqrt(totalBlocks);
+	double tauInv = tauInvSum / totalBlocks;
+	double tauInvStd = sqrt(tauInvSumSq/totalBlocks - tauInv*tauInv)/sqrt(totalBlocks);
+	double tau = gMean / tauInv;
+	double tauStd = tau * hypot(tauInvStd/tauInv, gStd/gMean);
+	double fs = 1e-15/invSeconds;
+	logPrintf("tau = %lg +/- %lg fs\n", tau/fs, tauStd/fs);
 	
 	finalizeSystem();
 }
