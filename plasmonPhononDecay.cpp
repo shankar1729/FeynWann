@@ -67,6 +67,62 @@ int main(int argc, char** argv)
 	//Initialize Wannier bandstructure:
 	BandStruct bs("wannier", mu, spinWeight, "totalE");
 
+	//DEBUG
+	{
+		int blockStart = (totalBlocks * (mpiUtil->iProcess())) / mpiUtil->nProcesses(); //MPI division
+		int blockStop = (totalBlocks * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
+		int nKpts = nKptsN1/totalBlocks;
+		
+		matrix3<> GT = 2*M_PI*inv(~R);
+		WignerSeitz BZ(GT);
+		double kappa = 0.9;
+		double Omega = fabs(det(R));
+		
+		char fname[256]; sprintf(fname, "tempMdebug.%d", mpiUtil->iProcess());
+		FILE* fp = fopen(fname, "w");
+		for(int block=blockStart; block<blockStop; block++)
+		{	Random::seed(block);
+			for(int nk1 =0; nk1<nKpts; nk1++)
+			{	vector3<> kpnt1, kpnt2;
+				for(int j=0; j<3; j++)
+				{	kpnt1[j] = Random::uniform();
+					kpnt2[j] = Random::uniform();
+				}
+				double mk1k2 = bs.get_mk1k2(kpnt1, kpnt2, 0., T);
+				if(exp(-0.5*mk1k2/(T*T)) > 1e-3)
+				{	diagMatrix E1 = bs.getStates(kpnt1), F1; for(double e: E1) F1.push_back(1./(1.+exp(e/T)));
+					diagMatrix E2 = bs.getStates(kpnt2), F2; for(double e: E2) F2.push_back(1./(1.+exp(e/T)));
+					diagMatrix omegaPh = bs.getPhononModes(kpnt1-kpnt2);
+					std::vector<matrix> HePh = bs.getPhononMatElem(kpnt1, kpnt2);
+					double nPairs = 0;
+					double Msq = 0;
+					for(size_t v=0; v<E1.size(); v++) if (E1[v]<10.*T)
+						for(size_t c=0; c<E2.size(); c++) if(E2[c]>-10*T)
+							for(size_t alpha=0; alpha<HePh.size(); alpha++)
+							{	double weight = F1[v] * (1.-F2[c]);
+								Msq += HePh[alpha](c,v).norm() * weight;
+								nPairs += (0.5*spinWeight) * weight;
+							}
+					Msq *= (HePh.size())/nPairs;
+					vector3<> kDiff = BZ.restrict(kpnt1-kpnt2);
+					double k = (GT * kDiff).length();
+					double MsqOld = std::pow(vl*k,2) * M_PI / (4*Omega*(k*k + kappa*kappa));
+					fprintf(fp, "%lg %lg %lg\n", k, Msq, MsqOld);
+				}
+			}
+		}
+		fclose(fp);
+		double temp = 0.;
+		mpiUtil->bcast(temp);
+		if(mpiUtil->isHead())
+		{	system("cat tempMdebug.* > tempMdebug");
+			system("rm tempMdebug.*");
+		}
+		finalizeSystem();
+		return 0;
+	}
+	
+	
 	//Compute the normalization factor
 	int blockStart = (totalBlocks * (mpiUtil->iProcess())) / mpiUtil->nProcesses(); //MPI division
 	int blockStop = (totalBlocks * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
