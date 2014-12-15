@@ -42,48 +42,18 @@ int main(int argc, char** argv)
 	logPrintf("\n");
 
 	//Initialize Wannier bandstructure:
-	BandStruct bs("wannier", mu, spinWeight);
-
-	// Calculate kappa
-	int blockStart = (totalBlocks * (mpiUtil->iProcess())) / mpiUtil->nProcesses(); //MPI division
-	int blockStop = (totalBlocks * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
-	int nKpts = nKptsN1/totalBlocks;
-	double kappaSum = 0., kappaSumSq = 0.;
-	double Omega = fabs(det(R));
-	logPrintf("Calculating kappa ... "); logFlush();
-        for(int block=blockStart; block<blockStop; block++)
-        {       Random::seed(block);
-                double kappaSqrdBlock = 0.;
-                for(int nk1 =0; nk1<nKpts; nk1++)
-                {       vector3<> kpnt1;
-			for(int j=0; j<3; j++) kpnt1[j] = Random::uniform();
-			diagMatrix Ek = bs.getStates(kpnt1);
-			for(int n = 0; n<Ek.nRows(); n++)
-			{	double dFdE =1/(T*std::pow(2*cosh(Ek[n]/(2*T)),2));
-				kappaSqrdBlock += 4*M_PI*spinWeight*dFdE/Omega;
-			}
-		}
-		kappaSqrdBlock /= nKpts;
-		kappaSum += sqrt(kappaSqrdBlock);
-		kappaSumSq +=kappaSqrdBlock;
-	}
-	mpiUtil->allReduce(kappaSum, MPIUtil::ReduceSum);
-	mpiUtil->allReduce(kappaSumSq, MPIUtil::ReduceSum);
-	double kappa = kappaSum / totalBlocks;
-	double kappaStd = sqrt(kappaSumSq/totalBlocks - kappa*kappa)/sqrt(totalBlocks);
-	logPrintf("kappa = %lg +/- %lg\n", kappa, kappaStd);
-
-	// Intalize Brillouin zone
-	matrix3<> GT = (2*M_PI)*inv(~R); //reciprocal lattice vectors
-	matrix3<> GGT = (~GT)*GT; //reciprocal space metric
-	WignerSeitz BZ(GT); //Wigner-Seitz cell on the reciprocal lattice vectors
+	BandStruct bs("wannier", mu, spinWeight, "totalE");
 
 	// Compute T and Gamma
 	double Tsum = 0., TsumSq = 0., GammaSum = 0., GammaSumSq = 0.;
 	double gSum = 0., gSumSq = 0., tauInvSum = 0., tauInvSumSq = 0.;
 	logPrintf("Calculating T and Gamma... "); logFlush();
+	int blockStart = (totalBlocks * (mpiUtil->iProcess())) / mpiUtil->nProcesses(); //MPI division
+	int blockStop = (totalBlocks * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
+	int nKpts = nKptsN1/totalBlocks;
+	double Omega = fabs(det(R));
 	double prefacT = spinWeight/(3.*nKpts);
-	double prefacGamma = spinWeight*std::pow(2*M_PI,2)*vl/(3*nKpts*Omega);
+	double prefacGamma = spinWeight*M_PI/(3*nKpts);
 	double EconserveExpFac = -0.5/(T*T), EconservePrefac = 1./(sqrt(2*M_PI)*T); //energy conserving Gaussian parameters
 	for(int block=blockStart; block<blockStop; block++)
 	{	Random::seed(block);
@@ -95,31 +65,44 @@ int main(int argc, char** argv)
 			{	kpnti[j] = Random::uniform();
 				kpntj[j] = Random::uniform();
 			}
-			#define getStatesVelocities(suffix) \
-				diagMatrix E##suffix = bs.getStates(kpnt##suffix); \
-				std::vector<vector3<>> v##suffix = bs.getVelocity(kpnt##suffix, R);
-			getStatesVelocities(i)
-			getStatesVelocities(j)
-			#undef getStatesVelocities
 			
-			double kPh = sqrt(GGT.metric_length_squared(BZ.restrict(kpntj - kpnti)));
-			kPh = std::max(1e-7, kPh); //regularize phonon wavevector to avoid 0/0 in phonon factor
-			double g_kPh = 1./(exp(vl*kPh/T) - 1.);
-			double phononFactor = kPh/(kPh*kPh + kappa*kappa);
+			//Calculate energies and filter kpoint pairs:
+			diagMatrix Ei = bs.getStates(kpnti);
+			diagMatrix Ej = bs.getStates(kpntj);
+			bool worthwhileSingle = false, worthwhileDouble = false;
+			for(int v=0; v<Ei.nRows(); v++) if(fabs(Ei[v])<10*T)
+			{	worthwhileSingle = true;
+				for(int c=0; c<Ej.nRows(); c++) if(fabs(Ej[c])<10*T)
+				{	worthwhileDouble = true;
+					break;
+				}
+			}
+			if(!worthwhileSingle) continue;
+			
+			//Calculate remaining (more expensive) quantities for k-point pair:
+			std::vector<vector3<>> vi = bs.getVelocity(kpnti, R);
+			std::vector<vector3<>> vj = bs.getVelocity(kpntj, R);
+			diagMatrix omegaPh = bs.getPhononModes(kpnti-kpntj);
+			std::vector<matrix> MePh = bs.getPhononMatElem(kpnti,kpntj);
 			
 			for(int v=0; v<Ei.nRows(); v++)
 			{	double dFdEi = -1/(T*std::pow(2*cosh(Ei[v]/(2*T)),2));
 				double viDotvi = vi[v].length_squared();
 				Tblock += prefacT * viDotvi*(-dFdEi);
 				gBlock += prefacT * (-dFdEi);
+				if(!worthwhileDouble) continue;
 				for(int c=0; c<Ej.nRows(); c++)
 				{	double viDotvj = dot(vi[v], vj[c]);
 					double fj = 1./(exp(Ej[c]/T)+1);
-					for(int ae=-1; ae<=+1; ae+=2)
-					{	double delta = EconservePrefac * exp(EconserveExpFac * std::pow(Ej[c]-Ei[v] - ae*vl*kPh,2));
-						double occFactors = (-dFdEi) * (g_kPh+0.5 - ae*(0.5-fj));
-						GammaBlock += prefacGamma * (viDotvi -  viDotvj) * occFactors * delta * phononFactor;
-						tauInvBlock += prefacGamma * occFactors * delta * phononFactor;
+					for(int alpha=0; alpha<omegaPh.nRows(); alpha ++)
+					{	double gk = 1./(exp(omegaPh[alpha]/T) - 1.);
+						double Msq_by_omega = MePh[alpha](c,v).norm() / omegaPh[alpha];
+						for(int ae=-1; ae<=+1; ae+=2)
+						{	double delta = EconservePrefac * exp(EconserveExpFac * std::pow(Ej[c]-Ei[v] - ae*omegaPh[alpha],2));
+							double occFactors = (-dFdEi) * (gk+0.5 - ae*(0.5-fj));
+							GammaBlock += prefacGamma * (viDotvi -  viDotvj) * occFactors * delta * Msq_by_omega;
+							tauInvBlock += prefacGamma * occFactors * delta * Msq_by_omega;
+						}
 					}
 				}
 			}
