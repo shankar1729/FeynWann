@@ -131,9 +131,14 @@ int main(int argc, char** argv)
 			
 			//Calculate remaining (more expensive) quantities for k-point pair:
 			std::vector<vector3<>> vi = bs.getVelocity(kpnti, R);
-			std::vector<vector3<>> vj = bs.getVelocity(kpntj, R);
-			diagMatrix omegaPh = bs.getPhononModes(kpnti-kpntj);
-			std::vector<matrix> MePh = bs.getPhononMatElem(kpnti,kpntj);
+			std::vector<vector3<>> vj;
+			diagMatrix omegaPh;
+			std::vector<matrix> MePh;
+			if(worthwhileDouble)
+			{	vj = bs.getVelocity(kpntj, R);
+				omegaPh = bs.getPhononModes(kpnti-kpntj);
+				MePh = bs.getPhononMatElem(kpnti,kpntj);
+			}
 			
 			for(int v=0; v<Ei.nRows(); v++)
 			{	double dFdEi = -1/(T*std::pow(2*cosh(Ei[v]/(2*T)),2));

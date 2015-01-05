@@ -99,7 +99,9 @@ std::vector<matrix> BandStruct::getDipoleMatElem(vector3<> k) const
 }
 
 std::vector<matrix> BandStruct::getPhononMatElem(vector3<> k1, vector3<> k2) const
-{	const CacheEntry& cEl1 = getElectronCache(k1);
+{	static StopWatch watch("BandStruct::getPhononMatElem"); watch.start();
+	//Get relevant caches:
+	const CacheEntry& cEl1 = getElectronCache(k1);
 	const CacheEntry& cEl2 = getElectronCache(k2);
 	const CacheEntry& cPh = getPhononCache(k1-k2);
 	//Compute double Fourier transform:
@@ -118,6 +120,7 @@ std::vector<matrix> BandStruct::getPhononMatElem(vector3<> k1, vector3<> k2) con
 		result[alpha].reshape(nBands, nBands);
 		result[alpha] = dagger(cEl1.evecs) * result[alpha] * cEl2.evecs; //electron unitary rotations
 	}
+	watch.stop();
 	return result;
 }
 
