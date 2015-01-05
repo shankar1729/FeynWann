@@ -33,7 +33,8 @@ BandStruct::BandStruct(string prefix, double mu, int spinWeight, string phononPr
 	string dirNames[3] = { "x", "y", "z" };
 	for(int j=0; j<3; j++)
 	{	pWannier[j].init(nBands*nBands, cellMap.size());
-		pWannier[j].read((prefix + ".mlwfP" + dirNames[j]).c_str());
+		string pFile = prefix + ".mlwfP" + dirNames[j];
+		if(spinWeight==1) pWannier[j].read(pFile.c_str()); else pWannier[j].read_real(pFile.c_str());
 	}
 	
 	if(phononPrefix.length())
@@ -60,7 +61,7 @@ BandStruct::BandStruct(string prefix, double mu, int spinWeight, string phononPr
 		
 		//Read phonon matrix elements
 		wannierHePh.init(nModes*nBands*nBands, phononCellMapSq.size());
-		matrix wannierHePh_mode(nBands*nBands, phononCellMapSq.size()); //matrix elements for a single mode (stored cotiguously)
+		matrix wannierHePh_mode(nBands*nBands, phononCellMapSq.size()); //matrix elements for a single mode (stored contiguously)
 		FILE* fp = fopen((prefix + ".mlwfHePh").c_str(), "r");
 		for(int alpha=0; alpha<nModes; alpha++)
 		{	if(spinWeight==1) wannierHePh_mode.read(fp); else wannierHePh_mode.read_real(fp);
@@ -91,7 +92,7 @@ std::vector<matrix> BandStruct::getDipoleMatElem(vector3<> k) const
 	for(int j=0; j<3; j++)
 	{	matrix Pk = pWannier[j] * ce.phase;
 		Pk.reshape(nBands, nBands);
-		pk[j] = transpose(ce.evecs) * Pk * ce.evecs; //switch to eigenbasis of Hk
+		pk[j] = dagger(ce.evecs) * Pk * ce.evecs; //switch to eigenbasis of Hk
 	}
 	watch.stop();
 	return pk;
@@ -105,10 +106,10 @@ std::vector<matrix> BandStruct::getPhononMatElem(vector3<> k1, vector3<> k2) con
 	matrix phase(phononCellMapSq.size(),1);
 	for(size_t icp=0; icp<phononCellMapSq.size(); icp++)
 	{	const CellPair& cp = phononCellMapSq[icp];
-		phase.set(icp,0, cis(2*M_PI * (dot(cp.iR1,k1)) - dot(cp.iR2,k2)));
+		phase.set(icp,0, cis(2*M_PI * (dot(cp.iR1,k1) - dot(cp.iR2,k2))));
 	}
 	matrix HePh = wannierHePh * phase; //now a nModes*nBands*nBands column
-	HePh.reshape(nBands*nBands, nModes); //now each column is matrix elemenst for a specific nuclear displacement
+	HePh.reshape(nBands*nBands, nModes); //now each column is matrix elements for a specific nuclear displacement
 	//Apply unitary transformations:
 	HePh = HePh * cPh.evecs; //phonon unitary rotation
 	std::vector<matrix> result(nModes);

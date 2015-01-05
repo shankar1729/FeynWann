@@ -42,8 +42,58 @@ int main(int argc, char** argv)
 	logPrintf("\n");
 
 	//Initialize Wannier bandstructure:
-	BandStruct bs("wannier", mu, spinWeight, "totalE");
+	BandStruct bs("Wannier/wannier", mu, spinWeight, "Wannier/totalE");
 
+	//DEBUG
+// 	{
+// 		int blockStart = (totalBlocks * (mpiUtil->iProcess())) / mpiUtil->nProcesses(); //MPI division
+// 		int blockStop = (totalBlocks * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
+// 		int nKpts = nKptsN1/totalBlocks;
+// 		
+// 		matrix3<> GT = 2*M_PI*inv(~R);
+// 		WignerSeitz BZ(GT);
+// 		double kappa = 0.9;
+// 		double Omega = fabs(det(R));
+// 		
+// 		char fname[256]; sprintf(fname, "tempMdebug.%d", mpiUtil->iProcess());
+// 		FILE* fp = fopen(fname, "w");
+// 		for(int block=blockStart; block<blockStop; block++)
+// 		{	Random::seed(block);
+// 			for(int nk1 =0; nk1<nKpts; nk1++)
+// 			{	vector3<> kpnt1, kpnt2;
+// 				for(int j=0; j<3; j++)
+// 				{	kpnt1[j] = Random::uniform();
+// 					kpnt2[j] = Random::uniform();
+// 				}
+// 				kpnt2 = kpnt1 + (Random::uniform()/kpnt2.length()) * kpnt2;
+// 				{	diagMatrix omegaPh = bs.getPhononModes(kpnt1-kpnt2);
+// 					std::vector<matrix> HePh = bs.getPhononMatElem(kpnt1, kpnt2);
+// 					double nPairs = 0;
+// 					double Msq = 0;
+// 					for(size_t alpha=0; alpha<HePh.size(); alpha++)
+// 						for(int b=0; b<HePh[alpha].nRows(); b++)
+// 						{	Msq += HePh[alpha](b,b).norm();
+// 							nPairs += (0.5*spinWeight);
+// 						}
+// 					Msq *= (HePh.size())/nPairs;
+// 					vector3<> kDiff = BZ.restrict(kpnt1-kpnt2);
+// 					double k = (GT * kDiff).length();
+// 					double MsqOld = std::pow(vl*k,2) * M_PI / (4*Omega*(k*k + kappa*kappa));
+// 					fprintf(fp, "%lg %lg %lg\n", k, sqrt(Msq), sqrt(MsqOld));
+// 				}
+// 			}
+// 		}
+// 		fclose(fp);
+// 		double temp = 0.;
+// 		mpiUtil->bcast(temp);
+// 		if(mpiUtil->isHead())
+// 		{	system("cat tempMdebug.* > tempMdebug");
+// 			system("rm tempMdebug.*");
+// 		}
+// 		finalizeSystem();
+// 		return 0;
+// 	}
+	
 	// Compute T and Gamma
 	double Tsum = 0., TsumSq = 0., GammaSum = 0., GammaSumSq = 0.;
 	double gSum = 0., gSumSq = 0., tauInvSum = 0., tauInvSumSq = 0.;
@@ -101,7 +151,7 @@ int main(int argc, char** argv)
 						{	double delta = EconservePrefac * exp(EconserveExpFac * std::pow(Ej[c]-Ei[v] - ae*omegaPh[alpha],2));
 							double occFactors = (-dFdEi) * (gk+0.5 - ae*(0.5-fj));
 							GammaBlock += prefacGamma * (viDotvi -  viDotvj) * occFactors * delta * Msq_by_omega;
-							tauInvBlock += prefacGamma * occFactors * delta * Msq_by_omega;
+							tauInvBlock += prefacGamma * (-dFdEi) * (gk+0.5-ae*0.5) * delta * Msq_by_omega;
 						}
 					}
 				}
@@ -151,5 +201,10 @@ int main(int argc, char** argv)
 	double fs = 1e-15/invSeconds;
 	logPrintf("tau = %lg +/- %lg fs\n", tau/fs, tauStd/fs);
 	
+	double vF = sqrt(Tt/gMean);
+	double vFstd = vF * 0.5 * hypot(Tstd/Tt, gStd/gMean);
+	logPrintf("vF = %lg +/- %lg\n", vF, vFstd);
+	
+	logPrintf("g(eF) = %lg +/- %lg\n", 3.*gMean, 3.*gStd);
 	finalizeSystem();
 }
