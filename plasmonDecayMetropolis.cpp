@@ -59,7 +59,7 @@ int main(int argc, char** argv)
 	eps.setFrequency(omega);
 	
 	//Initialize Wannier bandstructure:
-	BandStruct bs("wannier", mu, spinWeight);
+	BandStruct bs("Wannier/wannier", mu, spinWeight);
 
 	//Compute the normalization factor
 	int blockStart = (totalBlocks * (mpiUtil->iProcess())) / mpiUtil->nProcesses(); //MPI division

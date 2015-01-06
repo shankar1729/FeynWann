@@ -65,7 +65,7 @@ int main(int argc, char** argv)
 	LineWidth lineWidth("ImSigma.dat");
 
 	//Initialize Wannier bandstructure:
-	BandStruct bs("wannier", mu, spinWeight, "totalE");
+	BandStruct bs("Wannier/wannier", mu, spinWeight, "Wannier/totalE");
 
 	//Compute the normalization factor
 	int blockStart = (totalBlocks * (mpiUtil->iProcess())) / mpiUtil->nProcesses(); //MPI division

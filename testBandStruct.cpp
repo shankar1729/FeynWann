@@ -28,7 +28,7 @@ int main(int argc, char** argv)
 	diagMatrix eigs;
 	FILE * eigsTxt;
 	eigsTxt = fopen("WannierBandstruct.eigenvals","w+");
-	BandStruct bs("wannier", 0., 1);
+	BandStruct bs("Wannier/wannier", 0., 1);
 	for(int ik=0; ik < numKpoints; ik++)
 		bs.getStates(kpoints[ik]).print(eigsTxt);
 	fclose(eigsTxt);
