@@ -100,18 +100,39 @@ std::vector<matrix> BandStruct::getDipoleMatElem(vector3<> k) const
 
 std::vector<matrix> BandStruct::getPhononMatElem(vector3<> k1, vector3<> k2) const
 {	static StopWatch watch("BandStruct::getPhononMatElem"); watch.start();
+	//Get bisecting k-point (within nearest image convention):
+	vector3<> kDiff = k2 - k1;
+	for(int j=0; j<3; j++) kDiff[j] -= floor(kDiff[j]+0.5);
+	vector3<> kMean = k1 + 0.5*kDiff;
 	//Get relevant caches:
+	const CacheEntry& cElMean = getElectronCache(kMean);
 	const CacheEntry& cEl1 = getElectronCache(k1);
 	const CacheEntry& cEl2 = getElectronCache(k2);
 	const CacheEntry& cPh = getPhononCache(k1-k2);
 	//Compute double Fourier transform:
-	matrix phase(phononCellMapSq.size(),1);
+	matrix phase(phononCellMapSq.size(),2);
 	for(size_t icp=0; icp<phononCellMapSq.size(); icp++)
 	{	const CellPair& cp = phononCellMapSq[icp];
 		phase.set(icp,0, cis(2*M_PI * (dot(cp.iR1,k1) - dot(cp.iR2,k2))));
+		phase.set(icp,1, cis(2*M_PI * (dot(cp.iR1,kMean) - dot(cp.iR2,kMean))));
 	}
-	matrix HePh = wannierHePh * phase; //now a nModes*nBands*nBands column
-	HePh.reshape(nBands*nBands, nModes); //now each column is matrix elements for a specific nuclear displacement
+	matrix HePhPair = wannierHePh * phase; //now a nModes*nBands*nBands x 2 matrix (second column is kMean reference)
+	matrix HePh = HePhPair(0,HePhPair.nRows(), 0,1); HePh.reshape(nBands*nBands, nModes); //now each column is matrix elements for a specific nuclear displacement
+	//Translational invariance correction by subtracting reference at kMean:
+	matrix HePhRef = HePhPair(0,HePhPair.nRows(), 1,2); HePhRef.reshape(nBands*nBands, nModes); //corresponding to HePh at kMean
+	for(int alpha=0; alpha<nModes; alpha++)
+	{	matrix Href = HePhRef(0,HePhRef.nRows(), alpha,alpha+1); //select the current mode at kMean
+		Href.reshape(nBands, nBands);
+		Href = dagger(cElMean.evecs) * Href * cElMean.evecs; //switch to eigenbasis
+		for(int b1=0; b1<nBands; b1++)
+			for(int b2=0; b2<nBands; b2++)
+				if(fabs(cElMean.eigs[b1] - cElMean.eigs[b2]) > 1e-4)
+					Href.set(b1,b2, 0.); //not in degenerate subspace; don't correct
+		Href = cElMean.evecs * Href * dagger(cElMean.evecs); //switch back to Wannier basis
+		Href.reshape(nBands*nBands, 1);
+		HePhRef.set(0,HePh.nRows(), alpha,alpha+1, Href); //set the reference value
+	}
+	HePh -= HePhRef;
 	//Apply unitary transformations:
 	HePh = HePh * cPh.evecs; //phonon unitary rotation
 	std::vector<matrix> result(nModes);
@@ -184,7 +205,7 @@ const BandStruct::CacheEntry& BandStruct::getElectronCache(vector3<> k) const
 	Hk.diagonalize(ce->evecs, ce->eigs);
 	//--- update cache:
 	BandStruct& bs = *((BandStruct*)this); //modifiable version of this
-	if(electronCache.size() == 2) bs.electronCache.pop_front(); //discard oldest cache entry
+	if(electronCache.size() == 3) bs.electronCache.pop_front(); //discard oldest cache entry
 	bs.electronCache.push_back(ce); //add new one
 	return *ce;
 }
