@@ -51,10 +51,10 @@ private:
 		matrix evecs; //discrete unitary rotation
 		diagMatrix eigs; //eigenvalues
 	};
-	std::list< std::shared_ptr<CacheEntry> > electronCache, phononCache;
+	std::list< std::shared_ptr<const CacheEntry> > electronCache, phononCache;
 	//Note that the cache functions may update the cache, but are functionally const (henced marked as such). However they are NOT thread safe.
-	const CacheEntry& getElectronCache(vector3<> k) const;
-	const CacheEntry& getPhononCache(vector3<> q) const;
+	std::shared_ptr<const CacheEntry> getElectronCache(vector3<> k) const;
+	std::shared_ptr<const CacheEntry> getPhononCache(vector3<> q) const;
 };
 
 #endif //WANNIERMETROPOLIS_BANDSTRUCT_H

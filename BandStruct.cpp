@@ -73,26 +73,26 @@ BandStruct::BandStruct(string prefix, double mu, int spinWeight, string phononPr
 
 diagMatrix BandStruct::getStates(vector3<> k) const
 {   static StopWatch watch("BandStruct::getStates"); watch.start();
-	const CacheEntry& ce = getElectronCache(k);
+	std::shared_ptr<const CacheEntry> ce = getElectronCache(k);
 	watch.stop();
-	return ce.eigs;
+	return ce->eigs;
 }
 
 diagMatrix BandStruct::getPhononModes(vector3<> q) const
 {	static StopWatch watch("BandStruct::getPhononModes"); watch.start();
-	const CacheEntry& ce = getPhononCache(q);
+	std::shared_ptr<const CacheEntry> ce = getPhononCache(q);
 	watch.stop();
-	return ce.eigs;
+	return ce->eigs;
 }
 
 std::vector<matrix> BandStruct::getDipoleMatElem(vector3<> k) const
 {	static StopWatch watch("BandStruct::getDipoleMatElem"); watch.start();
-	const CacheEntry& ce = getElectronCache(k);
+	std::shared_ptr<const CacheEntry> ce = getElectronCache(k);
 	std::vector<matrix> pk(3);
 	for(int j=0; j<3; j++)
-	{	matrix Pk = pWannier[j] * ce.phase;
+	{	matrix Pk = pWannier[j] * ce->phase;
 		Pk.reshape(nBands, nBands);
-		pk[j] = dagger(ce.evecs) * Pk * ce.evecs; //switch to eigenbasis of Hk
+		pk[j] = dagger(ce->evecs) * Pk * ce->evecs; //switch to eigenbasis of Hk
 	}
 	watch.stop();
 	return pk;
@@ -105,10 +105,10 @@ std::vector<matrix> BandStruct::getPhononMatElem(vector3<> k1, vector3<> k2) con
 	for(int j=0; j<3; j++) kDiff[j] -= floor(kDiff[j]+0.5);
 	vector3<> kMean = k1 + 0.5*kDiff;
 	//Get relevant caches:
-	const CacheEntry& cElMean = getElectronCache(kMean);
-	const CacheEntry& cEl1 = getElectronCache(k1);
-	const CacheEntry& cEl2 = getElectronCache(k2);
-	const CacheEntry& cPh = getPhononCache(k1-k2);
+	std::shared_ptr<const CacheEntry> cElMean = getElectronCache(kMean);
+	std::shared_ptr<const CacheEntry> cEl1 = getElectronCache(k1);
+	std::shared_ptr<const CacheEntry> cEl2 = getElectronCache(k2);
+	std::shared_ptr<const CacheEntry> cPh = getPhononCache(k1-k2);
 	//Compute double Fourier transform:
 	matrix phase(phononCellMapSq.size(),2);
 	for(size_t icp=0; icp<phononCellMapSq.size(); icp++)
@@ -123,23 +123,23 @@ std::vector<matrix> BandStruct::getPhononMatElem(vector3<> k1, vector3<> k2) con
 	for(int alpha=0; alpha<nModes; alpha++)
 	{	matrix Href = HePhRef(0,HePhRef.nRows(), alpha,alpha+1); //select the current mode at kMean
 		Href.reshape(nBands, nBands);
-		Href = dagger(cElMean.evecs) * Href * cElMean.evecs; //switch to eigenbasis
+		Href = dagger(cElMean->evecs) * Href * cElMean->evecs; //switch to eigenbasis
 		for(int b1=0; b1<nBands; b1++)
 			for(int b2=0; b2<nBands; b2++)
-				if(fabs(cElMean.eigs[b1] - cElMean.eigs[b2]) > 1e-4)
+				if(fabs(cElMean->eigs[b1] - cElMean->eigs[b2]) > 1e-4)
 					Href.set(b1,b2, 0.); //not in degenerate subspace; don't correct
-		Href = cElMean.evecs * Href * dagger(cElMean.evecs); //switch back to Wannier basis
+		Href = cElMean->evecs * Href * dagger(cElMean->evecs); //switch back to Wannier basis
 		Href.reshape(nBands*nBands, 1);
 		HePhRef.set(0,HePh.nRows(), alpha,alpha+1, Href); //set the reference value
 	}
 	HePh -= HePhRef;
 	//Apply unitary transformations:
-	HePh = HePh * cPh.evecs; //phonon unitary rotation
+	HePh = HePh * cPh->evecs; //phonon unitary rotation
 	std::vector<matrix> result(nModes);
 	for(int alpha=0; alpha<nModes; alpha++)
 	{	result[alpha] = HePh(0,HePh.nRows(), alpha,alpha+1); //select the current mode
 		result[alpha].reshape(nBands, nBands);
-		result[alpha] = dagger(cEl1.evecs) * result[alpha] * cEl2.evecs; //electron unitary rotations
+		result[alpha] = dagger(cEl1->evecs) * result[alpha] * cEl2->evecs; //electron unitary rotations
 	}
 	watch.stop();
 	return result;
@@ -169,16 +169,16 @@ double BandStruct::get_mk1k2(vector3<> k1, vector3<> k2, double omega, double T)
 
 std::vector< vector3<> > BandStruct::getVelocity(vector3<> k, const matrix3<>& R) const
 {	static StopWatch watch("BandStruct::getVelocity"); watch.start();
-	const CacheEntry& ce = getElectronCache(k);
+	std::shared_ptr<const CacheEntry> ce = getElectronCache(k);
 	std::vector< vector3<> > v(nBands);
 	for(int j = 0; j < 3; j++)
-	{	matrix phasePrime = ce.phase;
+	{	matrix phasePrime = ce->phase;
 		complex* phasePrimeData = phasePrime.data();
 		for(size_t ic=0; ic<cellMap.size(); ic++)
 			phasePrimeData[ic] *= complex(0,cellMap[ic][j]); //multiply phase by I*iR[j] to get phasePrime
 		matrix dHdk = hWannier * phasePrime;
 		dHdk.reshape(nBands, nBands);
-		diagMatrix vj = diag(dagger(ce.evecs) * dHdk * ce.evecs);
+		diagMatrix vj = diag(dagger(ce->evecs) * dHdk * ce->evecs);
 		for(int b = 0; b<nBands; b++) v[b][j] = vj[b];
 	}
 	for(vector3<>& vb: v) vb = R * vb; //Convert to Cartesian
@@ -186,11 +186,11 @@ std::vector< vector3<> > BandStruct::getVelocity(vector3<> k, const matrix3<>& R
 	return v;
 }
 
-const BandStruct::CacheEntry& BandStruct::getElectronCache(vector3<> k) const
+std::shared_ptr<const BandStruct::CacheEntry> BandStruct::getElectronCache(vector3<> k) const
 {	//Check cache first:
 	for(const auto& entry: electronCache)
 		if(entry->k == k)
-			return *entry;
+			return entry;
 	//Not found in cache; generate:
 	auto ce = std::make_shared<CacheEntry>();
 	ce->k = k;
@@ -207,14 +207,14 @@ const BandStruct::CacheEntry& BandStruct::getElectronCache(vector3<> k) const
 	BandStruct& bs = *((BandStruct*)this); //modifiable version of this
 	if(electronCache.size() == 3) bs.electronCache.pop_front(); //discard oldest cache entry
 	bs.electronCache.push_back(ce); //add new one
-	return *ce;
+	return ce;
 }
 
-const BandStruct::CacheEntry& BandStruct::getPhononCache(vector3<> q) const
+std::shared_ptr<const BandStruct::CacheEntry> BandStruct::getPhononCache(vector3<> q) const
 {	//Check cache first:
 	for(const auto& entry: phononCache)
 		if(entry->k == q)
-			return *entry;
+			return entry;
 	//Not found in cache; generate:
 	auto ce = std::make_shared<CacheEntry>();
 	ce->k = q;
@@ -232,5 +232,5 @@ const BandStruct::CacheEntry& BandStruct::getPhononCache(vector3<> q) const
 	BandStruct& bs = *((BandStruct*)this); //modifiable version of this
 	if(phononCache.size() == 1) bs.phononCache.pop_front(); //discard oldest cache entries
 	bs.phononCache.push_back(ce); //add new one
-	return *ce;
+	return ce;
 }
