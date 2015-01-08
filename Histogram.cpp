@@ -7,7 +7,7 @@
 #include <math.h>
 
 Histogram::Histogram(double Emin, double dE, double Emax)
-: Emin(Emin), dE(dE), normFac(1./(dE*sqrt(2*M_PI))), out(ceil((Emax-Emin)/dE), 0.)
+: Emin(Emin), dE(dE), normFac(1./(dE*sqrt(2*M_PI))), out(int(ceil((Emax-Emin)/dE)), 0.)
 {
 }
 

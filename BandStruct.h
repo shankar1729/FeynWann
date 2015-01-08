@@ -15,7 +15,10 @@ public:
 	diagMatrix getStates(vector3<> k) const;
 	diagMatrix getPhononModes(vector3<> q) const;
 	std::vector<matrix> getDipoleMatElem(vector3<> k) const;
+
 	std::vector<matrix> getPhononMatElem(vector3<> k1, vector3<> k2) const;
+	void setPhononMatElemArray(vector3<> k1, const std::vector< vector3<> >& k2arr, std::vector<matrix>* result) const; //get matrix elements for fixed k1 and ana array of k2 (for efficiency)
+	
 	double get_mk(vector3<> k, double omega, double T) const; //calculate the energy conservation weight at a given k-point
 	double get_mk1k2(vector3<> k1, vector3<> k2, double omega, double T) const; //calculate the energy conservation weight at a given k-point pair
 	std::vector< vector3<> > getVelocity(vector3<> k, const matrix3<>& R) const; //calculate velocities (in Cartesian coordinates; converted using lattice vectors R)
