@@ -186,11 +186,17 @@ int main(int argc, char** argv)
 	const double Volt = Joule/Coulomb;
 	const double Ampere = Coulomb*invSeconds;
 	const double Ohm = Volt/Ampere;
-
+	const double fs = 1e-15/invSeconds;
+	
 	// Calculate Resistivity
 	double rho = Omega*Gamma/(Tt*Tt);
 	double rhoStd = rho * hypot(GammaStd/Gamma, sqrt(2.)*Tstd/Tt);
 	logPrintf("Resistivity = %lg +/- %lg ohm-m\n", rho/(Ohm*meter), rhoStd/(Ohm*meter));
+	
+	//Drude relaxation time
+	double tauDrude = Tt / Gamma;
+	double tauDrudeStd = tauDrude * hypot(Tstd/Tt, GammaStd/Gamma);
+	logPrintf("tauDrude = %lg +/- %lg fs\n", tauDrude/fs, tauDrudeStd/fs);
 	
 	//Calculate lifetime:
 	mpiUtil->allReduce(gSum, MPIUtil::ReduceSum);
@@ -203,7 +209,6 @@ int main(int argc, char** argv)
 	double tauInvStd = sqrt(tauInvSumSq/totalBlocks - tauInv*tauInv)/sqrt(totalBlocks);
 	double tau = gMean / tauInv;
 	double tauStd = tau * hypot(tauInvStd/tauInv, gStd/gMean);
-	double fs = 1e-15/invSeconds;
 	logPrintf("tau = %lg +/- %lg fs\n", tau/fs, tauStd/fs);
 	
 	double vF = sqrt(Tt/gMean);

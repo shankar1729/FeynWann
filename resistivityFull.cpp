@@ -7,7 +7,7 @@
 int main(int argc, char** argv)
 {	int nPhysicalCores = nProcsAvailable; //before overriden by initSystem()
 	string inputFilename; bool dryRun, printDefaults;
-	initSystemCmdline(argc, argv, "Monte Carlo estimate of resistivity", inputFilename, dryRun, printDefaults);
+	initSystemCmdline(argc, argv, "LInearized-Boltzmann calculation of resistivity", inputFilename, dryRun, printDefaults);
 
 	//Get the system parameters (mu, T, lattice vectors etc.)
 	InputMap inputMap(inputFilename);
@@ -33,7 +33,7 @@ int main(int argc, char** argv)
 	BandStruct bs("Wannier/wannier", mu, spinWeight, "Wannier/totalE");
 
 	//Compile list of k-points and bands within fermi level:
-	vector3<int> Nk(1,1,1); Nk *= 32;
+	vector3<int> Nk(1,1,1); Nk *= 16; //32;
 	int NkProd = Nk[0]*Nk[1]*Nk[2];
 	int ik0start = (Nk[0] * mpiUtil->iProcess()) / mpiUtil->nProcesses();
 	int ik0stop = (Nk[0] * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
@@ -237,6 +237,7 @@ int main(int argc, char** argv)
 		const double Volt = Joule/Coulomb;
 		const double Ampere = Coulomb*invSeconds;
 		const double Ohm = Volt/Ampere;
+		const double fs = 1e-15/invSeconds;
 		
 		// Calculate Resistivity
 		double rho = 1./sigma;
@@ -252,7 +253,6 @@ int main(int argc, char** argv)
 		
 		//Mean lifetime:
 		double tauInv = tauInvNum / weightSum;
-		double fs = 1e-15/invSeconds;
 		logPrintf("tau = %lg fs\n", (1./tauInv)/fs);
 	}
 	

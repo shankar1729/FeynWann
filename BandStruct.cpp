@@ -99,7 +99,7 @@ std::vector<matrix> BandStruct::getDipoleMatElem(vector3<> k) const
 }
 
 std::vector<matrix> BandStruct::getPhononMatElem(vector3<> k1, vector3<> k2) const
-{	static StopWatch watch("BandStruct::getPhononMatElem"); watch.start();
+{	static StopWatch watch("BandStruct::getPhononMatElem"), watchMatMul("BandStruct::getPhononMatElem_Mul"); watch.start();
 	//Get bisecting k-point (within nearest image convention):
 	vector3<> kDiff = k2 - k1;
 	for(int j=0; j<3; j++) kDiff[j] -= floor(kDiff[j]+0.5);
@@ -116,7 +116,9 @@ std::vector<matrix> BandStruct::getPhononMatElem(vector3<> k1, vector3<> k2) con
 		phase.set(icp,0, cis(2*M_PI * (dot(cp.iR1,k1) - dot(cp.iR2,k2))));
 		phase.set(icp,1, cis(2*M_PI * (dot(cp.iR1,kMean) - dot(cp.iR2,kMean))));
 	}
+	watchMatMul.start();
 	matrix HePhPair = wannierHePh * phase; //now a nModes*nBands*nBands x 2 matrix (second column is kMean reference)
+	watchMatMul.stop();
 	matrix HePh = HePhPair(0,HePhPair.nRows(), 0,1); HePh.reshape(nBands*nBands, nModes); //now each column is matrix elements for a specific nuclear displacement
 	//Translational invariance correction by subtracting reference at kMean:
 	matrix HePhRef = HePhPair(0,HePhPair.nRows(), 1,2); HePhRef.reshape(nBands*nBands, nModes); //corresponding to HePh at kMean
