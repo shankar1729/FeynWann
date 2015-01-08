@@ -119,13 +119,12 @@ int main(int argc, char** argv)
 	//Generate list of k-point pairs with relevant coupling:
 	double weightCut = 1e-6;
 	double EconserveExpFac = -0.5/(T*T), EconservePrefac = 1./(sqrt(2*M_PI)*T); //energy conserving Gaussian parameters
-	struct Kpair { int kIndex1, kIndex2; };
-	std::vector<Kpair> kpairs;
-	Kpair kpair;
-	for(kpair.kIndex1=0; kpair.kIndex1<int(ikList.size()); kpair.kIndex1++)
-	for(kpair.kIndex2=0; kpair.kIndex2<kpair.kIndex1; kpair.kIndex2++) //ignore same-k contributions (zero due to translational invariance)
-	{	vector3<int> ik1 = ikList[kpair.kIndex1];
-		vector3<int> ik2 = ikList[kpair.kIndex2];
+	std::vector< std::vector<int> > kpairs(ikList.size());
+	int nPairs = 0;
+	for(int kIndex1=0; kIndex1<int(ikList.size()); kIndex1++)
+	for(int kIndex2=0; kIndex2<kIndex1; kIndex2++) //ignore same-k contributions (zero due to translational invariance)
+	{	vector3<int> ik1 = ikList[kIndex1];
+		vector3<int> ik2 = ikList[kIndex2];
 		vector3<int> ikDiff = ik1 - ik2;
 		for(int dir=0; dir<3; dir++)
 			ikDiff[dir] = positiveRemainder(ikDiff[dir], Nk[dir]);
@@ -142,49 +141,85 @@ int main(int argc, char** argv)
 					needPair = true;
 			}
 		}
-		if(needPair) kpairs.push_back(kpair);
+		if(needPair)
+		{	nPairs++;
+			//Try to even out the distribution of the first index in stored pairs:
+			if(kpairs[kIndex1].size() < kpairs[kIndex2].size())
+				kpairs[kIndex1].push_back(kIndex2);
+			else
+				kpairs[kIndex2].push_back(kIndex1);
+		}
 	}
-	int nPairs = int(kpairs.size());
 	int nPairsTot = int((ikList.size()*(ikList.size()+1))/2);
 	logPrintf("%d kpoints, %d of %d pairs (%d%%) relevant\n",
 		int(ikList.size()), nPairs, nPairsTot, int((100*nPairs)/nPairsTot) );
 	logFlush();
+	//--- generate blocks of kpairSets with block size constraint:
+	const int maxBlockSize = 64;
+	struct KpairSet { int kIndex1; std::vector<int> kIndex2set; };
+	std::vector<KpairSet> kpairSets;
+	kpairSets.reserve(ikList.size() * ceildiv(ceildiv(nPairs, int(ikList.size())), maxBlockSize));
+	for(int kIndex1=0; kIndex1<int(ikList.size()); kIndex1++)
+	{	int nBlocks = ceildiv(int(kpairs[kIndex1].size()), maxBlockSize);
+		for(int iBlock=0; iBlock<nBlocks; iBlock++)
+		{	size_t blockStart = (kpairs[kIndex1].size() * iBlock)/nBlocks;
+			size_t blockStop = (kpairs[kIndex1].size() * (iBlock+1))/nBlocks;
+			KpairSet kpairSet;
+			kpairSet.kIndex1 = kIndex1;
+			kpairSet.kIndex2set.assign(kpairs[kIndex1].begin()+blockStart, kpairs[kIndex1].begin()+blockStop);
+			kpairSets.push_back(kpairSet);
+		}
+	}
 	
 	//Fill matrix 'S' in the derivation:
 	matrix S = zeroes(nStates, nStates);
 	double prefacS = M_PI/NkProd;
 	double tauInvNum = 0.;
-	int pairStart = (nPairs * mpiUtil->iProcess()) / mpiUtil->nProcesses();
-	int pairStop = (nPairs * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
-	for(int pair=pairStart; pair<pairStop; pair++)
-	{	const Kpair& kpair = kpairs[pair];
-		vector3<int> ik1 = ikList[kpair.kIndex1];
-		vector3<int> ik2 = ikList[kpair.kIndex2];
-		vector3<> k1 = invDiagNk * ik1;
-		vector3<> k2 = invDiagNk * ik2;
-		diagMatrix omegaPh = bs.getPhononModes(k1-k2);
-		std::vector<matrix> MePh = bs.getPhononMatElem(k1, k2);
-		for(int swapped=0; swapped<2; swapped++)
-		{	for(int iState1: stateMap[ik1])
-			for(int iState2: stateMap[ik2])
-			{	double Scur = 0.;
-				const State& state1 = states[iState1];
-				const State& state2 = states[iState2];
-				for(int alpha=0; alpha<omegaPh.nRows(); alpha ++)
-				{	double gk = 1./(exp(omegaPh[alpha]/T) - 1.); //Bose factor
-					double Msq_by_omega = MePh[alpha](state1.b,state2.b).norm() / omegaPh[alpha];
-					for(int ae=-1; ae<=+1; ae+=2)
-					{	double delta = EconservePrefac * exp(EconserveExpFac * std::pow(state2.e - state1.e - ae*omegaPh[alpha],2));
-						Scur += prefacS * (gk+0.5 + ae*(0.5-state1.f)) * delta * Msq_by_omega;
-						tauInvNum += prefacS * state1.fPrime * (gk+0.5 + ae*0.5) * delta * Msq_by_omega;
+	int pairSetStart = (kpairSets.size() * mpiUtil->iProcess()) / mpiUtil->nProcesses();
+	int pairSetStop = (kpairSets.size() * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
+	for(int pairSet=pairSetStart; pairSet<pairSetStop; pairSet++)
+	{	const KpairSet& kpairSet = kpairSets[pairSet];
+		int kIndex1 = kpairSet.kIndex1;
+		//Get e-ph elements for all pairs in set together:
+		std::vector< std::vector<matrix> > MePhArr(kpairSet.kIndex2set.size());
+		{	vector3<> k1 = invDiagNk * ikList[kIndex1];
+			std::vector< vector3<> > k2arr;
+			k2arr.reserve(kpairSet.kIndex2set.size());
+			for(int kIndex2: kpairSet.kIndex2set)
+				k2arr.push_back(invDiagNk * ikList[kIndex2]);
+			bs.setPhononMatElemArray(k1, k2arr, MePhArr.data());
+		}
+		//Now process one pair at a time:
+		for(size_t iBlockEntry=0; iBlockEntry<kpairSet.kIndex2set.size(); iBlockEntry++)
+		{	int kIndex2 = kpairSet.kIndex2set[iBlockEntry];
+			vector3<int> ik1 = ikList[kIndex1];
+			vector3<int> ik2 = ikList[kIndex2];
+			vector3<> k1 = invDiagNk * ik1;
+			vector3<> k2 = invDiagNk * ik2;
+			diagMatrix omegaPh = bs.getPhononModes(k1-k2);
+			std::vector<matrix>& MePh = MePhArr[iBlockEntry];
+			for(int swapped=0; swapped<2; swapped++)
+			{	for(int iState1: stateMap[ik1])
+				for(int iState2: stateMap[ik2])
+				{	double Scur = 0.;
+					const State& state1 = states[iState1];
+					const State& state2 = states[iState2];
+					for(int alpha=0; alpha<omegaPh.nRows(); alpha ++)
+					{	double gk = 1./(exp(omegaPh[alpha]/T) - 1.); //Bose factor
+						double Msq_by_omega = MePh[alpha](state1.b,state2.b).norm() / omegaPh[alpha];
+						for(int ae=-1; ae<=+1; ae+=2)
+						{	double delta = EconservePrefac * exp(EconserveExpFac * std::pow(state2.e - state1.e - ae*omegaPh[alpha],2));
+							Scur += prefacS * (gk+0.5 + ae*(0.5-state1.f)) * delta * Msq_by_omega;
+							tauInvNum += prefacS * state1.fPrime * (gk+0.5 + ae*0.5) * delta * Msq_by_omega;
+						}
 					}
+					S.set(iState1,iState2, Scur);
 				}
-				S.set(iState1,iState2, Scur);
-			}
-			if(!swapped) //need to do this only after first time (at most 2 passes through loop)
-			{	std::swap(ik1, ik2);
-				std::swap(k1, k2);
-				for(matrix& M: MePh) M = dagger(M);
+				if(!swapped) //need to do this only after first time (at most 2 passes through loop)
+				{	std::swap(ik1, ik2);
+					std::swap(k1, k2);
+					for(matrix& M: MePh) M = dagger(M);
+				}
 			}
 		}
 	}
