@@ -3,10 +3,147 @@
 #include <core/Thread.h>
 #include "BandStruct.h"
 #include "InputMap.h"
+#include <deque>
+
+struct SparseMatrix
+{	//Triplet format:
+	const int nRows, nCols;
+	struct Entry
+	{	int i,j; double Mij; 
+		Entry(int i, int j, double Mij) : i(i), j(j), Mij(Mij) {}
+	};
+	std::vector<Entry> entries; //MPI divided; each process has a subset
+	
+	SparseMatrix(int nRows, int nCols, int nNZestimate=0) : nRows(nRows), nCols(nCols)
+	{	if(nNZestimate) entries.reserve(nNZestimate / mpiUtil->nProcesses());
+	}
+	
+	//Matrix multiply:
+	matrix operator*(const matrix& v) const
+	{	static StopWatch watch("SparseMatrix::operator*"); watch.start();
+		matrix out = zeroes(nRows, v.nCols());
+		complex* outData = out.data(); const complex* vData = v.data();
+		for(const Entry& entry: entries)
+			for(int col=0; col<v.nCols(); col++)
+				outData[out.index(entry.i, col)] += entry.Mij * vData[v.index(entry.j, col)];
+		out.allReduce(MPIUtil::ReduceSum);
+		watch.stop();
+		return out;
+	}
+	
+	//Calculate Sum_i Mij:
+	diagMatrix DiagSumRows() const
+	{	diagMatrix out(nCols, 0.);
+		for(const Entry& entry: entries)
+			out[entry.j] += entry.Mij;
+		out.allReduce(MPIUtil::ReduceSum);
+		return out;
+	}
+	
+	complex safe_dot(const matrix& A, const matrix& B) const
+	{	complex result = trace(dagger(A) * B);
+		mpiUtil->bcast(&result.real(), 2);
+		return result;
+	}
+	
+	double safe_nrm2(const matrix& A) const
+	{	return sqrt(safe_dot(A,A).real());
+	}
+	
+	//Solve A x = b iteratively using something like GMRES/DIIS (pass in an initial guess for x):
+	void applyInverse(const matrix& b, matrix& x) const
+	{	const int nIterations = 100;
+		const int maxHistory = 10;
+		const double threshold = 1e-5;
+		std::deque<matrix> xPrev, rPrev;
+		matrix overlap(maxHistory, maxHistory);
+		matrix r = (*this) * x - b; //initial residual
+		double rNormThresh = threshold * safe_nrm2(r);
+		logPrintf("\n");
+		for(int iter=0; iter<=nIterations; iter++)
+		{	//Truncate history if necessary:
+			if((int)xPrev.size() >= maxHistory)
+			{	size_t ndim = xPrev.size();
+				if(ndim>1) overlap.set(0,ndim-1, 0,ndim-1, overlap(1,ndim, 1,ndim));
+				xPrev.pop_front();
+				rPrev.pop_front();
+			}
+			
+			//Update history and report:
+			rPrev.push_back(r);
+			xPrev.push_back(x);
+			double rNorm = safe_nrm2(r);
+			logPrintf("DIIS: Cycle: %2i  |Residual|: %.3e\n", iter, rNorm);
+			if(iter==nIterations) { logPrintf("DIIS: Convergence threshold not reached in %d iterations.\n", iter); break; }
+			if(rNorm < rNormThresh) { logPrintf("DIIS: Converged: |Residual| < %lg |Initial residual|.\n", threshold); break; }
+			
+			//DIIS mixing:
+			//--- Update the overlap matrix
+			size_t ndim = xPrev.size();
+			for(size_t j=0; j<ndim; j++)
+			{	complex thisOverlap = safe_dot(rPrev[j], r);
+				overlap.set(j, ndim-1, thisOverlap);
+				overlap.set(ndim-1, j, thisOverlap.conj());
+			}
+			//--- reset if singular
+			bool singular = false;
+			if(ndim > 1)
+			{	matrix U, Vdag; diagMatrix S;
+				overlap(0,ndim, 0,ndim).svd(U, S, Vdag);
+				if(S.back() < S.front()*threshold)
+				{	logPrintf("DIIS: Singularity in overlap, resetting history.\n");
+					singular = true;
+					xPrev.assign(1, x);
+					rPrev.assign(1, r);
+					overlap.set(0,0, overlap(ndim-1,ndim-1));
+				}
+			}
+			if(!singular)
+			{	//--- Invert the residual overlap matrix to get the minimum of residual
+				matrix cOverlap(ndim+1, ndim+1); //Add row and column to enforce normalization constraint
+				cOverlap.set(0, ndim, 0, ndim, overlap(0,ndim, 0,ndim));
+				for(size_t j=0; j<ndim; j++)
+				{	cOverlap.set(j, ndim, 1);
+					cOverlap.set(ndim, j, 1);
+				}
+				cOverlap.set(ndim, ndim, 0);
+				matrix cOverlap_inv = inv(cOverlap);
+				//---- find best x and corresponding r in current subspace:
+				x.zero();
+				r.zero();
+				for(size_t j=0; j<ndim; j++)
+				{	complex alpha = cOverlap_inv(j, ndim);
+					x +=  alpha * xPrev[j];
+					r += alpha * rPrev[j];
+				}
+			}
+			
+			//Expand subspace:
+			matrix d = r; //search direction
+			double r_r = safe_dot(r,r).real();
+			while(true)
+			{	matrix Ad = (*this) * d;
+				double Ad_Ad = safe_dot(Ad,Ad).real();
+				complex Ad_r = safe_dot(Ad,r);
+				if(Ad_r.abs() < threshold * sqrt(Ad_Ad * r_r))
+				{	//Need to try a new search direction (try random):
+					logPrintf("DIIS: Singularity in subspace expansion, randomizing search direction.\n");
+					if(mpiUtil->isHead())
+						randomize(d);
+					d.bcast();
+					continue;
+				}
+				complex alpha = -Ad_r / Ad_Ad;
+				x += alpha * d;
+				r += alpha * Ad;
+				break;
+			}
+		}
+	}
+};
 
 int main(int argc, char** argv)
-{	int nPhysicalCores = nProcsAvailable; //before overriden by initSystem()
-	string inputFilename; bool dryRun, printDefaults;
+{	string inputFilename; bool dryRun, printDefaults;
 	initSystemCmdline(argc, argv, "LInearized-Boltzmann calculation of resistivity", inputFilename, dryRun, printDefaults);
 
 	//Get the system parameters (mu, T, lattice vectors etc.)
@@ -33,7 +170,7 @@ int main(int argc, char** argv)
 	BandStruct bs("Wannier/wannier", mu, spinWeight, "Wannier/totalE");
 
 	//Compile list of k-points and bands within fermi level:
-	vector3<int> Nk(1,1,1); Nk *= 16; //32;
+	vector3<int> Nk(1,1,1); Nk *= 32;
 	int NkProd = Nk[0]*Nk[1]*Nk[2];
 	int ik0start = (Nk[0] * mpiUtil->iProcess()) / mpiUtil->nProcesses();
 	int ik0stop = (Nk[0] * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
@@ -155,7 +292,7 @@ int main(int argc, char** argv)
 		int(ikList.size()), nPairs, nPairsTot, int((100*nPairs)/nPairsTot) );
 	logFlush();
 	//--- generate blocks of kpairSets with block size constraint:
-	const int maxBlockSize = 64;
+	const int maxBlockSize = 128;
 	struct KpairSet { int kIndex1; std::vector<int> kIndex2set; };
 	std::vector<KpairSet> kpairSets;
 	kpairSets.reserve(ikList.size() * ceildiv(ceildiv(nPairs, int(ikList.size())), maxBlockSize));
@@ -172,7 +309,7 @@ int main(int argc, char** argv)
 	}
 	
 	//Fill matrix 'S' in the derivation:
-	matrix S = zeroes(nStates, nStates);
+	SparseMatrix S(nStates, nStates, (nPairs*1.*nStates*nStates)/nPairsTot);
 	double prefacS = M_PI/NkProd;
 	double tauInvNum = 0.;
 	int pairSetStart = (kpairSets.size() * mpiUtil->iProcess()) / mpiUtil->nProcesses();
@@ -213,7 +350,7 @@ int main(int argc, char** argv)
 							tauInvNum += prefacS * state1.fPrime * (gk+0.5 + ae*0.5) * delta * Msq_by_omega;
 						}
 					}
-					S.set(iState1,iState2, Scur);
+					S.entries.push_back(SparseMatrix::Entry(iState1,iState2, Scur));
 				}
 				if(!swapped) //need to do this only after first time (at most 2 passes through loop)
 				{	std::swap(ik1, ik2);
@@ -223,73 +360,57 @@ int main(int argc, char** argv)
 			}
 		}
 	}
-	S.allReduce(MPIUtil::ReduceSum);
 	mpiUtil->allReduce(tauInvNum, MPIUtil::ReduceSum);
 	
-	//Do the final processing on head alone (but-multithreaded)
-	if(mpiUtil->isHead())
-	{	//Make sure head can use all cores of machine (other processes ons ame node are now done)
-		nProcsAvailable = nPhysicalCores;
-		resumeOperatorThreading();
-		
-		//Construct matrix 'B' in the derivation:
-		matrix ones(1,nStates);
-		for(int iState=0; iState<nStates; iState++)
-			ones.set(0,iState, 1.);
-		matrix Ssum = ones * S; // = Sum_l S_{l,i} in derivation
-		diagMatrix DiagSsum(nStates);
-		for(int iState=0; iState<nStates; iState++)
-			DiagSsum[iState] = Ssum(0,iState).real();
-		matrix B = S - DiagSsum;
-		
-		//Invert B safely (handling its null space properly):
-		matrix invB;
-		{	matrix BU, BVdag; diagMatrix BS;
-			B.svd(BU, BS, BVdag);
-			diagMatrix BSinv(BS); for(double& s: BSinv) s = (s<1e-6*BS[0] ? 0. : 1./s);
-			invB = dagger(BVdag) * BSinv * dagger(BU);
-		}
-		
-		//Construct velocity and fPrime matrices:
-		matrix V(nStates, 3); diagMatrix fPrime(nStates);
-		for(int iState=0; iState<nStates; iState++)
-		{	const State& state = states[iState];
-			for(int dir=0; dir<3; dir++)
-				V.set(iState, dir, state.v[dir]);
-			fPrime[iState] = state.fPrime;
-		}
-		
-		//Calculate conductivity tensor using Boltzmann equation:
-		matrix sigmaMat = (spinWeight/(NkProd*fabs(det(R)))) * dagger(V) * invB * (fPrime * V);
-		logPrintf("\nConductivity tensor [atomic units]:\n");
-		sigmaMat.print_real(globalLog, " %12.5le ");
-		logPrintf("\n");
-		double sigma = (1./3) * trace(sigmaMat).real();
-		
-		//Report resistivity:
-		const double invSeconds = 2.418884326505e-17;
-		const double Coulomb = Joule/eV;
-		const double Volt = Joule/Coulomb;
-		const double Ampere = Coulomb*invSeconds;
-		const double Ohm = Volt/Ampere;
-		const double fs = 1e-15/invSeconds;
-		
-		// Calculate Resistivity
-		double rho = 1./sigma;
-		logPrintf("Resistivity = %lg ohm-m\n", rho/(Ohm*meter));
-		
-		//Comparison with the simple estimate:
-		double Tt = (-spinWeight/(3.*NkProd)) * trace(dagger(V) * fPrime * V).real();
-		double Gamma = (spinWeight/(3.*NkProd)) * trace(dagger(V) * B * (fPrime * V)).real();
-		double rhoSimple = fabs(det(R))*Gamma/(Tt*Tt);
-		logPrintf("T = %lg\n", Tt);
-		logPrintf("Gamma = %lg\n", Gamma);
-		logPrintf("Resistivity(simple) = %lg ohm-m\n", rhoSimple/(Ohm*meter));
-		
-		//Mean lifetime:
-		double tauInv = tauInvNum / weightSum;
-		logPrintf("tau = %lg fs\n", (1./tauInv)/fs);
-	}
+	//Convert 'S' to matrix 'B' in the derivation:
+	diagMatrix DiagSsum = S.DiagSumRows();
+	int iStateStart = (nStates * mpiUtil->iProcess()) / mpiUtil->nProcesses();
+	int iStateStop = (nStates * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
+	for(int iState=iStateStart; iState<iStateStop; iState++)
+		S.entries.push_back(SparseMatrix::Entry(iState, iState, -DiagSsum[iState]));
+	const SparseMatrix& B = S; //call it B for clarity in the following
 	
+	//Construct velocity and fPrime matrices:
+	matrix V(nStates, 3); diagMatrix fPrime(nStates);
+	for(int iState=0; iState<nStates; iState++)
+	{	const State& state = states[iState];
+		for(int dir=0; dir<3; dir++)
+			V.set(iState, dir, state.v[dir]);
+		fPrime[iState] = state.fPrime;
+	}
+	matrix fPrimeV = fPrime * V;
+	
+	//Simple estimate (analgous to resistivity.cpp, but on uniform k-mesh):
+	double Tt = (-spinWeight/(3.*NkProd)) * trace(dagger(V) * fPrimeV).real();
+	double Gamma = (spinWeight/(3.*NkProd)) * trace(dagger(V) * (B * fPrimeV)).real();
+	double rhoSimple = fabs(det(R))*Gamma/(Tt*Tt);
+	double tauDrude = Tt / Gamma;
+	
+	//Calculate inv(B) * fPrimeV iteratively:
+	matrix invB_fPrimeV = -tauDrude * fPrimeV; //Drude model as initial guess
+	B.applyInverse(fPrimeV, invB_fPrimeV);
+	
+	//Calculate conductivity tensor using Boltzmann equation:
+	matrix sigmaMat = (spinWeight/(NkProd*fabs(det(R)))) * dagger(V) * invB_fPrimeV;
+	logPrintf("\nConductivity tensor [atomic units]:\n");
+	sigmaMat.print_real(globalLog, " %12.5le ");
+	logPrintf("\n");
+	double sigma = (1./3) * trace(sigmaMat).real();
+	double rho = 1./sigma;
+	double tauInv = tauInvNum / weightSum;
+	
+	//Report:
+	const double invSeconds = 2.418884326505e-17;
+	const double Coulomb = Joule/eV;
+	const double Volt = Joule/Coulomb;
+	const double Ampere = Coulomb*invSeconds;
+	const double Ohm = Volt/Ampere;
+	const double fs = 1e-15/invSeconds;
+	logPrintf("T = %lg\n", Tt);
+	logPrintf("Gamma = %lg\n", Gamma);
+	logPrintf("tauDrude = %lg fs\n", tauDrude/fs);
+	logPrintf("tau      = %lg fs\n", (1./tauInv)/fs);
+	logPrintf("Resistivity(simple) = %lg ohm-m\n", rhoSimple/(Ohm*meter));
+	logPrintf("Resistivity         = %lg ohm-m\n\n", rho/(Ohm*meter));
 	finalizeSystem();
 }

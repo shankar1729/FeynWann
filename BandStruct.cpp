@@ -105,9 +105,10 @@ std::vector<matrix> BandStruct::getPhononMatElem(vector3<> k1, vector3<> k2) con
 }
 
 void BandStruct::setPhononMatElemArray(vector3<> k1, const std::vector< vector3<> >& k2arr, std::vector<matrix>* result) const
-{	static StopWatch watch("BandStruct::getPhononMatElem"), watchMatMul("BandStruct::getPhononMatElem_Mul"); watch.start();
+{	static StopWatch watch("BandStruct::getPhononMatElem"), watchFT("BandStruct::getPhononMatEl_FT"); watch.start();
 	int nk2 = k2arr.size();
 	//Compute double Fourier transform for fixed k1 and all k2 together:
+	watchFT.start();
 	std::vector< vector3<> > kMeanArr(nk2);
 	matrix phase(phononCellMapSq.size(), 2*nk2);
 	for(int ik2=0; ik2<nk2; ik2++)
@@ -124,9 +125,8 @@ void BandStruct::setPhononMatElemArray(vector3<> k1, const std::vector< vector3<
 			phase.set(icp,ik2+nk2, cis(2*M_PI * dot(cp.iR1 - cp.iR2, kMean)));
 		}
 	}
-	watchMatMul.start();
 	matrix HePhPair = wannierHePh * phase; //now a nBands*nBands*nModes x nk2*2 matrix (columns of all k2 results first, followed by all kMean's)
-	watchMatMul.stop();
+	watchFT.stop();
 	//Now process one k2 at a time:
 	std::shared_ptr<const CacheEntry> cEl1 = getElectronCache(k1); //only cache common to all of below
 	for(int ik2=0; ik2<nk2; ik2++)
