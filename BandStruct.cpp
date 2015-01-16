@@ -1,5 +1,6 @@
 #include "BandStruct.h"
 #include <core/Util.h>
+#include <core/Units.h>
 #include <electronic/matrix.h>
 #include <iostream>
 #include <fstream>
@@ -37,6 +38,38 @@ BandStruct::BandStruct(string prefix, double mu, int spinWeight, string phononPr
 		if(spinWeight==1) pWannier[j].read(pFile.c_str()); else pWannier[j].read_real(pFile.c_str());
 	}
 	
+	//Initialize main window (if available):
+	nMain = 0; omegaMain = 0.;
+	{	ifs.open(prefix + ".in"); //read Wannier input file
+		if(ifs.is_open())
+		{	while(!ifs.eof())
+			{	string key; ifs >> key;
+				if(key == "mainWindow")
+				{	double eMin, eMax;
+					ifs >> eMin >> eMax >> nMain;
+					omegaMain = std::min(mu-eMin, eMax-mu);
+					if(omegaMain < 0.) omegaMain = 0.; //if Fermi level does not lie in [eMin,eMax]
+					break;
+				}
+			}
+			ifs.close();
+		}
+	}
+	if(omegaMain)
+	{	assert(nMain > 0 && nMain < nBands); //this is checked by Wannier as well
+		logPrintf("Initialized main window of half-width %lf eV with %d of %d Wannier centers.\n", omegaMain/eV, nMain, nBands);
+		//Initialize compressed Hamiltonian:
+		hWannierMain.init(nMain*nMain, cellMap.size());
+		for(size_t ic=0; ic<cellMap.size(); ic++)
+		{	matrix H = hWannier(0,nBands*nBands, ic,ic+1);
+			H.reshape(nBands, nBands);
+			H = H(0,nMain, 0,nMain); //extract the "main" part
+			H.reshape(nMain*nMain, 1);
+			hWannierMain.set(0,nMain*nMain, ic,ic+1, H);
+		}
+	}
+	else nMain = nBands; //so that all Wannier centers are always used
+	
 	if(phononPrefix.length())
 	{	//Read phonon cell map
 		ifs.open((phononPrefix + ".phononCellMap").c_str());
@@ -71,9 +104,9 @@ BandStruct::BandStruct(string prefix, double mu, int spinWeight, string phononPr
 	}
 }
 
-diagMatrix BandStruct::getStates(vector3<> k) const
+diagMatrix BandStruct::getStates(vector3<> k, double omegaMax) const
 {   static StopWatch watch("BandStruct::getStates"); watch.start();
-	std::shared_ptr<const CacheEntry> ce = getElectronCache(k);
+	std::shared_ptr<const CacheEntry> ce = getElectronCache(k, omegaMax);
 	watch.stop();
 	return ce->eigs;
 }
@@ -163,66 +196,70 @@ void BandStruct::setPhononMatElemArray(vector3<> k1, const std::vector< vector3<
 }
 
 double BandStruct::get_mk(vector3<> k, double omega, double T) const
-{	diagMatrix E = getStates(k);
+{	diagMatrix E = getStates(k, omega);
 	double mk = INFINITY;
-	for(int v=0; v<nBands; v++) if(E[v]<10.*T)
-		for(int c=0; c<nBands; c++) if(E[c]>-10.*T)
+	for(int v=0; v<E.nRows(); v++) if(E[v]<10.*T)
+		for(int c=0; c<E.nRows(); c++) if(E[c]>-10.*T)
 			mk = std::min(mk, mk_sub(E[c], E[v], omega, T));
 	return mk;
 }
 
 double BandStruct::get_mk1k2(vector3<> k1, vector3<> k2, double omega, double T) const
-{	diagMatrix E1 = getStates(k1);
-	diagMatrix E2 = getStates(k2);
+{	diagMatrix E1 = getStates(k1, omega);
+	diagMatrix E2 = getStates(k2, omega);
 	diagMatrix P = getPhononModes(k1-k2);
  	double mk1k2 = INFINITY;
-	for(int v=0; v<nBands; v++) if (E1[v]<10.*T)
-		for(int c=0; c<nBands; c++) if(E2[c]>-10*T)
+	for(int v=0; v<E1.nRows(); v++) if (E1[v]<10.*T)
+		for(int c=0; c<E2.nRows(); c++) if(E2[c]>-10*T)
 			for(int alpha=0; alpha<nModes; alpha++)
 				for(int ae=-1; ae<=+1; ae+=2)
 					mk1k2 = std::min(mk1k2, mk_sub(E2[c], E1[v], omega + ae*P[alpha], T));
 	return mk1k2;
 }
 
-std::vector< vector3<> > BandStruct::getVelocity(vector3<> k, const matrix3<>& R) const
+std::vector< vector3<> > BandStruct::getVelocity(vector3<> k, const matrix3<>& R, double omegaMax) const
 {	static StopWatch watch("BandStruct::getVelocity"); watch.start();
-	std::shared_ptr<const CacheEntry> ce = getElectronCache(k);
-	std::vector< vector3<> > v(nBands);
+	std::shared_ptr<const CacheEntry> ce = getElectronCache(k, omegaMax);
+	const matrix& hWannierEff = ce->nBands==nBands ? hWannier : hWannierMain;
+	std::vector< vector3<> > v(ce->nBands);
 	for(int j = 0; j < 3; j++)
 	{	matrix phasePrime = ce->phase;
 		complex* phasePrimeData = phasePrime.data();
 		for(size_t ic=0; ic<cellMap.size(); ic++)
 			phasePrimeData[ic] *= complex(0,cellMap[ic][j]); //multiply phase by I*iR[j] to get phasePrime
-		matrix dHdk = hWannier * phasePrime;
-		dHdk.reshape(nBands, nBands);
+		matrix dHdk = hWannierEff * phasePrime;
+		dHdk.reshape(ce->nBands, ce->nBands);
 		diagMatrix vj = diag(dagger(ce->evecs) * dHdk * ce->evecs);
-		for(int b = 0; b<nBands; b++) v[b][j] = vj[b];
+		for(int b=0; b<ce->nBands; b++) v[b][j] = vj[b];
 	}
 	for(vector3<>& vb: v) vb = R * vb; //Convert to Cartesian
 	watch.stop();
 	return v;
 }
 
-std::shared_ptr<const BandStruct::CacheEntry> BandStruct::getElectronCache(vector3<> k) const
-{	//Check cache first:
+std::shared_ptr<const BandStruct::CacheEntry> BandStruct::getElectronCache(vector3<> k, double omegaMax) const
+{	int nBandsEff = omegaMax<omegaMain ? nMain : nBands;
+	//Check cache first:
 	for(const auto& entry: electronCache)
-		if(entry->k == k)
+		if(entry->k == k && entry->nBands == nBandsEff)
 			return entry;
 	//Not found in cache; generate:
 	auto ce = std::make_shared<CacheEntry>();
+	ce->nBands = nBandsEff;
 	ce->k = k;
 	//--- calculate phase factors for each cell:
 	ce->phase.init(cellMap.size(), 1);
 	for(size_t ic=0; ic<cellMap.size(); ic++)
 		ce->phase.set(ic,0, cis(2*M_PI*dot(cellMap[ic],k)));
 	//--- compute and diagonalize Hamiltonian for k:
-	matrix Hk = hWannier * ce->phase;
-	Hk.reshape(nBands, nBands);
+	const matrix& hWannierEff = ce->nBands==nBands ? hWannier : hWannierMain;
+	matrix Hk = hWannierEff * ce->phase;
+	Hk.reshape(ce->nBands, ce->nBands);
 	Hk = dagger_symmetrize(Hk);
 	Hk.diagonalize(ce->evecs, ce->eigs);
 	//--- update cache:
 	BandStruct& bs = *((BandStruct*)this); //modifiable version of this
-	if(electronCache.size() == 3) bs.electronCache.pop_front(); //discard oldest cache entry
+	if(electronCache.size() == 6) bs.electronCache.pop_front(); //discard oldest cache entry
 	bs.electronCache.push_back(ce); //add new one
 	return ce;
 }

@@ -29,9 +29,7 @@ int main(int argc, char** argv)
 	const double Eplasmon = inputMap.get("Eplasmon") * eV;
 	const double mu = inputMap.get("mu");
 	const double T = inputMap.get("T") * eV;
-	const double Eplasmon2 = inputMap.get("Eplasmon2") * eV;
 	const int spinWeight = round(inputMap.get("spinWeight"));
-	const double vl = inputMap.get("vl")* meter *2.41888e-17;// m/s in atomic units
 	const matrix3<> R = matrix3<>(0,1,1, 1,0,1, 1,1,0) * (0.5*inputMap.get("aCubic")*Angstrom);
 
 	logPrintf("\nInputs after conversion to atomic units:\n");
@@ -44,9 +42,7 @@ int main(int argc, char** argv)
 	logPrintf("Eplasmon = %lg\n", Eplasmon);
 	logPrintf("mu = %lg\n", mu);
 	logPrintf("T = %lg\n", T);
-	logPrintf("Eplamson2 = %lg\n", Eplasmon2);
 	logPrintf("spinWeight = %d\n", spinWeight);
-	logPrintf("vl = %lg\n", vl);
 	logPrintf("R:\n");
 	R.print(globalLog, " %lg ");
 	if(dryRun)
@@ -85,7 +81,6 @@ int main(int argc, char** argv)
 			}
 			double mk1k2 = bs.get_mk1k2(kpnt1, kpnt2, omega, T);
 			N1block += exp(-0.5*mk1k2/(T*T));
-			diagMatrix Ek = bs.getStates(kpnt1);
 		}
 		N1block /=  nKpts;
 		N1sum += N1block;

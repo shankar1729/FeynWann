@@ -66,15 +66,19 @@ int main(int argc, char** argv)
 // 					kpnt2[j] = Random::uniform();
 // 				}
 // 				kpnt2 = kpnt1 + (Random::uniform()/kpnt2.length()) * kpnt2;
-// 				{	diagMatrix omegaPh = bs.getPhononModes(kpnt1-kpnt2);
+// 				{	diagMatrix E1 = bs.getStates(kpnt1);
+// 					diagMatrix E2 = bs.getStates(kpnt2);
+// 					diagMatrix omegaPh = bs.getPhononModes(kpnt1-kpnt2);
 // 					std::vector<matrix> HePh = bs.getPhononMatElem(kpnt1, kpnt2);
 // 					double nPairs = 0;
 // 					double Msq = 0;
 // 					for(size_t alpha=0; alpha<HePh.size(); alpha++)
 // 						for(int b=0; b<HePh[alpha].nRows(); b++)
-// 						{	Msq += HePh[alpha](b,b).norm();
-// 							nPairs += (0.5*spinWeight);
+// 						{	double weight = exp(-std::pow(0.5*(E1[b]+E2[b])/(1.*eV), 2)); //Gaussian selecting 1eV within Fermi level
+// 							Msq += HePh[alpha](b,b).norm() * weight;
+// 							nPairs += (0.5*spinWeight) * weight;
 // 						}
+// 					if(nPairs < 1.) continue;
 // 					Msq *= (HePh.size())/nPairs;
 // 					vector3<> kDiff = BZ.restrict(kpnt1-kpnt2);
 // 					double k = (GT * kDiff).length();
@@ -117,12 +121,13 @@ int main(int argc, char** argv)
 			}
 			
 			//Calculate energies and filter kpoint pairs:
-			diagMatrix Ei = bs.getStates(kpnti);
-			diagMatrix Ej = bs.getStates(kpntj);
+			double Emax = 10*T; //max energy from Fermi level to consider
+			diagMatrix Ei = bs.getStates(kpnti, Emax);
+			diagMatrix Ej = bs.getStates(kpntj, Emax);
 			bool worthwhileSingle = false, worthwhileDouble = false;
-			for(int v=0; v<Ei.nRows(); v++) if(fabs(Ei[v])<10*T)
+			for(int v=0; v<Ei.nRows(); v++) if(fabs(Ei[v])<Emax)
 			{	worthwhileSingle = true;
-				for(int c=0; c<Ej.nRows(); c++) if(fabs(Ej[c])<10*T)
+				for(int c=0; c<Ej.nRows(); c++) if(fabs(Ej[c])<Emax)
 				{	worthwhileDouble = true;
 					break;
 				}
@@ -130,12 +135,12 @@ int main(int argc, char** argv)
 			if(!worthwhileSingle) continue;
 			
 			//Calculate remaining (more expensive) quantities for k-point pair:
-			std::vector<vector3<>> vi = bs.getVelocity(kpnti, R);
+			std::vector<vector3<>> vi = bs.getVelocity(kpnti, R, Emax);
 			std::vector<vector3<>> vj;
 			diagMatrix omegaPh;
 			std::vector<matrix> MePh;
 			if(worthwhileDouble)
-			{	vj = bs.getVelocity(kpntj, R);
+			{	vj = bs.getVelocity(kpntj, R, Emax);
 				omegaPh = bs.getPhononModes(kpnti-kpntj);
 				MePh = bs.getPhononMatElem(kpnti,kpntj);
 			}
@@ -156,7 +161,7 @@ int main(int argc, char** argv)
 						{	double delta = EconservePrefac * exp(EconserveExpFac * std::pow(Ej[c]-Ei[v] - ae*omegaPh[alpha],2));
 							double occFactors = (-dFdEi) * (gk+0.5 - ae*(0.5-fj));
 							GammaBlock += prefacGamma * (viDotvi -  viDotvj) * occFactors * delta * Msq_by_omega;
-							tauInvBlock += prefacGamma * (-dFdEi) * (gk+0.5-ae*0.5) * delta * Msq_by_omega;
+							tauInvBlock += prefacGamma * occFactors * delta * Msq_by_omega;
 						}
 					}
 				}

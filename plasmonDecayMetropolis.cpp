@@ -147,9 +147,9 @@ int main(int argc, char** argv)
 				{	ik++;
 					bool eventSave = eventSaveInterval && (ik % eventSaveInterval == 0);
 					// Calculate transitions at current k-point:
-					diagMatrix E = bs.getStates(kpnt);
+					diagMatrix E = bs.getStates(kpnt, Eplasmon);
 					std::vector<matrix> Pk = bs.getDipoleMatElem(kpnt);
-					std::vector<vector3<>> vk; if(eventSave) vk = bs.getVelocity(kpnt, R);
+					std::vector<vector3<>> vk; if(eventSave) vk = bs.getVelocity(kpnt, R, Eplasmon);
 					for(int v=0; v<E.nRows(); v++) if(E[v]<10.*T)
 					{	for(int c=0; c<E.nRows(); c++) if(E[c]>-10.*T)
 						{	double mk_cv = BandStruct::mk_sub(E[c], E[v], Eplasmon, T);
