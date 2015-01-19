@@ -39,31 +39,39 @@ BandStruct::BandStruct(string prefix, double mu, int spinWeight, string phononPr
 	}
 	
 	//Initialize main window (if available):
-	nMain = 0; omegaMain = 0.;
-	{	ifs.open(prefix + ".in"); //read Wannier input file
-		if(ifs.is_open())
-		{	while(!ifs.eof())
-			{	string key; ifs >> key;
-				if(key == "mainWindow")
-				{	double eMin, eMax;
-					ifs >> eMin >> eMax >> nMain;
-					omegaMain = std::min(mu-eMin, eMax-mu);
-					if(omegaMain < 0.) omegaMain = 0.; //if Fermi level does not lie in [eMin,eMax]
-					break;
-				}
+	nMain = 0; mainFirst = 0; omegaMain = 0.;
+	{	//read Wannier band contrib file
+		string fname = prefix + ".mlwfBandContrib";
+		FILE* fp = fopen(fname.c_str(), "r");
+		if(!fp) die("Could not open %s for reading.\n", fname.c_str());
+		double eMin = INFINITY, eMax = -INFINITY;
+		mainFirst = 0;
+		int mainLast = nBands;
+		while(!feof(fp))
+		{	int nMin_b, nMax_b; double eMin_b, eMax_b;
+			if(fscanf(fp, "%d %d %lf %lf", &nMin_b, &nMax_b, &eMin_b, &eMax_b) != 4) break;
+			//select tightest possible range that contains Fermi level:
+			if(eMin_b<=mu && mu<=eMax_b && (nMax_b-nMin_b)<(mainLast-mainFirst))
+			{	eMin = eMin_b; eMax = eMax_b;
+				mainFirst = nMin_b; mainLast = nMax_b;
 			}
-			ifs.close();
+		}
+		fclose(fp);
+		nMain = mainLast - mainFirst + 1;
+		if(nMain < nBands) //otherwise no point
+		{	omegaMain = std::min(mu-eMin, eMax-mu);
+			if(omegaMain < 0.) omegaMain = 0.; //if Fermi level does not lie in [eMin,eMax]
 		}
 	}
 	if(omegaMain)
-	{	assert(nMain > 0 && nMain < nBands); //this is checked by Wannier as well
-		logPrintf("Initialized main window of half-width %lf eV with %d of %d Wannier centers.\n", omegaMain/eV, nMain, nBands);
+	{	logPrintf("Initialized main window of half-width %lf eV with %d of %d Wannier centers.\n", omegaMain/eV, nMain, nBands);
+		assert(nMain > 0 && nMain < nBands); //this is checked by Wannier as well
 		//Initialize compressed Hamiltonian:
 		hWannierMain.init(nMain*nMain, cellMap.size());
 		for(size_t ic=0; ic<cellMap.size(); ic++)
 		{	matrix H = hWannier(0,nBands*nBands, ic,ic+1);
 			H.reshape(nBands, nBands);
-			H = H(0,nMain, 0,nMain); //extract the "main" part
+			H = H(mainFirst,mainFirst+nMain, mainFirst,mainFirst+nMain); //extract the "main" part
 			H.reshape(nMain*nMain, 1);
 			hWannierMain.set(0,nMain*nMain, ic,ic+1, H);
 		}
