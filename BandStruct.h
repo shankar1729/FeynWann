@@ -37,8 +37,13 @@ private:
 	std::vector< vector3<int> > cellMap; //electron Wannier cell map
 	int nBands; //number of Wannier bands for the electrons
 	int nMain, mainFirst; double omegaMain; //number of "main" Wannier centers, index of first main center and max frequency for which main window suffices
-	matrix hWannier, pWannier[3]; //Wannier hamiltonian and dipole matrix elements
+	matrix hWannier, pWannier; //Wannier hamiltonian and dipole matrix elements
 	matrix hWannierMain; //Wannier hamiltonian for the main centers alone
+	
+	int nPacked; //packed size of matrix elements (nBands x nBands when no main matrix elements)
+	void compressMatElemArr(matrix& mArr) const; //replace a matrix element array by its packed version
+	void packMatElem(const matrix& m, matrix& mArr, int iCol) const; //pack matrix elements from m, getting rid of non-main by non-main entries, and store in i'th column of mArr
+	matrix unpackMatElem(const matrix& mArr, int iCol) const; //unpack matrix elements from i'th column of mArr
 	
 	//Phonons:
 	std::vector< vector3<int> > phononCellMap; //cell map for phonon force matrix

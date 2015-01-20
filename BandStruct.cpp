@@ -1,6 +1,7 @@
 #include "BandStruct.h"
 #include <core/Util.h>
 #include <core/Units.h>
+#include <core/BlasExtra.h>
 #include <electronic/matrix.h>
 #include <iostream>
 #include <fstream>
@@ -32,10 +33,12 @@ BandStruct::BandStruct(string prefix, double mu, int spinWeight, string phononPr
 	
 	// Read momentum matrix elements
 	string dirNames[3] = { "x", "y", "z" };
+	pWannier.init(nBands*nBands*3, cellMap.size());
+	matrix pWannier_dir(nBands*nBands, cellMap.size()); //matrix elements for a single direction (stored contiguously)
 	for(int j=0; j<3; j++)
-	{	pWannier[j].init(nBands*nBands, cellMap.size());
-		string pFile = prefix + ".mlwfP" + dirNames[j];
-		if(spinWeight==1) pWannier[j].read(pFile.c_str()); else pWannier[j].read_real(pFile.c_str());
+	{	string pFile = prefix + ".mlwfP" + dirNames[j];
+		if(spinWeight==1) pWannier_dir.read(pFile.c_str()); else pWannier_dir.read_real(pFile.c_str());
+		pWannier.set(j*nBands*nBands,(j+1)*nBands*nBands, 0,cellMap.size(), pWannier_dir);
 	}
 	
 	//Initialize main window (if available):
@@ -110,6 +113,12 @@ BandStruct::BandStruct(string prefix, double mu, int spinWeight, string phononPr
 		}
 		fclose(fp);
 	}
+	
+	//Pack matrix elements:
+	nPacked = nMain*nMain + 2*nMain*(nBands-nMain);
+	compressMatElemArr(pWannier);
+	if(wannierHePh)
+		compressMatElemArr(wannierHePh);
 }
 
 diagMatrix BandStruct::getStates(vector3<> k, double omegaMax) const
@@ -129,12 +138,11 @@ diagMatrix BandStruct::getPhononModes(vector3<> q) const
 std::vector<matrix> BandStruct::getDipoleMatElem(vector3<> k) const
 {	static StopWatch watch("BandStruct::getDipoleMatElem"); watch.start();
 	std::shared_ptr<const CacheEntry> ce = getElectronCache(k);
+	matrix Pk = pWannier * ce->phase;
+	Pk.reshape(nPacked, 3);
 	std::vector<matrix> pk(3);
 	for(int j=0; j<3; j++)
-	{	matrix Pk = pWannier[j] * ce->phase;
-		Pk.reshape(nBands, nBands);
-		pk[j] = dagger(ce->evecs) * Pk * ce->evecs; //switch to eigenbasis of Hk
-	}
+		pk[j] = dagger(ce->evecs) * unpackMatElem(Pk,j) * ce->evecs; //switch to eigenbasis of Hk
 	watch.stop();
 	return pk;
 }
@@ -173,21 +181,19 @@ void BandStruct::setPhononMatElemArray(vector3<> k1, const std::vector< vector3<
 	for(int ik2=0; ik2<nk2; ik2++)
 	{	vector3<> k2 = k2arr[ik2];
 		vector3<> kMean = kMeanArr[ik2];
-		matrix HePh = HePhPair(0,HePhPair.nRows(), ik2,ik2+1); HePh.reshape(nBands*nBands, nModes); //now each column is matrix elements for a specific nuclear displacement
+		matrix HePh = HePhPair(0,HePhPair.nRows(), ik2,ik2+1); HePh.reshape(nPacked, nModes); //now each column is matrix elements for a specific nuclear displacement
 		//Translational invariance correction by subtracting reference at kMean: [WARNING: Assumes no optical phonon modes!]
-		matrix HePhRef = HePhPair(0,HePhPair.nRows(), ik2+nk2,ik2+nk2+1); HePhRef.reshape(nBands*nBands, nModes); //corresponding to HePh at kMean
+		matrix HePhRef = HePhPair(0,HePhPair.nRows(), ik2+nk2,ik2+nk2+1); HePhRef.reshape(nPacked, nModes); //corresponding to HePh at kMean
 		std::shared_ptr<const CacheEntry> cElMean = getElectronCache(kMean);
 		for(int alpha=0; alpha<nModes; alpha++)
-		{	matrix Href = HePhRef(0,HePhRef.nRows(), alpha,alpha+1); //select the current mode at kMean
-			Href.reshape(nBands, nBands);
+		{	matrix Href = unpackMatElem(HePhRef, alpha); //select the current mode at kMean
 			Href = dagger(cElMean->evecs) * Href * cElMean->evecs; //switch to eigenbasis
 			for(int b1=0; b1<nBands; b1++)
 				for(int b2=0; b2<nBands; b2++)
 					if(fabs(cElMean->eigs[b1] - cElMean->eigs[b2]) > 1e-4)
 						Href.set(b1,b2, 0.); //not in degenerate subspace; don't correct
 			Href = cElMean->evecs * Href * dagger(cElMean->evecs); //switch back to Wannier basis
-			Href.reshape(nBands*nBands, 1);
-			HePhRef.set(0,HePh.nRows(), alpha,alpha+1, Href); //set the reference value
+			packMatElem(Href, HePhRef, alpha); //set the reference value
 		}
 		HePh -= HePhRef;
 		//Apply unitary transformations:
@@ -195,10 +201,7 @@ void BandStruct::setPhononMatElemArray(vector3<> k1, const std::vector< vector3<
 		std::shared_ptr<const CacheEntry> cEl2 = getElectronCache(k2);
 		result[ik2].resize(nModes);
 		for(int alpha=0; alpha<nModes; alpha++)
-		{	result[ik2][alpha] = HePh(0,HePh.nRows(), alpha,alpha+1); //select the current mode
-			result[ik2][alpha].reshape(nBands, nBands);
-			result[ik2][alpha] = dagger(cEl1->evecs) * result[ik2][alpha] * cEl2->evecs; //electron unitary rotations
-		}
+			result[ik2][alpha] = dagger(cEl1->evecs) * unpackMatElem(HePh, alpha) * cEl2->evecs; //electron unitary rotations
 	}
 	watch.stop();
 }
@@ -243,6 +246,42 @@ std::vector< vector3<> > BandStruct::getVelocity(vector3<> k, const matrix3<>& R
 	for(vector3<>& vb: v) vb = R * vb; //Convert to Cartesian
 	watch.stop();
 	return v;
+}
+
+void BandStruct::compressMatElemArr(matrix& mArr) const
+{	if(nMain == nBands) return; //no compression possible
+	assert(mArr.nRows() % (nBands*nBands) == 0);
+	int nMatsPerCol = mArr.nRows() / (nBands*nBands);
+	matrix mPacked(nMatsPerCol*nPacked, mArr.nCols());
+	matrix m(nBands, nBands);
+	const complex* src = mArr.dataPref();
+	for(int iMat=0; iMat<nMatsPerCol*mArr.nCols(); iMat++)
+	{	callPref(eblas_copy)(m.dataPref(), src, nBands*nBands); src += nBands*nBands;
+		packMatElem(m, mPacked, iMat);
+	}
+	std::swap(mPacked, mArr);
+}
+
+void BandStruct::packMatElem(const matrix& m, matrix& mArr, int iCol) const
+{	const complex* src = m.dataPref();
+	complex* dest = mArr.dataPref() + iCol*nPacked;
+	callPref(eblas_copy)(dest, src+mainFirst*nBands, nMain*nBands); dest += nMain*nBands;
+	for(int b=0; b<nBands; b++)
+		if(b<mainFirst || b>=(mainFirst+nBands))
+		{	callPref(eblas_copy)(dest, src+mainFirst+b*nBands, nMain); dest += nMain;
+		}
+}
+
+matrix BandStruct::unpackMatElem(const matrix& mArr, int iCol) const
+{	matrix m = zeroes(nBands, nBands);
+	const complex* src = mArr.dataPref() + iCol*nPacked;
+	complex* dest = m.dataPref();
+	callPref(eblas_copy)(dest+mainFirst*nBands, src, nMain*nBands); src += nMain*nBands;
+	for(int b=0; b<nBands; b++)
+		if(b<mainFirst || b>=(mainFirst+nBands))
+		{	callPref(eblas_copy)(dest+mainFirst+b*nBands, src, nMain); src += nMain;
+		}
+	return m;
 }
 
 std::shared_ptr<const BandStruct::CacheEntry> BandStruct::getElectronCache(vector3<> k, double omegaMax) const
