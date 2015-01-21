@@ -267,7 +267,7 @@ void BandStruct::packMatElem(const matrix& m, matrix& mArr, int iCol) const
 	complex* dest = mArr.dataPref() + iCol*nPacked;
 	callPref(eblas_copy)(dest, src+mainFirst*nBands, nMain*nBands); dest += nMain*nBands;
 	for(int b=0; b<nBands; b++)
-		if(b<mainFirst || b>=(mainFirst+nBands))
+		if(b<mainFirst || b>=(mainFirst+nMain))
 		{	callPref(eblas_copy)(dest, src+mainFirst+b*nBands, nMain); dest += nMain;
 		}
 }
@@ -278,7 +278,7 @@ matrix BandStruct::unpackMatElem(const matrix& mArr, int iCol) const
 	complex* dest = m.dataPref();
 	callPref(eblas_copy)(dest+mainFirst*nBands, src, nMain*nBands); src += nMain*nBands;
 	for(int b=0; b<nBands; b++)
-		if(b<mainFirst || b>=(mainFirst+nBands))
+		if(b<mainFirst || b>=(mainFirst+nMain))
 		{	callPref(eblas_copy)(dest+mainFirst+b*nBands, src, nMain); src += nMain;
 		}
 	return m;

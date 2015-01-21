@@ -113,10 +113,11 @@ int main(int argc, char** argv)
 	logPrintf("sqrtGammaPrefac Imag = %lg %lg %lg\n",  imag(sqrtGammaPrefac[0]), imag(sqrtGammaPrefac[1]), imag(sqrtGammaPrefac[2]));
 
 	// Values for use in metropolis sampling
-	const double weightCut = 1e-6, energyCut = 40*eV;
+	const double weightCut = 1e-6;
 	Histogram EcHist(-10*T, 0.5*T, Eplasmon+5*T);
 	Histogram EvHist(-Eplasmon-5*T, 0.5*T, 10*T);
 	double acceptRatioSum = 0., acceptRatioSumSq = 0., GammaSum = 0., GammaSumSq = 0.;
+	std::vector<double> GammaConv(bs.getStates(vector3<>()).nRows(), 0.); //empty-state convergence
 	int walkerStart = (totalWalkers * (mpiUtil->iProcess())) / mpiUtil->nProcesses(); // MPI division
 	int walkerStop = (totalWalkers * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
 	StopWatch watchMet("metropolis"); watchMet.start();
@@ -166,25 +167,25 @@ int main(int argc, char** argv)
 									double weightEconserve = exp(0.5*(mk1k2-mk_cv)/(T*T))/(T*sqrt(2*M_PI)) * (g_kPh+0.5*(1.-ae))/P[alpha]; //weight contribution (including phonon and electron occupation factors) due to energy conservation
 									if(weightEconserve < weightCut) continue;
 									// Effective matrix elements
-									complex prefacDotP = 0.;
+									complex prefacDotP = 0.; double weightSub = 0.;
 									for(int i=0; i<E1.nRows(); i++) // sum over the intermediate states
-									{	if(E2[i]<energyCut && E1[i]<energyCut)
-										{	complex E1i(E1[i], lineWidth(E1[i]));
-											complex E2i(E2[i], lineWidth(E2[i]));
-											double f1i = 1./(1.+exp(E1[i]/T));
-											double f2i = 1./(1.+exp(E2[i]/T));
-											complex sgpDotPk1_iv = 0.;
-											complex sgpDotPk2_ci = 0.;
-											for(int j=0; j<3; j++)
-											{	sgpDotPk1_iv += sqrtGammaPrefac[j] * Pk1[j](i,v);
-												sgpDotPk2_ci += sqrtGammaPrefac[j] * Pk2[j](c,i);
-											}
-											prefacDotP += 
-												( sgpDotPk2_ci * (1.-f2i) * PePh[alpha](i,v) / (E2i - (E2[c] - Eplasmon))
-												+ PePh[alpha](c,i) * (1.-f1i) * sgpDotPk1_iv / (E1i - (E1[v] + Eplasmon)) );
+									{	complex E1i(E1[i], lineWidth(E1[i]));
+										complex E2i(E2[i], lineWidth(E2[i]));
+										double f1i = 1./(1.+exp(E1[i]/T));
+										double f2i = 1./(1.+exp(E2[i]/T));
+										complex sgpDotPk1_iv = 0.;
+										complex sgpDotPk2_ci = 0.;
+										for(int j=0; j<3; j++)
+										{	sgpDotPk1_iv += sqrtGammaPrefac[j] * Pk1[j](i,v);
+											sgpDotPk2_ci += sqrtGammaPrefac[j] * Pk2[j](c,i);
 										}
+										prefacDotP += 
+											( sgpDotPk2_ci * (1.-f2i) * PePh[alpha](i,v) / (E2i - (E2[c] - Eplasmon))
+											+ PePh[alpha](c,i) * (1.-f1i) * sgpDotPk1_iv / (E1i - (E1[v] + Eplasmon)) );
+										weightSub =  (0.5*spinWeight) * weightEconserve * prefacDotP.norm();  //norm = abs^2
+										GammaConv[i] += weightSub; //estimate based on truncating to i bands
 									}
-									weight += (0.5*spinWeight) * weightEconserve * prefacDotP.norm(); //norm = abs^2
+									weight += weightSub; //result using all available bands
 								}
 							}
 							//Include in statistics:
@@ -251,5 +252,13 @@ int main(int argc, char** argv)
 	double omegaIm = fabs(sin(0.5*atan2(imag(arg),real(arg)))) * omega;
 	logPrintf("Experimental Linewidth = %lg eV\n", omegaIm/eV);
 
+	//Empty-state convergence:
+	mpiUtil->allReduce(GammaConv.data(), GammaConv.size(), MPIUtil::ReduceSum);
+	sprintf(fname, "bandConvergence-%.1lfeV-phonon.dat", Eplasmon/eV);
+	FILE* fp = fopen(fname, "w");
+	for(double Gamma: GammaConv)
+		fprintf(fp, "%lg\n", Gamma/eV);
+	fclose(fp);
+	
 	finalizeSystem();
 }
