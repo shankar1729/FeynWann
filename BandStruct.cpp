@@ -30,7 +30,7 @@ BandStruct::BandStruct(string prefix, double mu, int spinWeight, string phononPr
 		{	matrix id = eye(nBands); id.reshape(nBands*nBands, 1);
 			hWannier.set(0,nBands*nBands, ic,ic+1, hWannier(0,nBands*nBands, ic,ic+1) - mu * id);
 		}
-	
+
 	// Read momentum matrix elements
 	string dirNames[3] = { "x", "y", "z" };
 	pWannier.init(nBands*nBands*3, cellMap.size());
@@ -40,7 +40,7 @@ BandStruct::BandStruct(string prefix, double mu, int spinWeight, string phononPr
 		if(spinWeight==1) pWannier_dir.read(pFile.c_str()); else pWannier_dir.read_real(pFile.c_str());
 		pWannier.set(j*nBands*nBands,(j+1)*nBands*nBands, 0,cellMap.size(), pWannier_dir);
 	}
-	
+
 	//Initialize main window (if available):
 	nMain = 0; mainFirst = 0; omegaMain = 0.;
 	{	//read Wannier band contrib file
