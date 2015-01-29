@@ -8,6 +8,11 @@
 #include <vector>
 #include <math.h>
 
+//Read matrix from file accounting for real-only or complex storage based on spinWeight
+inline void readMatrix(matrix& m, string fname, int spinWeight)
+{	if(spinWeight==1) m.read(fname.c_str()); else m.read_real(fname.c_str());
+}
+
 BandStruct::BandStruct(string prefix, double mu, int spinWeight, string phononPrefix)
 {	//Read cell map
 	ifstream ifs(prefix + ".mlwfCellMap");
@@ -19,10 +24,10 @@ BandStruct::BandStruct(string prefix, double mu, int spinWeight, string phononPr
 	ifs.close();
 
 	//Read wannier hamiltonian
-	string hFile = prefix + ".mlwfH";
-	nBands = sqrt(fileSize(hFile.c_str()) / ((spinWeight==1 ? sizeof(complex) : sizeof(double)) * cellMap.size()));
+	string fnameH = prefix + ".mlwfH";
+	nBands = sqrt(fileSize(fnameH.c_str()) / ((spinWeight==1 ? sizeof(complex) : sizeof(double)) * cellMap.size()));
 	hWannier.init(nBands*nBands, cellMap.size());
-	if(spinWeight==1) hWannier.read(hFile.c_str()); else hWannier.read_real(hFile.c_str());
+	readMatrix(hWannier, fnameH, spinWeight);
 
 	//Offset wannier Hamiltonian by mu:
 	for(size_t ic=0; ic<cellMap.size(); ic++)
@@ -31,15 +36,9 @@ BandStruct::BandStruct(string prefix, double mu, int spinWeight, string phononPr
 			hWannier.set(0,nBands*nBands, ic,ic+1, hWannier(0,nBands*nBands, ic,ic+1) - mu * id);
 		}
 
-	// Read momentum matrix elements
-	string dirNames[3] = { "x", "y", "z" };
+	//Read momentum matrix elements
 	pWannier.init(nBands*nBands*3, cellMap.size());
-	matrix pWannier_dir(nBands*nBands, cellMap.size()); //matrix elements for a single direction (stored contiguously)
-	for(int j=0; j<3; j++)
-	{	string pFile = prefix + ".mlwfP" + dirNames[j];
-		if(spinWeight==1) pWannier_dir.read(pFile.c_str()); else pWannier_dir.read_real(pFile.c_str());
-		pWannier.set(j*nBands*nBands,(j+1)*nBands*nBands, 0,cellMap.size(), pWannier_dir);
-	}
+	readMatrix(pWannier, prefix + ".mlwfP", spinWeight);
 
 	//Initialize main window (if available):
 	nMain = 0; mainFirst = 0; omegaMain = 0.;
@@ -105,13 +104,7 @@ BandStruct::BandStruct(string prefix, double mu, int spinWeight, string phononPr
 		
 		//Read phonon matrix elements
 		wannierHePh.init(nModes*nBands*nBands, phononCellMapSq.size());
-		matrix wannierHePh_mode(nBands*nBands, phononCellMapSq.size()); //matrix elements for a single mode (stored contiguously)
-		FILE* fp = fopen((prefix + ".mlwfHePh").c_str(), "r");
-		for(int alpha=0; alpha<nModes; alpha++)
-		{	if(spinWeight==1) wannierHePh_mode.read(fp); else wannierHePh_mode.read_real(fp);
-			wannierHePh.set(alpha*nBands*nBands,(alpha+1)*nBands*nBands, 0,phononCellMapSq.size(), wannierHePh_mode);
-		}
-		fclose(fp);
+		readMatrix(wannierHePh, prefix + ".mlwfHePh", spinWeight);
 	}
 	
 	//Pack matrix elements:
