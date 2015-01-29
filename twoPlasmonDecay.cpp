@@ -61,11 +61,21 @@ int main(int argc, char** argv)
 	Epsilon eps2(eps1); eps2.setFrequency(Eplasmon2);
 	double EplasmonTot = Eplasmon1 + Eplasmon2;
 	
+	// Compute effective mode vectors
+	complex one(1.0,0.0);
+	vector3<complex> zHat(0.0, 0.0, one);
+	vector3<complex> kHat1(cos(kPhi1), sin(kPhi1), 0.0);
+	vector3<complex> kHat2(cos(kPhi2), sin(kPhi2), 0.0);
+	complex I(0.0,1.0);
+	std::vector< vector3<complex> > Ahat;
+	Ahat.push_back(kHat1 - I*(eps1.k/eps1.modGammaMinus)*zHat);
+	Ahat.push_back(kHat2 - I*(eps2.k/eps2.modGammaMinus)*zHat);
+	
 	//Initalize line width of intermediate electronic states
 	LineWidth lineWidth("ImSigma.dat");
 
 	//Initialize Wannier bandstructure:
-	BandStruct bs("Wannier/wannier", mu, spinWeight);
+	BandStruct bs("Wannier/wannier", mu, spinWeight, string(), Ahat);
 
 	//Compute the normalization factor
 	int blockStart = (totalBlocks * (mpiUtil->iProcess())) / mpiUtil->nProcesses(); //MPI division
@@ -101,14 +111,6 @@ int main(int argc, char** argv)
 	// Metropolis sampling of BZ:
 	logPrintf("Starting Metropolis sampling of BZ\n");
 	
-	// Compute effective mode vector
-	complex one(1.0,0.0);
-	vector3<complex> zHat(0.0, 0.0, one);
-	vector3<complex> kHat1(cos(kPhi1), sin(kPhi1), 0.0);
-	vector3<complex> kHat2(cos(kPhi2), sin(kPhi2), 0.0);
-	complex I(0.0,1.0);
-	vector3<complex> Ahat1 = kHat1 - I*(eps1.k/eps1.modGammaMinus)*zHat;
-	vector3<complex> Ahat2 = kHat2 - I*(eps2.k/eps2.modGammaMinus)*zHat;
 	double gammaPrefac = N1 * std::pow(M_PI,3) /
 		( nKptsMetro * 2*fabs(det(R)) * (eps1.modGammaMinus + eps2.modGammaMinus)
 		 * Eplasmon1 * Eplasmon2 * eps1.Lquant * eps2.Lquant * Squant );
@@ -150,12 +152,9 @@ int main(int argc, char** argv)
 				{	ik++;
 					// Calculate transitions at current k-point:
 					diagMatrix E = bs.getStates(kpnt);
-					std::vector<matrix> Pk = bs.getDipoleMatElem(kpnt);
-					matrix AdotP1, AdotP2;
-					for(int j=0; j<3; j++)
-					{	AdotP1 += Ahat1[j] * Pk[j];
-						AdotP2 += Ahat2[j] * Pk[j];
-					}
+					std::vector<matrix> AdotParr = bs.getDipoleMatElem(kpnt);
+					const matrix& AdotP1 = AdotParr[0];
+					const matrix& AdotP2 = AdotParr[1];
 					for(int v=0; v<E.nRows(); v++) if(E[v]<10.*T)
 					{	for(int c=0; c<E.nRows(); c++) if(E[c]>-10.*T)
 						{	double mk_cv = BandStruct::mk_sub(E[c], E[v], EplasmonTot, T);

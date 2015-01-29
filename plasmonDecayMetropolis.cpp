@@ -57,7 +57,10 @@ int main(int argc, char** argv)
 	eps.setFrequency(omega);
 	
 	//Initialize Wannier bandstructure:
-	BandStruct bs("Wannier/wannier", mu, spinWeight);
+	std::vector< vector3<complex> > Ahat(3); //use Cartesian basis unlike other executables so that event lists can have the general uncontracted matrix element
+	for(int iDir=0; iDir<3; iDir++)
+		Ahat[iDir][iDir] = 1.;
+	BandStruct bs("Wannier/wannier", mu, spinWeight, string(), Ahat);
 
 	//Compute the normalization factor
 	int blockStart = (totalBlocks * (mpiUtil->iProcess())) / mpiUtil->nProcesses(); //MPI division

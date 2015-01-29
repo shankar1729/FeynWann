@@ -13,7 +13,7 @@ inline void readMatrix(matrix& m, string fname, int spinWeight)
 {	if(spinWeight==1) m.read(fname.c_str()); else m.read_real(fname.c_str());
 }
 
-BandStruct::BandStruct(string prefix, double mu, int spinWeight, string phononPrefix)
+BandStruct::BandStruct(string prefix, double mu, int spinWeight, string phononPrefix, std::vector< vector3<complex> > Ahat): nPol(Ahat.size())
 {	//Read cell map
 	ifstream ifs(prefix + ".mlwfCellMap");
 	string headerLine; getline(ifs, headerLine); //read and ignore header line
@@ -37,8 +37,10 @@ BandStruct::BandStruct(string prefix, double mu, int spinWeight, string phononPr
 		}
 
 	//Read momentum matrix elements
-	pWannier.init(nBands*nBands*3, cellMap.size());
-	readMatrix(pWannier, prefix + ".mlwfP", spinWeight);
+	if(nPol)
+	{	pWannier.init(nBands*nBands*3, cellMap.size());
+		readMatrix(pWannier, prefix + ".mlwfP", spinWeight);
+	}
 
 	//Initialize main window (if available):
 	nMain = 0; mainFirst = 0; omegaMain = 0.;
@@ -109,9 +111,21 @@ BandStruct::BandStruct(string prefix, double mu, int spinWeight, string phononPr
 	
 	//Pack matrix elements:
 	nPacked = nMain*nMain + 2*nMain*(nBands-nMain);
-	compressMatElemArr(pWannier);
+	if(pWannier)
+		compressMatElemArr(pWannier);
 	if(wannierHePh)
 		compressMatElemArr(wannierHePh);
+	
+	//Pre-contract photon polarizations wherever applicable:
+	int nPol = Ahat.size();
+	//--- momentum matrix elements
+	if(nPol > 0)
+	{	matrix rot_p(3, Ahat.size());
+		for(int iPol=0; iPol<nPol; iPol++)
+			for(int iDir=0; iDir<3; iDir++)
+				rot_p.set(iDir, iPol, Ahat[iPol][iDir]);
+		transformMatElemArr(pWannier, rot_p);
+	}
 }
 
 diagMatrix BandStruct::getStates(vector3<> k, double omegaMax) const
@@ -130,12 +144,13 @@ diagMatrix BandStruct::getPhononModes(vector3<> q) const
 
 std::vector<matrix> BandStruct::getDipoleMatElem(vector3<> k) const
 {	static StopWatch watch("BandStruct::getDipoleMatElem"); watch.start();
+	assert(nPol);
 	std::shared_ptr<const CacheEntry> ce = getElectronCache(k);
 	matrix Pk = pWannier * ce->phase;
-	Pk.reshape(nPacked, 3);
-	std::vector<matrix> pk(3);
-	for(int j=0; j<3; j++)
-		pk[j] = dagger(ce->evecs) * unpackMatElem(Pk,j) * ce->evecs; //switch to eigenbasis of Hk
+	Pk.reshape(nPacked, nPol);
+	std::vector<matrix> pk(nPol);
+	for(int iPol=0; iPol<nPol; iPol++)
+		pk[iPol] = dagger(ce->evecs) * unpackMatElem(Pk,iPol) * ce->evecs; //switch to eigenbasis of Hk
 	watch.stop();
 	return pk;
 }
@@ -253,6 +268,25 @@ void BandStruct::compressMatElemArr(matrix& mArr) const
 		packMatElem(m, mPacked, iMat);
 	}
 	std::swap(mPacked, mArr);
+}
+
+void BandStruct::transformMatElemArr(matrix& mArr, const matrix& rot) const
+{	assert(mArr.nRows() % nPacked == 0); //must be in packed form
+	int nMatsPerCol = mArr.nRows() / nPacked;
+	assert(nMatsPerCol % rot.nRows() == 0);
+	int nSetsPerCol = nMatsPerCol / rot.nRows();
+	matrix m(nPacked, rot.nRows());
+	matrix mArrOut(nSetsPerCol*rot.nCols()*nPacked, mArr.nCols());
+	const complex* dataIn = mArr.dataPref();
+	complex* dataOut = mArrOut.dataPref();
+	for(int iSet=0; iSet<nSetsPerCol*mArr.nCols(); iSet++)
+	{	callPref(eblas_copy)(m.dataPref(), dataIn, m.nData()); //read set into a matrix
+		matrix mOut = m * rot; //apply transofrmation
+		callPref(eblas_copy)(dataOut, mOut.dataPref(), mOut.nData()); //store set
+		dataIn += m.nData();
+		dataOut += mOut.nData();
+	}
+	std::swap(mArrOut, mArr);
 }
 
 void BandStruct::packMatElem(const matrix& m, matrix& mArr, int iCol) const

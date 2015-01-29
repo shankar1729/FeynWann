@@ -57,11 +57,18 @@ int main(int argc, char** argv)
 	double omega = Eplasmon;
 	eps.setFrequency(omega);
 	
+	// Compute effective mode vector
+	complex one(1.0,0.0);
+	vector3<complex> zHat(0.0, 0.0, one);
+	vector3<complex> kHat(cos(kPhi), sin(kPhi), 0.0);
+	complex I(0.0,1.0);
+	std::vector< vector3<complex> > Ahat(1, kHat - I*(eps.k/eps.modGammaMinus)*zHat);
+	
 	//Initalize line width of intermediate electronic states
 	LineWidth lineWidth("ImSigma.dat");
 
 	//Initialize Wannier bandstructure:
-	BandStruct bs("Wannier/wannier", mu, spinWeight, "Wannier/totalE");
+	BandStruct bs("Wannier/wannier", mu, spinWeight, "Wannier/totalE", Ahat);
 
 	//Compute the normalization factor
 	int blockStart = (totalBlocks * (mpiUtil->iProcess())) / mpiUtil->nProcesses(); //MPI division
@@ -102,15 +109,10 @@ int main(int argc, char** argv)
 	logPrintf("Starting Metropolis sampling of BZ\n");
 	std::vector<double> Econserve_rate;
 	
-	// Compute effective mode vector
+	// Compute normalization factor
 	nKpts = nKptsMetro / totalWalkers;
-	complex one(1.0,0.0);
-	vector3<complex> zHat(0.0, 0.0, one);
-	vector3<complex> kHat(cos(kPhi), sin(kPhi), 0.0);
-	complex I(0.0,1.0);
-	vector3<complex> sqrtGammaPrefac = ( M_PI * sqrt(N1/(nKptsMetro*4*fabs(det(R))*eps.modGammaMinus*omega*eps.Lquant)) ) * (kHat - I*(eps.k/eps.modGammaMinus)*zHat);
-	logPrintf("sqrtGammaPrefac Real = %lg %lg %lg\n",  real(sqrtGammaPrefac[0]), real(sqrtGammaPrefac[1]), real(sqrtGammaPrefac[2]));
-	logPrintf("sqrtGammaPrefac Imag = %lg %lg %lg\n",  imag(sqrtGammaPrefac[0]), imag(sqrtGammaPrefac[1]), imag(sqrtGammaPrefac[2]));
+	double gammaPrefac = std::pow(M_PI,2) *  N1/(nKptsMetro*4*fabs(det(R))*eps.modGammaMinus*omega*eps.Lquant);
+	logPrintf("gammaPrefac = %lg\n",  gammaPrefac);
 
 	// Values for use in metropolis sampling
 	const double weightCut = 1e-6;
@@ -153,8 +155,10 @@ int main(int argc, char** argv)
 					// Calculate transitions at current k-point:
 					diagMatrix E1 = bs.getStates(kpnt1);
 					std::vector<matrix> Pk1 = bs.getDipoleMatElem(kpnt1);
+					const matrix& AdotPk1 = Pk1[0]; //pre-contracted
 					diagMatrix E2 = bs.getStates(kpnt2);
 					std::vector<matrix> Pk2 = bs.getDipoleMatElem(kpnt2);
+					const matrix& AdotPk2 = Pk2[0]; //pre-contracted
 					diagMatrix P = bs.getPhononModes(kpnt1-kpnt2);
 					std::vector<matrix> PePh = bs.getPhononMatElem(kpnt1,kpnt2);
 					for(int v=0; v<E1.nRows(); v++) if(E1[v]<10.*T)
@@ -167,22 +171,16 @@ int main(int argc, char** argv)
 									double weightEconserve = exp(0.5*(mk1k2-mk_cv)/(T*T))/(T*sqrt(2*M_PI)) * (g_kPh+0.5*(1.-ae))/P[alpha]; //weight contribution (including phonon and electron occupation factors) due to energy conservation
 									if(weightEconserve < weightCut) continue;
 									// Effective matrix elements
-									complex prefacDotP = 0.; double weightSub = 0.;
+									complex Meff = 0.; double weightSub = 0.;
 									for(int i=0; i<E1.nRows(); i++) // sum over the intermediate states
 									{	complex E1i(E1[i], lineWidth(E1[i]));
 										complex E2i(E2[i], lineWidth(E2[i]));
 										double f1i = 1./(1.+exp(E1[i]/T));
 										double f2i = 1./(1.+exp(E2[i]/T));
-										complex sgpDotPk1_iv = 0.;
-										complex sgpDotPk2_ci = 0.;
-										for(int j=0; j<3; j++)
-										{	sgpDotPk1_iv += sqrtGammaPrefac[j] * Pk1[j](i,v);
-											sgpDotPk2_ci += sqrtGammaPrefac[j] * Pk2[j](c,i);
-										}
-										prefacDotP += 
-											( sgpDotPk2_ci * (1.-f2i) * PePh[alpha](i,v) / (E2i - (E2[c] - Eplasmon))
-											+ PePh[alpha](c,i) * (1.-f1i) * sgpDotPk1_iv / (E1i - (E1[v] + Eplasmon)) );
-										weightSub =  (0.5*spinWeight) * weightEconserve * prefacDotP.norm();  //norm = abs^2
+										Meff += 
+											( AdotPk2(c,i) * (1.-f2i) * PePh[alpha](i,v) / (E2i - (E2[c] - Eplasmon))
+											+ PePh[alpha](c,i) * (1.-f1i) * AdotPk1(i,v) / (E1i - (E1[v] + Eplasmon)) );
+										weightSub =  (0.5*spinWeight) * weightEconserve * gammaPrefac * Meff.norm();  //norm = abs^2
 										GammaConv[i] += weightSub; //estimate based on truncating to i bands
 									}
 									weight += weightSub; //result using all available bands
