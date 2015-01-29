@@ -42,6 +42,12 @@ BandStruct::BandStruct(string prefix, double mu, int spinWeight, string phononPr
 		readMatrix(pWannier, prefix + ".mlwfP", spinWeight);
 	}
 
+	//Read momentum-squared matrix elements
+	if(nPol == 2)
+	{	pSqWannier.init(nBands*nBands*6, cellMap.size());
+		readMatrix(pSqWannier, prefix + ".mlwfPsq", spinWeight);
+	}
+
 	//Initialize main window (if available):
 	nMain = 0; mainFirst = 0; omegaMain = 0.;
 	{	//read Wannier band contrib file
@@ -111,20 +117,32 @@ BandStruct::BandStruct(string prefix, double mu, int spinWeight, string phononPr
 	
 	//Pack matrix elements:
 	nPacked = nMain*nMain + 2*nMain*(nBands-nMain);
-	if(pWannier)
-		compressMatElemArr(pWannier);
-	if(wannierHePh)
-		compressMatElemArr(wannierHePh);
+	if(pWannier) compressMatElemArr(pWannier);
+	if(pSqWannier) compressMatElemArr(pSqWannier);
+	if(wannierHePh) compressMatElemArr(wannierHePh);
 	
 	//Pre-contract photon polarizations wherever applicable:
 	int nPol = Ahat.size();
 	//--- momentum matrix elements
-	if(nPol > 0)
-	{	matrix rot_p(3, Ahat.size());
+	if(pWannier)
+	{	matrix rot(3, Ahat.size());
 		for(int iPol=0; iPol<nPol; iPol++)
 			for(int iDir=0; iDir<3; iDir++)
-				rot_p.set(iDir, iPol, Ahat[iPol][iDir]);
-		transformMatElemArr(pWannier, rot_p);
+				rot.set(iDir, iPol, Ahat[iPol][iDir]);
+		transformMatElemArr(pWannier, rot);
+	}
+	//--- momentum-squared matrix elements
+	if(pSqWannier)
+	{	matrix rot(6, 1); //express contraction with symmetric tensor Ahat1 * Ahat2'
+		for(int iDir=0; iDir<3; iDir++)
+		{	//Diagonal
+			rot.set(iDir,0, Ahat[0][iDir]*Ahat[1][iDir]);
+			//Off-diagonal
+			int jDir = (iDir + 1) % 3;
+			int kDir = (iDir + 2) % 3;
+			rot.set(iDir+3,0, Ahat[0][jDir]*Ahat[1][kDir] + Ahat[0][kDir]*Ahat[1][jDir]);
+		}
+		transformMatElemArr(pSqWannier, rot);
 	}
 }
 
@@ -153,6 +171,15 @@ std::vector<matrix> BandStruct::getDipoleMatElem(vector3<> k) const
 		pk[iPol] = dagger(ce->evecs) * unpackMatElem(Pk,iPol) * ce->evecs; //switch to eigenbasis of Hk
 	watch.stop();
 	return pk;
+}
+
+matrix BandStruct::getDipoleSqMatElem(vector3<> k) const
+{	static StopWatch watch("BandStruct::getDipoleSqMatElem"); watch.start();
+	assert(nPol == 2);
+	std::shared_ptr<const CacheEntry> ce = getElectronCache(k);
+	matrix Psq = unpackMatElem(pSqWannier * ce->phase, 0);
+	watch.stop();
+	return Psq;
 }
 
 std::vector<matrix> BandStruct::getPhononMatElem(vector3<> k1, vector3<> k2) const

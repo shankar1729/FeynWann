@@ -23,6 +23,7 @@ public:
 	diagMatrix getStates(vector3<> k, double omegaMax=DBL_MAX) const; //if omegaMax is less than omegaMain (if available), use main centers alone
 	diagMatrix getPhononModes(vector3<> q) const;
 	std::vector<matrix> getDipoleMatElem(vector3<> k) const; //dipole matrix elements contracted against each specified Ahat in constructor
+	matrix getDipoleSqMatElem(vector3<> k) const; //matrix elements of (Ahat1.P)(Ahat2.P); must have exactly two Ahat's in constructor
 
 	std::vector<matrix> getPhononMatElem(vector3<> k1, vector3<> k2) const;
 	void setPhononMatElemArray(vector3<> k1, const std::vector< vector3<> >& k2arr, std::vector<matrix>* result) const; //get matrix elements for fixed k1 and ana array of k2 (for efficiency)
@@ -44,7 +45,7 @@ private:
 	std::vector< vector3<int> > cellMap; //electron Wannier cell map
 	int nBands; //number of Wannier bands for the electrons
 	int nMain, mainFirst; double omegaMain; //number of "main" Wannier centers, index of first main center and max frequency for which main window suffices
-	matrix hWannier, pWannier; //Wannier hamiltonian and dipole matrix elements
+	matrix hWannier, pWannier, pSqWannier; //Wannier hamiltonian and dipole matrix elements
 	matrix hWannierMain; //Wannier hamiltonian for the main centers alone
 	
 	int nPol; //number of photon polarizations in pre-contracted matrix elements
