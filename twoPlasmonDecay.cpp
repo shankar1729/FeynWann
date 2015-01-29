@@ -118,6 +118,7 @@ int main(int argc, char** argv)
 	Histogram EcHist(-10*T, 0.5*T, EplasmonTot+5*T);
 	Histogram EvHist(-EplasmonTot-5*T, 0.5*T, 10*T);
 	double acceptRatioSum = 0., acceptRatioSumSq = 0., GammaSum = 0., GammaSumSq = 0.;
+	std::vector<double> GammaConv(bs.getStates(vector3<>()).nRows(), 0.); //empty-state convergence
 	int walkerStart = (totalWalkers * (mpiUtil->iProcess())) / mpiUtil->nProcesses(); // MPI division
 	int walkerStop = (totalWalkers * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
 	nKpts = nKptsMetro / totalWalkers;
@@ -161,15 +162,16 @@ int main(int argc, char** argv)
 							double weightEconserve = (0.5*spinWeight) * exp(0.5*(mk-mk_cv)/(T*T))/(T*sqrt(2*M_PI)); //weight contribution due to energy conservation (and spin)
 							if(weightEconserve < weightCut) continue;
 							//Effective matrix element
-							complex Meff;
+							complex Meff = 0.; double weight = 0.;
 							for(int l=0; l<E.nRows(); l++)
 							{	complex El(E[l], lineWidth(E[l]));
 								double Fl = 1./(1.+exp(E[l]/T)); //occupation
 								Meff += (1.-Fl) *
 									( AdotP1(c,l)*AdotP2(l,v)/(El-E[v]-Eplasmon2)
 									+ AdotP2(c,l)*AdotP1(l,v)/(El-E[v]-Eplasmon1) );
+								weight = gammaPrefac * weightEconserve * Meff.norm(); //norm = abs^2;
+								GammaConv[l] += weight; //estimate based on truncating to i bands
 							}
-							double weight = gammaPrefac * weightEconserve * Meff.norm(); //norm = abs^2
 							//Include in statistics:
 							GammaBlock += weight;
 							EcHist.addEvent(E[c], weight);
@@ -224,5 +226,13 @@ int main(int argc, char** argv)
 	EcHist.allReduce(MPIUtil::ReduceSum); EcHist.print(string("e")+fname, eV);
 	EvHist.allReduce(MPIUtil::ReduceSum); EvHist.print(string("h")+fname, eV);
 
+	//Empty-state convergence:
+	mpiUtil->allReduce(GammaConv.data(), GammaConv.size(), MPIUtil::ReduceSum);
+	sprintf(fname, "bandConvergence-%.1lfeV+%.1lfeV-metro.dat", Eplasmon1/eV, Eplasmon2/eV);
+	FILE* fp = fopen(fname, "w");
+	for(double Gamma: GammaConv)
+		fprintf(fp, "%lg\n", Gamma/eV);
+	fclose(fp);
+	
 	finalizeSystem();
 }
