@@ -121,6 +121,7 @@ int main(int argc, char** argv)
 	Histogram EvHist(-EplasmonTot-5*T, 0.5*T, 10*T);
 	double acceptRatioSum = 0., acceptRatioSumSq = 0., GammaSum = 0., GammaSumSq = 0.;
 	std::vector<double> GammaConv(bs.getStates(vector3<>()).nRows(), 0.); //empty-state convergence
+	std::vector<double> GammaConvCEDA(bs.getStates(vector3<>()).nRows(), 0.); //empty-state convergence with CEDA
 	int walkerStart = (totalWalkers * (mpiUtil->iProcess())) / mpiUtil->nProcesses(); // MPI division
 	int walkerStop = (totalWalkers * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
 	nKpts = nKptsMetro / totalWalkers;
@@ -155,6 +156,7 @@ int main(int argc, char** argv)
 					std::vector<matrix> AdotParr = bs.getDipoleMatElem(kpnt);
 					const matrix& AdotP1 = AdotParr[0];
 					const matrix& AdotP2 = AdotParr[1];
+					matrix AAdotPP = bs.getDipoleSqMatElem(kpnt);
 					for(int v=0; v<E.nRows(); v++) if(E[v]<10.*T)
 					{	for(int c=0; c<E.nRows(); c++) if(E[c]>-10.*T)
 						{	double mk_cv = BandStruct::mk_sub(E[c], E[v], EplasmonTot, T);
@@ -162,14 +164,27 @@ int main(int argc, char** argv)
 							if(weightEconserve < weightCut) continue;
 							//Effective matrix element
 							complex Meff = 0.; double weight = 0.;
+							complex num1sum = 0., num2sum = 0.; //partial numerator sums for CEDA
 							for(int l=0; l<E.nRows(); l++)
 							{	complex El(E[l], lineWidth(E[l]));
 								double Fl = 1./(1.+exp(E[l]/T)); //occupation
-								Meff += (1.-Fl) *
-									( AdotP1(c,l)*AdotP2(l,v)/(El-E[v]-Eplasmon2)
-									+ AdotP2(c,l)*AdotP1(l,v)/(El-E[v]-Eplasmon1) );
+								complex num1 = AdotP1(c,l)*AdotP2(l,v); num1sum += num1;
+								complex num2 = AdotP2(c,l)*AdotP1(l,v); num2sum += num2;
+								complex den1 = one/(El-E[v]-Eplasmon2);
+								complex den2 = one/(El-E[v]-Eplasmon1);
+								Meff += (1.-Fl) * (num1*den1 + num2*den2);
 								weight = gammaPrefac * weightEconserve * Meff.norm(); //norm = abs^2;
 								GammaConv[l] += weight; //estimate based on truncating to i bands
+								//CEDA corrections:
+								double Ebar = E[l] + 2.; //HACK Ebar set to 2 Ha above max energy TODO get "real" Ebar
+								double den1ceda = 1./(Ebar-E[v]-Eplasmon2);
+								double den2ceda = 1./(Ebar-E[v]-Eplasmon1);
+								complex MeffCEDA = Meff
+									- num1sum * den1ceda
+									- num2sum * den2ceda
+									+ AAdotPP(c,v) * (den1ceda + den2ceda);
+								weight = gammaPrefac * weightEconserve * MeffCEDA.norm(); //overwrite weight with CEDA (so that final result uses CEDA)
+								GammaConvCEDA[l] += weight; //estimate based on truncating to i bands
 							}
 							//Include in statistics:
 							GammaBlock += weight;
@@ -227,10 +242,11 @@ int main(int argc, char** argv)
 
 	//Empty-state convergence:
 	mpiUtil->allReduce(GammaConv.data(), GammaConv.size(), MPIUtil::ReduceSum);
+	mpiUtil->allReduce(GammaConvCEDA.data(), GammaConvCEDA.size(), MPIUtil::ReduceSum);
 	sprintf(fname, "bandConvergence-%.1lfeV+%.1lfeV-metro.dat", Eplasmon1/eV, Eplasmon2/eV);
 	FILE* fp = fopen(fname, "w");
-	for(double Gamma: GammaConv)
-		fprintf(fp, "%lg\n", Gamma/eV);
+	for(int i=0; i<int(GammaConv.size()); i++)
+		fprintf(fp, "%d %lg %lg\n", i+1, GammaConv[i]/eV, GammaConvCEDA[i]/eV);
 	fclose(fp);
 	
 	finalizeSystem();
