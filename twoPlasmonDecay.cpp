@@ -180,8 +180,9 @@ int main(int argc, char** argv)
 								double den1ceda = 1./(Ebar-E[v]-Eplasmon2);
 								double den2ceda = 1./(Ebar-E[v]-Eplasmon1);
 								complex MeffCEDA = Meff
-									- num1sum * (den1ceda - AAdotPP(c,v))
-									- num2sum * (den2ceda - AAdotPP(v,c).conj());
+									- den1ceda * num1sum
+									- den2ceda * num2sum
+									+ (den1ceda + den2ceda) * AAdotPP(c,v);
 								weight = gammaPrefac * weightEconserve * MeffCEDA.norm(); //overwrite weight with CEDA (so that final result uses CEDA)
 								GammaConvCEDA[l] += weight; //estimate based on truncating to i bands
 							}
