@@ -40,6 +40,8 @@ public:
 	{	return (x>30.) ? -x : -log(1+exp(x)); //avoid overflow issues
 	}
 	
+	std::vector<double> Eceda; //common energy denominator value for each number of Wannier bands used
+	
 private:
 	//Electrons:
 	std::vector< vector3<int> > cellMap; //electron Wannier cell map

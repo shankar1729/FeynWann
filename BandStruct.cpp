@@ -36,6 +36,19 @@ BandStruct::BandStruct(string prefix, double mu, int spinWeight, string phononPr
 			hWannier.set(0,nBands*nBands, ic,ic+1, hWannier(0,nBands*nBands, ic,ic+1) - mu * id);
 		}
 
+	//Read CEDA energies:
+	Eceda.resize(nBands);
+	{	string fname = prefix + ".mlwfCEDA";
+		FILE* fp = fopen(fname.c_str(), "r");
+		if(!fp) die("Could not open %s for reading.\n", fname.c_str());
+		for(int b=0; b<nBands; b++)
+		{	if(fscanf(fp, "%lf", &Eceda[b]) != 1)
+				die("Error reading CEDA energies from %s.\n", fname.c_str());
+				Eceda[b] -= mu;
+		}
+		fclose(fp);
+	}
+	
 	//Read momentum matrix elements
 	if(nPol)
 	{	pWannier.init(nBands*nBands*3, cellMap.size());

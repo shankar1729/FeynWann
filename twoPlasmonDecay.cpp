@@ -176,13 +176,12 @@ int main(int argc, char** argv)
 								weight = gammaPrefac * weightEconserve * Meff.norm(); //norm = abs^2;
 								GammaConv[l] += weight; //estimate based on truncating to i bands
 								//CEDA corrections:
-								double Ebar = E[l] + 2.; //HACK Ebar set to 2 Ha above max energy TODO get "real" Ebar
+								double Ebar = bs.Eceda[l];
 								double den1ceda = 1./(Ebar-E[v]-Eplasmon2);
 								double den2ceda = 1./(Ebar-E[v]-Eplasmon1);
 								complex MeffCEDA = Meff
-									- num1sum * den1ceda
-									- num2sum * den2ceda
-									+ AAdotPP(c,v) * (den1ceda + den2ceda);
+									- num1sum * (den1ceda - AAdotPP(c,v))
+									- num2sum * (den2ceda - AAdotPP(v,c).conj());
 								weight = gammaPrefac * weightEconserve * MeffCEDA.norm(); //overwrite weight with CEDA (so that final result uses CEDA)
 								GammaConvCEDA[l] += weight; //estimate based on truncating to i bands
 							}
