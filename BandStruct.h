@@ -42,6 +42,7 @@ public:
 	
 	std::vector<double> Eceda; //common energy denominator value for each number of Wannier bands used
 	
+	void setCacheSize(int cacheSize) { this->cacheSize = std::max(6, cacheSize); } //control cache size for electron and phonon states
 private:
 	//Electrons:
 	std::vector< vector3<int> > cellMap; //electron Wannier cell map
@@ -81,6 +82,7 @@ private:
 	//Note that the cache functions may update the cache, but are functionally const (henced marked as such). However they are NOT thread safe.
 	std::shared_ptr<const CacheEntry> getElectronCache(vector3<> k, double omegaMax=DBL_MAX) const;
 	std::shared_ptr<const CacheEntry> getPhononCache(vector3<> q) const;
+	size_t cacheSize;
 };
 
 #endif //WANNIERMETROPOLIS_BANDSTRUCT_H

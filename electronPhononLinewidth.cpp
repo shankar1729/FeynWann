@@ -39,6 +39,7 @@ int main(int argc, char** argv)
 	logPrintf("\n");
 	
 	//Construct representation of irreducible wedge using dummy JDFTx input:
+	const int Nk = 24; double invNk = 1./Nk; //k-point sampling for e-ph, preferably a multiple of the pure electronic one below
 	std::vector< std::pair<string,string> > jdftInputs;
 	jdftInputs.push_back(std::make_pair<string,string>("kpoint-folding", "12 12 12")); //Hard-coded k-point sampling used to generate Wannier functions
 	jdftInputs.push_back(std::make_pair<string,string>("lattice", "face-centered cubic 2")); //to make setup lightweight, only k-mesh used
@@ -55,27 +56,32 @@ int main(int argc, char** argv)
 	
 	//Initialize Wannier band structure with electron phonon matrix elements:
 	BandStruct bs("Wannier/wannier", mu, spinWeight, "Wannier/totalE");
+	bs.setCacheSize(2*Nk+5);
 	
 	//Calculate lifetimes for states in irreducible wedge:
 	int nBands = bs.getStates(vector3<>()).nRows();
 	std::vector<diagMatrix> Gamma(e.eInfo.nStates, diagMatrix(nBands, 0.)); //decay rates in irreducible wedge
 	std::vector<diagMatrix> E(e.eInfo.nStates, diagMatrix(nBands, 0.)); //eigenvalues in irreducible wedge
-	const int Nk = 12; double invNk = 1./Nk;
 	double prefacGamma = M_PI/(Nk*Nk*Nk);
 	double EconserveExpFac = -0.5/(T*T), EconservePrefac = 1./(sqrt(2*M_PI)*T); //energy conserving Gaussian parameters
 	std::vector< std::vector<matrix> > MePhArr(Nk);
-	for(int q=e.eInfo.qStart; q<e.eInfo.qStop; q++)
-	{	logPrintf("Working on q = %d of %d / process\n", q-e.eInfo.qStart+1, e.eInfo.qStop-e.eInfo.qStart);
-		logFlush();
-		vector3<> k1 = e.eInfo.qnums[q].k;
-		E[q] = bs.getStates(k1);
-		const diagMatrix& E1 = E[q];
-		//Loop over blocks of one dimension of second k-point
-		std::vector< vector3<> > k2arr(Nk);
-		for(int ik0=0; ik0<Nk; ik0++)
-		for(int ik1=0; ik1<Nk; ik1++)
-		{	for(int ik2=0; ik2<Nk; ik2++)
-				k2arr[ik2] = (vector3<>(ik0,ik1,ik2) + 0.5) * invNk;
+	//Loop over blocks of one dimension of second k-point
+	std::vector< vector3<> > k2arr(Nk);
+	for(int ik0=0; ik0<Nk; ik0++)
+	for(int ik1=0; ik1<Nk; ik1++)
+	{	//Print progress:
+		if(!ik1)
+		{	logPrintf("Working on ik0 = %d of %d\n", ik0+1, Nk);
+			logFlush();
+		}
+		//Initialize k2 array:
+		for(int ik2=0; ik2<Nk; ik2++)
+			k2arr[ik2] = (vector3<>(ik0,ik1,ik2) + 0.5) * invNk;
+		//Loop over first k-point (irreducible wedge):
+		for(int q=e.eInfo.qStart; q<e.eInfo.qStop; q++)
+		{	vector3<> k1 = e.eInfo.qnums[q].k;
+			E[q] = bs.getStates(k1);
+			const diagMatrix& E1 = E[q];
 			bs.setPhononMatElemArray(k1, k2arr, MePhArr.data());
 			for(int ik2=0; ik2<Nk; ik2++)
 			{	const vector3<>& k2 = k2arr[ik2];

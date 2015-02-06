@@ -14,7 +14,8 @@ inline void readMatrix(matrix& m, string fname, int spinWeight)
 {	if(spinWeight==1) m.read(fname.c_str()); else m.read_real(fname.c_str());
 }
 
-BandStruct::BandStruct(string prefix, double mu, int spinWeight, string phononPrefix, std::vector< vector3<complex> > Ahat): nPol(Ahat.size())
+BandStruct::BandStruct(string prefix, double mu, int spinWeight, string phononPrefix, std::vector< vector3<complex> > Ahat)
+: nPol(Ahat.size()), cacheSize(6)
 {	//Read cell map
 	ifstream ifs(prefix + ".mlwfCellMap");
 	string headerLine; getline(ifs, headerLine); //read and ignore header line
@@ -418,7 +419,7 @@ std::shared_ptr<const BandStruct::CacheEntry> BandStruct::getElectronCache(vecto
 	Hk.diagonalize(ce->evecs, ce->eigs);
 	//--- update cache:
 	BandStruct& bs = *((BandStruct*)this); //modifiable version of this
-	if(electronCache.size() == 6) bs.electronCache.pop_front(); //discard oldest cache entry
+	while(electronCache.size() >= cacheSize) bs.electronCache.pop_front(); //discard oldest cache entries
 	bs.electronCache.push_back(ce); //add new one
 	return ce;
 }
@@ -443,7 +444,7 @@ std::shared_ptr<const BandStruct::CacheEntry> BandStruct::getPhononCache(vector3
 	for(double& x: ce->eigs) x = sqrt(fabs(x)); //switch from omegaSq to omega
 	//--- update cache:
 	BandStruct& bs = *((BandStruct*)this); //modifiable version of this
-	if(phononCache.size() == 1) bs.phononCache.pop_front(); //discard oldest cache entries
+	while(phononCache.size() >= cacheSize) bs.phononCache.pop_front(); //discard oldest cache entries
 	bs.phononCache.push_back(ce); //add new one
 	return ce;
 }
