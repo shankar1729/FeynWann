@@ -75,7 +75,7 @@ int main(int argc, char** argv)
 		for(int ik0=0; ik0<Nk; ik0++)
 		for(int ik1=0; ik1<Nk; ik1++)
 		{	for(int ik2=0; ik2<Nk; ik2++)
-				k2arr[ik2] = vector3<int>(ik0,ik1,ik2) * invNk;
+				k2arr[ik2] = (vector3<>(ik0,ik1,ik2) + 0.5) * invNk;
 			bs.setPhononMatElemArray(k1, k2arr, MePhArr.data());
 			for(int ik2=0; ik2<Nk; ik2++)
 			{	const vector3<>& k2 = k2arr[ik2];
@@ -107,7 +107,7 @@ int main(int argc, char** argv)
 		E[q].bcast(e.eInfo.whose(q));
 		if(fp)
 			for(int b=0; b<nBands; b++)
-				fprintf(fp, "%lg %lg\n", E[q][b]/eV, (1./Gamma[q][b])/fs);
+				fprintf(fp, "%+19.12le %19.12le\n", E[q][b]/eV, Gamma[q][b]/(1./fs));
 	}
 	if(fp) fclose(fp);
 	

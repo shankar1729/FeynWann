@@ -6,6 +6,7 @@
 #include <fstream>
 #include <vector>
 #include <math.h>
+#include <set>
 #include "Units.h"
 
 //Read matrix from file accounting for real-only or complex storage based on spinWeight
@@ -123,9 +124,42 @@ BandStruct::BandStruct(string prefix, double mu, int spinWeight, string phononPr
 			phononCellMapSq.push_back(cp);
 		ifs.close();
 		
+		//Check the order of pairs in phononCellMapSqPh:
+		auto pairIter = phononCellMapSq.begin();
+		for(const vector3<int>& iR1: phononCellMap)
+		for(const vector3<int>& iR2: phononCellMap)
+		{	if(not (pairIter->iR1==iR1 and pairIter->iR2==iR2))
+				die("Phonon cell map squared is not in required order (with outer index iR1 and inner index iR2)\n");
+			pairIter++;
+		}
+		
 		//Read phonon matrix elements
 		wannierHePh.init(nModes*nBands*nBands, phononCellMapSq.size());
 		readMatrix(wannierHePh, prefix + ".mlwfHePh", spinWeight);
+		
+		//Contract matrix elements for gamma phonons / translational invariance correction:
+		//--- construct phononCellDiffMap
+		std::set< vector3<int> > phononCellDiffSet;
+		for(const CellPair& cp: phononCellMapSq)
+			phononCellDiffSet.insert(cp.iR1 - cp.iR2);
+		int iSet=0;
+		std::map< vector3<int>, int > phononCellDiffIndex;
+		phononCellDiffMap.resize(phononCellDiffSet.size());
+		for(const vector3<int>& iRdiff: phononCellDiffSet)
+		{	phononCellDiffMap[iSet] = iRdiff;
+			phononCellDiffIndex[iRdiff] = iSet;
+			iSet++;
+		}
+		//--- contract to retain iR1-iR2 combinations alone
+		size_t pairStart = (phononCellMapSq.size() * mpiUtil->iProcess()) / mpiUtil->nProcesses();
+		size_t pairStop = (phononCellMapSq.size() * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
+		wannierHePhGamma = zeroes(wannierHePh.nRows(), phononCellDiffMap.size());
+		for(size_t pair=pairStart; pair<pairStop; pair++)
+		{	const CellPair& cp = phononCellMapSq[pair];
+			eblas_zaxpy(wannierHePh.nRows(), 1., wannierHePh.data()+wannierHePh.index(0,pair),1,
+				wannierHePhGamma.data()+wannierHePhGamma.index(0,phononCellDiffIndex[cp.iR1 - cp.iR2]),1);
+		}
+		wannierHePhGamma.allReduce(MPIUtil::ReduceSum);
 	}
 	
 	//Pack matrix elements:
@@ -207,7 +241,8 @@ void BandStruct::setPhononMatElemArray(vector3<> k1, const std::vector< vector3<
 	//Compute double Fourier transform for fixed k1 and all k2 together:
 	watchFT.start();
 	std::vector< vector3<> > kMeanArr(nk2);
-	matrix phase(phononCellMapSq.size(), 2*nk2);
+	matrix phase(phononCellMapSq.size(), nk2);
+	matrix phaseMean(phononCellDiffMap.size(), nk2);
 	for(int ik2=0; ik2<nk2; ik2++)
 	{	vector3<> k2 = k2arr[ik2];
 		//Get bisecting k-point (within nearest image convention):
@@ -219,19 +254,21 @@ void BandStruct::setPhononMatElemArray(vector3<> k1, const std::vector< vector3<
 		for(size_t icp=0; icp<phononCellMapSq.size(); icp++)
 		{	const CellPair& cp = phononCellMapSq[icp];
 			phase.set(icp,ik2, cis(2*M_PI * (dot(cp.iR1,k1) - dot(cp.iR2,k2))));
-			phase.set(icp,ik2+nk2, cis(2*M_PI * dot(cp.iR1 - cp.iR2, kMean)));
 		}
+		for(size_t iDiff=0; iDiff<phononCellDiffMap.size(); iDiff++)
+			phaseMean.set(iDiff,ik2, cis(2*M_PI * dot(phononCellDiffMap[iDiff], kMean)));
 	}
-	matrix HePhPair = wannierHePh * phase; //now a nBands*nBands*nModes x nk2*2 matrix (columns of all k2 results first, followed by all kMean's)
+	matrix HePhArr = wannierHePh * phase; //now a nBands*nBands*nModes x nk2 matrix
+	matrix HePhRefArr = wannierHePhGamma * phaseMean; //corresponding results for reference correction
 	watchFT.stop();
 	//Now process one k2 at a time:
 	std::shared_ptr<const CacheEntry> cEl1 = getElectronCache(k1); //only cache common to all of below
 	for(int ik2=0; ik2<nk2; ik2++)
 	{	vector3<> k2 = k2arr[ik2];
 		vector3<> kMean = kMeanArr[ik2];
-		matrix HePh = HePhPair(0,HePhPair.nRows(), ik2,ik2+1); HePh.reshape(nPacked, nModes); //now each column is matrix elements for a specific nuclear displacement
+		matrix HePh = HePhArr(0,HePhArr.nRows(), ik2,ik2+1); HePh.reshape(nPacked, nModes); //now each column is matrix elements for a specific nuclear displacement
 		//Translational invariance correction by subtracting reference at kMean: [WARNING: Assumes no optical phonon modes!]
-		matrix HePhRef = HePhPair(0,HePhPair.nRows(), ik2+nk2,ik2+nk2+1); HePhRef.reshape(nPacked, nModes); //corresponding to HePh at kMean
+		matrix HePhRef = HePhRefArr(0,HePhRefArr.nRows(), ik2,ik2+1); HePhRef.reshape(nPacked, nModes); //corresponding to HePh at kMean
 		std::shared_ptr<const CacheEntry> cElMean = getElectronCache(kMean);
 		for(int alpha=0; alpha<nModes; alpha++)
 		{	matrix Href = unpackMatElem(HePhRef, alpha); //select the current mode at kMean
