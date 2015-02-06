@@ -6,10 +6,10 @@
 #include <core/scalar.h>
 #include <core/Random.h>
 #include <core/string.h>
-#include <core/Units.h>
 #include <core/WignerSeitz.h>
 #include "BandStruct.h"
 #include "InputMap.h"
+#include "Units.h"
 
 int main(int argc, char** argv)
 {   string inputFilename; bool dryRun, printDefaults;
@@ -185,13 +185,6 @@ int main(int argc, char** argv)
 	double Gamma = GammaSum / totalBlocks;
 	double GammaStd = sqrt(GammaSumSq/totalBlocks - Gamma*Gamma)/sqrt(totalBlocks);
 	logPrintf("Gamma = %lg +/- %lg\n", Gamma, GammaStd);
-	
-	const double invSeconds = 2.418884326505e-17;
-	const double Coulomb = Joule/eV;
-	const double Volt = Joule/Coulomb;
-	const double Ampere = Coulomb*invSeconds;
-	const double Ohm = Volt/Ampere;
-	const double fs = 1e-15/invSeconds;
 	
 	// Calculate Resistivity
 	double rho = Omega*Gamma/(Tt*Tt);

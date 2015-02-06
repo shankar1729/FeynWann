@@ -1,8 +1,8 @@
 #include <core/Util.h>
-#include <core/Units.h>
 #include <core/Thread.h>
 #include "BandStruct.h"
 #include "InputMap.h"
+#include "Units.h"
 #include <deque>
 
 struct SparseMatrix
@@ -400,12 +400,6 @@ int main(int argc, char** argv)
 	double tauInv = tauInvNum / weightSum;
 	
 	//Report:
-	const double invSeconds = 2.418884326505e-17;
-	const double Coulomb = Joule/eV;
-	const double Volt = Joule/Coulomb;
-	const double Ampere = Coulomb*invSeconds;
-	const double Ohm = Volt/Ampere;
-	const double fs = 1e-15/invSeconds;
 	logPrintf("T = %lg\n", Tt);
 	logPrintf("Gamma = %lg\n", Gamma);
 	logPrintf("tauDrude = %lg fs\n", tauDrude/fs);

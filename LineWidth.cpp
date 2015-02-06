@@ -1,12 +1,12 @@
 #include "LineWidth.h"
 #include <core/Util.h>
-#include <core/Units.h>
 #include <electronic/matrix.h>
 #include <iostream>
 #include <fstream>
 #include <vector>
 #include <math.h>
 #include <algorithm>
+#include "Units.h"
 
 LineWidth::LineWidth(string inputFilename)
 {	std::ifstream ltFile(inputFilename.c_str());

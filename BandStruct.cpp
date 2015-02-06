@@ -1,12 +1,12 @@
 #include "BandStruct.h"
 #include <core/Util.h>
-#include <core/Units.h>
 #include <core/BlasExtra.h>
 #include <electronic/matrix.h>
 #include <iostream>
 #include <fstream>
 #include <vector>
 #include <math.h>
+#include "Units.h"
 
 //Read matrix from file accounting for real-only or complex storage based on spinWeight
 inline void readMatrix(matrix& m, string fname, int spinWeight)

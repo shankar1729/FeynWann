@@ -6,13 +6,13 @@
 #include <core/scalar.h>
 #include <core/Random.h>
 #include <core/string.h>
-#include <core/Units.h>
 #include <core/WignerSeitz.h>
 #include "BandStruct.h"
 #include "Histogram.h"
 #include "Epsilon.h"
 #include "LineWidth.h"
 #include "InputMap.h"
+#include "Units.h"
 
 int main(int argc, char** argv)
 {   string inputFilename; bool dryRun, printDefaults;
