@@ -63,7 +63,7 @@ int main(int argc, char** argv)
 	std::vector<diagMatrix> Gamma(e.eInfo.nStates, diagMatrix(nBands, 0.)); //decay rates in irreducible wedge
 	std::vector<diagMatrix> E(e.eInfo.nStates, diagMatrix(nBands, 0.)); //eigenvalues in irreducible wedge
 	double prefacGamma = M_PI/(Nk*Nk*Nk);
-	double EconserveExpFac = -0.5/(T*T), EconservePrefac = 1./(sqrt(2*M_PI)*T); //energy conserving Gaussian parameters
+	double EconserveScaleFac = 1./T, EconservePrefac = 1./(M_PI*T); //energy conserving Lorentzian parameters
 	std::vector< std::vector<matrix> > MePhArr(Nk);
 	//Loop over blocks of one dimension of second k-point
 	std::vector< vector3<> > k2arr(Nk);
@@ -96,7 +96,7 @@ int main(int argc, char** argv)
 						{	double gk = 1./(exp(omegaPh[alpha]/T) - 1.);
 							double Msq_by_omega = MePh[alpha](b2,b1).norm() / omegaPh[alpha];
 							for(int ae=-1; ae<=+1; ae+=2)
-							{	double delta = EconservePrefac * exp(EconserveExpFac * std::pow(E2[b2]-E1[b1] - ae*omegaPh[alpha],2));
+							{	double delta = EconservePrefac / (1. + std::pow(EconserveScaleFac * (E2[b2]-E1[b1] - ae*omegaPh[alpha]),2));
 								double occFactors = (gk+0.5 - ae*(0.5-f2));
 								Gamma[q][b1] += prefacGamma * occFactors * delta * Msq_by_omega;
 							}
