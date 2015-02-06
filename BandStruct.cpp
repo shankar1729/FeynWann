@@ -160,6 +160,11 @@ BandStruct::BandStruct(string prefix, double mu, int spinWeight, string phononPr
 				wannierHePhGamma.data()+wannierHePhGamma.index(0,phononCellDiffIndex[cp.iR1 - cp.iR2]),1);
 		}
 		wannierHePhGamma.allReduce(MPIUtil::ReduceSum);
+		
+		//Reshape matrix elements for two-phase transform:
+		//--- make the second index iR1 alone, and lump iR2 into the first index
+		//--- (possible because of the order enforced above)
+		wannierHePh.reshape(nModes*nBands*nBands*phononCellMap.size(), phononCellMap.size());
 	}
 	
 	//Pack matrix elements:
@@ -241,8 +246,11 @@ void BandStruct::setPhononMatElemArray(vector3<> k1, const std::vector< vector3<
 	//Compute double Fourier transform for fixed k1 and all k2 together:
 	watchFT.start();
 	std::vector< vector3<> > kMeanArr(nk2);
-	matrix phase(phononCellMapSq.size(), nk2);
+	matrix phase1(phononCellMap.size(), 1);
+	matrix phase2(phononCellMap.size(), nk2);
 	matrix phaseMean(phononCellDiffMap.size(), nk2);
+	for(size_t iCell=0; iCell<phononCellMap.size(); iCell++)
+		phase1.set(iCell,0, cis(2*M_PI * dot(phononCellMap[iCell],k1)));
 	for(int ik2=0; ik2<nk2; ik2++)
 	{	vector3<> k2 = k2arr[ik2];
 		//Get bisecting k-point (within nearest image convention):
@@ -251,14 +259,14 @@ void BandStruct::setPhononMatElemArray(vector3<> k1, const std::vector< vector3<
 		vector3<> kMean = k1 + 0.5*kDiff;
 		kMeanArr[ik2] = kMean;
 		//Calculate Fourier transform phase:
-		for(size_t icp=0; icp<phononCellMapSq.size(); icp++)
-		{	const CellPair& cp = phononCellMapSq[icp];
-			phase.set(icp,ik2, cis(2*M_PI * (dot(cp.iR1,k1) - dot(cp.iR2,k2))));
-		}
+		for(size_t iCell=0; iCell<phononCellMap.size(); iCell++)
+			phase2.set(iCell,ik2, cis(-2*M_PI * dot(phononCellMap[iCell],k2)));
 		for(size_t iDiff=0; iDiff<phononCellDiffMap.size(); iDiff++)
 			phaseMean.set(iDiff,ik2, cis(2*M_PI * dot(phononCellDiffMap[iDiff], kMean)));
 	}
-	matrix HePhArr = wannierHePh * phase; //now a nBands*nBands*nModes x nk2 matrix
+	matrix HePhArr = wannierHePh * phase1; //fourier transform for k1
+	HePhArr.reshape(0, phononCellMap.size());
+	HePhArr = HePhArr * phase2; //fourier transform for each k2; now a nBands*nBands*nModes x nk2 matrix
 	matrix HePhRefArr = wannierHePhGamma * phaseMean; //corresponding results for reference correction
 	watchFT.stop();
 	//Now process one k2 at a time:
