@@ -81,6 +81,7 @@ private:
 	std::list< std::shared_ptr<const CacheEntry> > electronCache, phononCache;
 	//Note that the cache functions may update the cache, but are functionally const (henced marked as such). However they are NOT thread safe.
 	std::shared_ptr<const CacheEntry> getElectronCache(vector3<> k, double omegaMax=DBL_MAX) const;
+	std::vector< std::shared_ptr<const CacheEntry> > getElectronCache(const std::vector< vector3<> >& kArr, double omegaMax=DBL_MAX) const;
 	std::shared_ptr<const CacheEntry> getPhononCache(vector3<> q) const;
 	size_t cacheSize;
 };
