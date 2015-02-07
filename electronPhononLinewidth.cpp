@@ -39,7 +39,7 @@ int main(int argc, char** argv)
 	logPrintf("\n");
 	
 	//Construct representation of irreducible wedge using dummy JDFTx input:
-	const int Nk = 36; double invNk = 1./Nk; //k-point sampling for e-ph, preferably a multiple of the pure electronic one below
+	const int Nk = 48; double invNk = 1./Nk; //k-point sampling for e-ph, preferably a multiple of the pure electronic one below
 	std::vector< std::pair<string,string> > jdftInputs;
 	jdftInputs.push_back(std::make_pair<string,string>("kpoint-folding", "12 12 12")); //Hard-coded k-point sampling used to generate Wannier functions
 	jdftInputs.push_back(std::make_pair<string,string>("lattice", "face-centered cubic 2")); //to make setup lightweight, only k-mesh used
@@ -56,32 +56,36 @@ int main(int argc, char** argv)
 	
 	//Initialize Wannier band structure with electron phonon matrix elements:
 	BandStruct bs("Wannier/wannier", mu, spinWeight, "Wannier/totalE");
-	bs.setCacheSize(2*Nk+5);
+	bs.setCacheSize((2*Nk+5)*std::max(1, e.eInfo.qStop-e.eInfo.qStart));
 	
 	//Calculate lifetimes for states in irreducible wedge:
 	int nBands = bs.getStates(vector3<>()).nRows();
-	std::vector<diagMatrix> Gamma(e.eInfo.nStates, diagMatrix(nBands, 0.)); //decay rates in irreducible wedge
-	std::vector<diagMatrix> E(e.eInfo.nStates, diagMatrix(nBands, 0.)); //eigenvalues in irreducible wedge
-	double prefacGamma = M_PI/(Nk*Nk*Nk);
+	std::vector<diagMatrix> ImSigma(e.eInfo.nStates, diagMatrix(nBands, 0.)); //imaginary part of self-energy in irreducible wedge
+	double prefacImSigma = 0.5 * M_PI/(Nk*Nk*Nk); //Note factor of 0.5 between decay rate and ImSigma due to squaring of wavefunctions to probability
 	double EconserveScaleFac = 1./T, EconservePrefac = 1./(M_PI*T); //energy conserving Lorentzian parameters
 	std::vector< std::vector<matrix> > MePhArr(Nk);
 	//Loop over blocks of one dimension of second k-point
 	std::vector< vector3<> > k2arr(Nk);
-	for(int ik0=0; ik0<Nk; ik0++)
-	for(int ik1=0; ik1<Nk; ik1++)
-	{	//Print progress:
-		if(!ik1)
-		{	logPrintf("Working on ik0 = %d of %d\n", ik0+1, Nk);
+	int ik01start = (Nk*Nk * mpiUtil->iProcess()) / mpiUtil->nProcesses();
+	int ik01stop = (Nk*Nk * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
+	int nk01mine = ik01stop-ik01start;
+	int nk01interval = std::max(1, int(round(nk01mine/50.))); //interval for reporting progress
+	for(int ik01=ik01start; ik01<ik01stop; ik01++)
+	{	int ik0 = ik01 / Nk;
+		int ik1 = ik01 - ik0 * Nk;
+		//Print progress:
+		int nk01done = ik01-ik01start+1;
+		if(nk01done % nk01interval == 0)
+		{	logPrintf("Working on nk01 = %d of %d\n", nk01done, nk01mine);
 			logFlush();
 		}
 		//Initialize k2 array:
 		for(int ik2=0; ik2<Nk; ik2++)
 			k2arr[ik2] = (vector3<>(ik0,ik1,ik2) + 0.5) * invNk;
 		//Loop over first k-point (irreducible wedge):
-		for(int q=e.eInfo.qStart; q<e.eInfo.qStop; q++)
+		for(int q=0; q<e.eInfo.nStates; q++)
 		{	vector3<> k1 = e.eInfo.qnums[q].k;
-			E[q] = bs.getStates(k1);
-			const diagMatrix& E1 = E[q];
+			const diagMatrix& E1 = bs.getStates(k1);
 			bs.setPhononMatElemArray(k1, k2arr, MePhArr.data());
 			for(int ik2=0; ik2<Nk; ik2++)
 			{	const vector3<>& k2 = k2arr[ik2];
@@ -98,7 +102,7 @@ int main(int argc, char** argv)
 							for(int ae=-1; ae<=+1; ae+=2)
 							{	double delta = EconservePrefac / (1. + std::pow(EconserveScaleFac * (E2[b2]-E1[b1] - ae*omegaPh[alpha]),2));
 								double occFactors = (gk+0.5 - ae*(0.5-f2));
-								Gamma[q][b1] += prefacGamma * occFactors * delta * Msq_by_omega;
+								ImSigma[q][b1] += prefacImSigma * occFactors * delta * Msq_by_omega;
 							}
 						}
 					}
@@ -109,38 +113,45 @@ int main(int argc, char** argv)
 	FILE* fp = 0;
 	if(mpiUtil->isHead()) fp = fopen("ImSigma_ePh.dat", "w");
 	for(int q=0; q<e.eInfo.nStates; q++)
-	{	Gamma[q].bcast(e.eInfo.whose(q));
-		E[q].bcast(e.eInfo.whose(q));
+	{	ImSigma[q].allReduce(MPIUtil::ReduceSum);
 		if(fp)
+		{	diagMatrix E = bs.getStates(e.eInfo.qnums[q].k);
 			for(int b=0; b<nBands; b++)
-				fprintf(fp, "%+19.12le %19.12le\n", E[q][b]/eV, Gamma[q][b]/(1./fs));
+				fprintf(fp, "%+19.12le %19.12le\n", E[b]/eV, ImSigma[q][b]/(1./fs));
+		}
 	}
 	if(fp) fclose(fp);
 	
-	//Wannierize the lifetimes:
+	//Raw binary output in JDFTx format: (the version actually used for final Wannierization)
+	e.eInfo.write(ImSigma, "totalE.ImSigma_ePh", nBands);
+	
+	//Wannierize logImSigma (for debug only - will move to JDFTx/Wannier once e-e formalism is complete):
 	std::map<vector3<int>,double> cellMap = getCellMap(e.gInfo.R, supercell.Rsuper); //Similar to BandStruct::cellMap, but includes weights for boundary symmetrization
 	size_t ikStart = (supercell.kmesh.size() * mpiUtil->iProcess()) / mpiUtil->nProcesses();
 	size_t ikStop = (supercell.kmesh.size() * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
 	size_t nkMine = std::max(size_t(1), ikStop-ikStart); //avoid zero size matrices below
 	matrix phase = zeroes(nkMine, cellMap.size());
-	matrix ImSigmaWannierTilde = zeroes(nBands*nBands, nkMine);
+	matrix LogImSigmaWannierTilde = zeroes(nBands*nBands, nkMine);
 	double kWeight = 1./supercell.kmesh.size();
 	for(size_t ik=ikStart; ik<ikStop; ik++)
 	{	//Apply unitary rotations at current k:
 		vector3<> k = supercell.kmesh[ik];
 		matrix evecs; bs.getStates(k, DBL_MAX, &evecs);
-		matrix ImSigmaSub = evecs * Gamma[supercell.kmeshTransform[ik].iReduced] * dagger(evecs);
-		callPref(eblas_copy)(ImSigmaWannierTilde.dataPref()+ImSigmaWannierTilde.index(0,ik-ikStart), ImSigmaSub.dataPref(), ImSigmaSub.nData());
+		diagMatrix LogImSigma;
+		for(double IS: ImSigma[supercell.kmeshTransform[ik].iReduced])
+			LogImSigma.push_back(log(IS));
+		matrix LogImSigmaSub = evecs * LogImSigma * dagger(evecs);
+		callPref(eblas_copy)(LogImSigmaWannierTilde.dataPref()+LogImSigmaWannierTilde.index(0,ik-ikStart), LogImSigmaSub.dataPref(), LogImSigmaSub.nData());
 		//Calculate required phases:
 		int iCell = 0;
 		for(auto cell: cellMap)
 			phase.set(ik-ikStart, iCell++, cell.second * kWeight * cis(2*M_PI*dot(k, cell.first)));
 	}
 	//Fourier transform to Wannier space and save
-	matrix ImSigmaWannier = ImSigmaWannierTilde * phase;
-	ImSigmaWannier.allReduce(MPIUtil::ReduceSum);
+	matrix LogImSigmaWannier = LogImSigmaWannierTilde * phase;
+	LogImSigmaWannier.allReduce(MPIUtil::ReduceSum);
 	if(mpiUtil->isHead())
-		ImSigmaWannier.dump("wannier.mlwfImSigma_ePh", spinWeight==2);
+		LogImSigmaWannier.dump("wannier.mlwfLogImSigma_ePh", spinWeight==2);
 	
 	finalizeSystem();
 	return 0;
