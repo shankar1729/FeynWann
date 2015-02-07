@@ -173,6 +173,7 @@ BandStruct::BandStruct(string prefix, double mu, int spinWeight, string phononPr
 	if(pWannier) compressMatElemArr(pWannier);
 	if(pSqWannier) compressMatElemArr(pSqWannier);
 	if(wannierHePh) compressMatElemArr(wannierHePh);
+	if(wannierHePhGamma) compressMatElemArr(wannierHePhGamma);
 	
 	//Pre-contract photon polarizations wherever applicable:
 	int nPol = Ahat.size();
@@ -199,9 +200,10 @@ BandStruct::BandStruct(string prefix, double mu, int spinWeight, string phononPr
 	}
 }
 
-diagMatrix BandStruct::getStates(vector3<> k, double omegaMax) const
+diagMatrix BandStruct::getStates(vector3<> k, double omegaMax, matrix* evecs) const
 {   static StopWatch watch("BandStruct::getStates"); watch.start();
 	std::shared_ptr<const CacheEntry> ce = getElectronCache(k, omegaMax);
+	if(evecs) *evecs = ce->evecs;
 	watch.stop();
 	return ce->eigs;
 }
@@ -410,7 +412,7 @@ std::shared_ptr<const BandStruct::CacheEntry> BandStruct::getElectronCache(vecto
 	//--- calculate phase factors for each cell:
 	ce->phase.init(cellMap.size(), 1);
 	for(size_t ic=0; ic<cellMap.size(); ic++)
-		ce->phase.set(ic,0, cis(2*M_PI*dot(cellMap[ic],k)));
+		ce->phase.set(ic,0, cis(-2*M_PI*dot(cellMap[ic],k)));
 	//--- compute and diagonalize Hamiltonian for k:
 	const matrix& hWannierEff = ce->nBands==nBands ? hWannier : hWannierMain;
 	matrix Hk = hWannierEff * ce->phase;
@@ -435,7 +437,7 @@ std::shared_ptr<const BandStruct::CacheEntry> BandStruct::getPhononCache(vector3
 	//--- calculate phase factors for each cell:
 	ce->phase.init(phononCellMap.size(),1);
 	for(size_t ic=0; ic<phononCellMap.size(); ic++)
-		ce->phase.set(ic,0,cis(2*M_PI*dot(phononCellMap[ic], q)));
+		ce->phase.set(ic,0,cis(-2*M_PI*dot(phononCellMap[ic], q)));
 	//--- compute and diagonalize force matrix for q:
 	matrix omegaSq_q = omegaSqPh * ce->phase;
 	omegaSq_q.reshape(nModes,nModes);

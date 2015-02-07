@@ -39,7 +39,7 @@ int main(int argc, char** argv)
 	logPrintf("\n");
 	
 	//Construct representation of irreducible wedge using dummy JDFTx input:
-	const int Nk = 24; double invNk = 1./Nk; //k-point sampling for e-ph, preferably a multiple of the pure electronic one below
+	const int Nk = 36; double invNk = 1./Nk; //k-point sampling for e-ph, preferably a multiple of the pure electronic one below
 	std::vector< std::pair<string,string> > jdftInputs;
 	jdftInputs.push_back(std::make_pair<string,string>("kpoint-folding", "12 12 12")); //Hard-coded k-point sampling used to generate Wannier functions
 	jdftInputs.push_back(std::make_pair<string,string>("lattice", "face-centered cubic 2")); //to make setup lightweight, only k-mesh used
@@ -116,6 +116,31 @@ int main(int argc, char** argv)
 				fprintf(fp, "%+19.12le %19.12le\n", E[q][b]/eV, Gamma[q][b]/(1./fs));
 	}
 	if(fp) fclose(fp);
+	
+	//Wannierize the lifetimes:
+	std::map<vector3<int>,double> cellMap = getCellMap(e.gInfo.R, supercell.Rsuper); //Similar to BandStruct::cellMap, but includes weights for boundary symmetrization
+	size_t ikStart = (supercell.kmesh.size() * mpiUtil->iProcess()) / mpiUtil->nProcesses();
+	size_t ikStop = (supercell.kmesh.size() * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
+	size_t nkMine = std::max(size_t(1), ikStop-ikStart); //avoid zero size matrices below
+	matrix phase = zeroes(nkMine, cellMap.size());
+	matrix ImSigmaWannierTilde = zeroes(nBands*nBands, nkMine);
+	double kWeight = 1./supercell.kmesh.size();
+	for(size_t ik=ikStart; ik<ikStop; ik++)
+	{	//Apply unitary rotations at current k:
+		vector3<> k = supercell.kmesh[ik];
+		matrix evecs; bs.getStates(k, DBL_MAX, &evecs);
+		matrix ImSigmaSub = evecs * Gamma[supercell.kmeshTransform[ik].iReduced] * dagger(evecs);
+		callPref(eblas_copy)(ImSigmaWannierTilde.dataPref()+ImSigmaWannierTilde.index(0,ik-ikStart), ImSigmaSub.dataPref(), ImSigmaSub.nData());
+		//Calculate required phases:
+		int iCell = 0;
+		for(auto cell: cellMap)
+			phase.set(ik-ikStart, iCell++, cell.second * kWeight * cis(2*M_PI*dot(k, cell.first)));
+	}
+	//Fourier transform to Wannier space and save
+	matrix ImSigmaWannier = ImSigmaWannierTilde * phase;
+	ImSigmaWannier.allReduce(MPIUtil::ReduceSum);
+	if(mpiUtil->isHead())
+		ImSigmaWannier.dump("wannier.mlwfImSigma_ePh", spinWeight==2);
 	
 	finalizeSystem();
 	return 0;
