@@ -243,16 +243,22 @@ void BandStruct::setPhononMatElemArray(vector3<> k1, const std::vector< vector3<
 	HePhArr.reshape(0, phononCellMap.size());
 	HePhArr = HePhArr * phase2; //fourier transform for each k2; now a nBands*nBands*nModes x nk2 matrix
 	watchFT.stop();
-	//Get electronic caches for all k-points together;
-	std::vector< vector3<> > kAll = k2arr; kAll.push_back(k1);
+	//Get electronic caches for all k-points together:
+	std::vector< vector3<> > kAll = k2arr;
+	kAll.push_back(k1);
 	std::vector< std::shared_ptr<const CacheEntry> > cElAll = getElectronCache(kAll);
 	const CacheEntry& cEl1 = *(cElAll.back());
+	//Get phonon caches for all k-points together:
+	std::vector< vector3<> > qAll(nk2);
+	for(int ik2=0; ik2<nk2; ik2++)
+		qAll[ik2] = k1 - k2arr[ik2];
+	std::vector< std::shared_ptr<const CacheEntry> > cPhAll = getPhononCache(qAll);
 	//Now process one k2 at a time:
 	for(int ik2=0; ik2<nk2; ik2++)
-	{	vector3<> k2 = k2arr[ik2];
-		matrix HePh = HePhArr(0,HePhArr.nRows(), ik2,ik2+1); HePh.reshape(nPacked, nModes); //now each column is matrix elements for a specific nuclear displacement
+	{	matrix HePh = HePhArr(0,HePhArr.nRows(), ik2,ik2+1);
+		HePh.reshape(nPacked, nModes); //now each column is matrix elements for a specific nuclear displacement
 		//Apply unitary transformations:
-		HePh = HePh * getPhononCache(k1-k2)->evecs; //phonon unitary rotation
+		HePh = HePh * cPhAll[ik2]->evecs; //phonon unitary rotation
 		const CacheEntry& cEl2 = *(cElAll[ik2]);
 		result[ik2].resize(nModes);
 		for(int alpha=0; alpha<nModes; alpha++)
@@ -358,8 +364,14 @@ matrix BandStruct::unpackMatElem(const matrix& mArr, int iCol) const
 	return m;
 }
 
+//------------ Cache functions -------------
+
 std::shared_ptr<const BandStruct::CacheEntry> BandStruct::getElectronCache(vector3<> k, double omegaMax) const
 {	return getElectronCache(std::vector< vector3<> >(1, k), omegaMax)[0];
+}
+
+std::shared_ptr<const BandStruct::CacheEntry> BandStruct::getPhononCache(vector3<> q) const
+{	return getPhononCache(std::vector< vector3<> >(1, q))[0];
 }
 
 std::vector< std::shared_ptr<const BandStruct::CacheEntry> > BandStruct::getElectronCache(const std::vector< vector3<> >& kArr, double omegaMax) const
@@ -414,30 +426,52 @@ std::vector< std::shared_ptr<const BandStruct::CacheEntry> > BandStruct::getElec
 	return ceArr;
 }
 
-std::shared_ptr<const BandStruct::CacheEntry> BandStruct::getPhononCache(vector3<> q) const
+std::vector< std::shared_ptr<const BandStruct::CacheEntry> > BandStruct::getPhononCache(const std::vector< vector3<> >& qArr) const
 {	static StopWatch watch("BandStruct::getPhononCache");
-	//Check cache first:
-	for(const auto& entry: phononCache)
-		if(entry->k == q)
-			return entry;
-	//Not found in cache; generate:
-	watch.start(); //only time when actually generating cache
-	auto ce = std::make_shared<CacheEntry>();
-	ce->k = q;
-	//--- calculate phase factors for each cell:
-	ce->phase.init(phononCellMap.size(),1);
-	for(size_t ic=0; ic<phononCellMap.size(); ic++)
-		ce->phase.set(ic,0,cis(-2*M_PI*dot(phononCellMap[ic], q)));
-	//--- compute and diagonalize force matrix for q:
-	matrix omegaSq_q = omegaSqPh * ce->phase;
-	omegaSq_q.reshape(nModes,nModes);
-	omegaSq_q = dagger_symmetrize(omegaSq_q);
-	omegaSq_q.diagonalize(ce->evecs, ce->eigs);
-	for(double& x: ce->eigs) x = sqrt(fabs(x)); //switch from omegaSq to omega
-	//--- update cache:
-	BandStruct& bs = *((BandStruct*)this); //modifiable version of this
-	while(phononCache.size() >= cacheSize) bs.phononCache.pop_front(); //discard oldest cache entries
-	bs.phononCache.push_back(ce); //add new one
+	std::vector< std::shared_ptr<const BandStruct::CacheEntry> > ceArr(qArr.size());
+	std::vector< vector3<> > qNew; //q's for which results not yet available in cache
+	//Checq cache first:
+	for(size_t iq=0; iq<qArr.size(); iq++)
+	{	const vector3<>& q = qArr[iq]; 
+		for(const auto& entry: phononCache)
+		{	if(entry->k == q)
+				ceArr[iq] = entry;
+		}
+		if(!ceArr[iq]) qNew.push_back(q);
+	}
+	if(!qNew.size()) return ceArr;
+	//Generate ones not found in cache:
+	watch.start(); //only time when actually producing new entries
+	//--- combine Fourier transforms into a single BLAS3:
+	matrix phase(phononCellMap.size(), qNew.size());
+	for(size_t iqNew=0; iqNew<qNew.size(); iqNew++)
+	{	const vector3<>& q = qNew[iqNew];
+		for(size_t ic=0; ic<phononCellMap.size(); ic++)
+			phase.set(ic,iqNew, cis(-2*M_PI*dot(phononCellMap[ic],q)));
+	}
+	matrix omegaSq_qNew = omegaSqPh * phase;
+	//--- need to do the remainder (diagonalization etc.) individually:
+	size_t iqNew = 0;
+	for(size_t iq=0; iq<qArr.size(); iq++)
+	{	if(ceArr[iq]) continue; //result already obtained from cache
+		const vector3<>& q = qNew[iqNew];
+		auto ce = std::make_shared<CacheEntry>();
+		ce->k = q;
+		//--- collect phase, Hamiltonian at current q and diagonalize:
+		ce->phase = phase(0,phase.nRows(), iqNew,iqNew+1);
+		matrix omegaSq_q = omegaSq_qNew(0,omegaSq_qNew.nRows(), iqNew,iqNew+1);
+		omegaSq_q.reshape(nModes, nModes);
+		omegaSq_q = dagger_symmetrize(omegaSq_q);
+		omegaSq_q.diagonalize(ce->evecs, ce->eigs);
+		for(double& x: ce->eigs) x = sqrt(fabs(x)); //switch from omegaSq to omega
+		ceArr[iq] = ce;
+		//--- update cache:
+		BandStruct& bs = *((BandStruct*)this); //modifiable version of this
+		while(phononCache.size() >= cacheSize) bs.phononCache.pop_front(); //discard oldest cache entries
+		bs.phononCache.push_back(ce); //add new one
+		iqNew++;
+	}
+	assert(iqNew == qNew.size());
 	watch.stop();
-	return ce;
+	return ceArr;
 }

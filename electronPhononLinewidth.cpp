@@ -85,8 +85,8 @@ int main(int argc, char** argv)
 		//Loop over first k-point (irreducible wedge):
 		for(int q=0; q<e.eInfo.nStates; q++)
 		{	vector3<> k1 = e.eInfo.qnums[q].k;
-			const diagMatrix& E1 = bs.getStates(k1);
 			bs.setPhononMatElemArray(k1, k2arr, MePhArr.data());
+			const diagMatrix& E1 = bs.getStates(k1);
 			for(int ik2=0; ik2<Nk; ik2++)
 			{	const vector3<>& k2 = k2arr[ik2];
 				diagMatrix E2 = bs.getStates(k2);
