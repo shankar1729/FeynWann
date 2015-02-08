@@ -138,30 +138,6 @@ BandStruct::BandStruct(string prefix, double mu, int spinWeight, string phononPr
 		wannierHePh.init(nModes*nBands*nBands, phononCellMapSq.size());
 		readMatrix(wannierHePh, prefix + ".mlwfHePh", spinWeight);
 		
-		//Contract matrix elements for gamma phonons / translational invariance correction:
-		//--- construct phononCellDiffMap
-		std::set< vector3<int> > phononCellDiffSet;
-		for(const CellPair& cp: phononCellMapSq)
-			phononCellDiffSet.insert(cp.iR1 - cp.iR2);
-		int iSet=0;
-		std::map< vector3<int>, int > phononCellDiffIndex;
-		phononCellDiffMap.resize(phononCellDiffSet.size());
-		for(const vector3<int>& iRdiff: phononCellDiffSet)
-		{	phononCellDiffMap[iSet] = iRdiff;
-			phononCellDiffIndex[iRdiff] = iSet;
-			iSet++;
-		}
-		//--- contract to retain iR1-iR2 combinations alone
-		size_t pairStart = (phononCellMapSq.size() * mpiUtil->iProcess()) / mpiUtil->nProcesses();
-		size_t pairStop = (phononCellMapSq.size() * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
-		wannierHePhGamma = zeroes(wannierHePh.nRows(), phononCellDiffMap.size());
-		for(size_t pair=pairStart; pair<pairStop; pair++)
-		{	const CellPair& cp = phononCellMapSq[pair];
-			eblas_zaxpy(wannierHePh.nRows(), 1., wannierHePh.data()+wannierHePh.index(0,pair),1,
-				wannierHePhGamma.data()+wannierHePhGamma.index(0,phononCellDiffIndex[cp.iR1 - cp.iR2]),1);
-		}
-		wannierHePhGamma.allReduce(MPIUtil::ReduceSum);
-		
 		//Reshape matrix elements for two-phase transform:
 		//--- make the second index iR1 alone, and lump iR2 into the first index
 		//--- (possible because of the order enforced above)
@@ -173,7 +149,6 @@ BandStruct::BandStruct(string prefix, double mu, int spinWeight, string phononPr
 	if(pWannier) compressMatElemArr(pWannier);
 	if(pSqWannier) compressMatElemArr(pSqWannier);
 	if(wannierHePh) compressMatElemArr(wannierHePh);
-	if(wannierHePhGamma) compressMatElemArr(wannierHePhGamma);
 	
 	//Pre-contract photon polarizations wherever applicable:
 	int nPol = Ahat.size();
@@ -251,7 +226,6 @@ void BandStruct::setPhononMatElemArray(vector3<> k1, const std::vector< vector3<
 	std::vector< vector3<> > kMeanArr(nk2);
 	matrix phase1(phononCellMap.size(), 1);
 	matrix phase2(phononCellMap.size(), nk2);
-	matrix phaseMean(phononCellDiffMap.size(), nk2);
 	for(size_t iCell=0; iCell<phononCellMap.size(); iCell++)
 		phase1.set(iCell,0, cis(2*M_PI * dot(phononCellMap[iCell],k1)));
 	for(int ik2=0; ik2<nk2; ik2++)
@@ -264,39 +238,19 @@ void BandStruct::setPhononMatElemArray(vector3<> k1, const std::vector< vector3<
 		//Calculate Fourier transform phase:
 		for(size_t iCell=0; iCell<phononCellMap.size(); iCell++)
 			phase2.set(iCell,ik2, cis(-2*M_PI * dot(phononCellMap[iCell],k2)));
-		for(size_t iDiff=0; iDiff<phononCellDiffMap.size(); iDiff++)
-			phaseMean.set(iDiff,ik2, cis(2*M_PI * dot(phononCellDiffMap[iDiff], kMean)));
 	}
 	matrix HePhArr = wannierHePh * phase1; //fourier transform for k1
 	HePhArr.reshape(0, phononCellMap.size());
 	HePhArr = HePhArr * phase2; //fourier transform for each k2; now a nBands*nBands*nModes x nk2 matrix
-	matrix HePhRefArr = wannierHePhGamma * phaseMean; //corresponding results for reference correction
 	watchFT.stop();
 	//Get electronic caches for all k-points together;
-	std::vector< vector3<> > kAll; kAll.reserve(2*nk2+1);
-	kAll.insert(kAll.end(), k2arr.begin(), k2arr.end());
-	kAll.insert(kAll.end(), kMeanArr.begin(), kMeanArr.end());
-	kAll.push_back(k1);
+	std::vector< vector3<> > kAll = k2arr; kAll.push_back(k1);
 	std::vector< std::shared_ptr<const CacheEntry> > cElAll = getElectronCache(kAll);
 	const CacheEntry& cEl1 = *(cElAll.back());
 	//Now process one k2 at a time:
 	for(int ik2=0; ik2<nk2; ik2++)
 	{	vector3<> k2 = k2arr[ik2];
 		matrix HePh = HePhArr(0,HePhArr.nRows(), ik2,ik2+1); HePh.reshape(nPacked, nModes); //now each column is matrix elements for a specific nuclear displacement
-		//Translational invariance correction by subtracting reference at kMean: [WARNING: Assumes no optical phonon modes!]
-		matrix HePhRef = HePhRefArr(0,HePhRefArr.nRows(), ik2,ik2+1); HePhRef.reshape(nPacked, nModes); //corresponding to HePh at kMean
-		const CacheEntry& cElMean = *(cElAll[ik2+nk2]);
-		for(int alpha=0; alpha<nModes; alpha++)
-		{	matrix Href = unpackMatElem(HePhRef, alpha); //select the current mode at kMean
-			Href = dagger(cElMean.evecs) * Href * cElMean.evecs; //switch to eigenbasis
-			for(int b1=0; b1<nBands; b1++)
-				for(int b2=0; b2<nBands; b2++)
-					if(fabs(cElMean.eigs[b1] - cElMean.eigs[b2]) > 1e-4)
-						Href.set(b1,b2, 0.); //not in degenerate subspace; don't correct
-			Href = cElMean.evecs * Href * dagger(cElMean.evecs); //switch back to Wannier basis
-			packMatElem(Href, HePhRef, alpha); //set the reference value
-		}
-		HePh -= HePhRef;
 		//Apply unitary transformations:
 		HePh = HePh * getPhononCache(k1-k2)->evecs; //phonon unitary rotation
 		const CacheEntry& cEl2 = *(cElAll[ik2]);

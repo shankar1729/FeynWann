@@ -67,8 +67,6 @@ private:
 	matrix wannierHePh; //electron-phonon matrix elements in Wannier basis
 	struct CellPair { vector3<int> iR1, iR2; };
 	std::vector<CellPair> phononCellMapSq; //pairs of cells for which electron-phonon matrix elements are stored
-	matrix wannierHePhGamma; //reduced version for electron gamma-phonon matrix elements (to speed up translational inavriance correction)
-	std::vector< vector3<int> > phononCellDiffMap; //cell map for differences between cells in phononCellMap
 	
 	//Caching of unitary rotations and eigenvalues (electrons as well as  phonons):
 	struct CacheEntry

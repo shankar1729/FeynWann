@@ -56,7 +56,7 @@ int main(int argc, char** argv)
 	
 	//Initialize Wannier band structure with electron phonon matrix elements:
 	BandStruct bs("Wannier/wannier", mu, spinWeight, "Wannier/totalE");
-	bs.setCacheSize((2*Nk+5)*std::max(1, e.eInfo.qStop-e.eInfo.qStart));
+	bs.setCacheSize(Nk + e.eInfo.nStates);
 	
 	//Calculate lifetimes for states in irreducible wedge:
 	int nBands = bs.getStates(vector3<>()).nRows();
