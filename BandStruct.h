@@ -20,6 +20,7 @@ public:
 	);
 	
 	diagMatrix getStates(vector3<> k, double omegaMax=DBL_MAX, matrix* evecs=0) const; //if omegaMax is less than omegaMain (if available), use main centers alone. Optionally retrieve eigenvectors
+	std::vector<diagMatrix> getStates(const std::vector< vector3<> >& kArr, double omegaMax=DBL_MAX, matrix* evecs=0) const; //array version of above
 	diagMatrix getPhononModes(vector3<> q) const;
 	std::vector<matrix> getDipoleMatElem(vector3<> k) const; //dipole matrix elements contracted against each specified Ahat in constructor
 	matrix getDipoleSqMatElem(vector3<> k) const; //matrix elements of (Ahat1.P)(Ahat2.P); must have exactly two Ahat's in constructor

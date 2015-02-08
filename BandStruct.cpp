@@ -176,12 +176,21 @@ BandStruct::BandStruct(string prefix, double mu, int spinWeight, string phononPr
 }
 
 diagMatrix BandStruct::getStates(vector3<> k, double omegaMax, matrix* evecs) const
-{   static StopWatch watch("BandStruct::getStates"); watch.start();
-	std::shared_ptr<const CacheEntry> ce = getElectronCache(k, omegaMax);
-	if(evecs) *evecs = ce->evecs;
-	watch.stop();
-	return ce->eigs;
+{	return getStates(std::vector< vector3<> >(1, k), omegaMax, evecs)[0];
 }
+
+std::vector<diagMatrix> BandStruct::getStates(const std::vector< vector3<> >& kArr, double omegaMax, matrix* evecs) const
+{	static StopWatch watch("BandStruct::getStates"); watch.start();
+	std::vector< std::shared_ptr<const CacheEntry> > ceArr = getElectronCache(kArr, omegaMax);
+	std::vector< diagMatrix > eigs(kArr.size());
+	for(size_t ik=0; ik<kArr.size(); ik++)
+	{	eigs[ik] = ceArr[ik]->eigs;
+		if(evecs) evecs[ik] = ceArr[ik]->evecs;
+	}
+	watch.stop();
+	return eigs;
+}
+
 
 diagMatrix BandStruct::getPhononModes(vector3<> q) const
 {	static StopWatch watch("BandStruct::getPhononModes"); watch.start();

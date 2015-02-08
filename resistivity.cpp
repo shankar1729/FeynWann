@@ -42,61 +42,9 @@ int main(int argc, char** argv)
 	logPrintf("\n");
 
 	//Initialize Wannier bandstructure:
+	const int bunchSize = 32;
 	BandStruct bs("Wannier/wannier", mu, spinWeight, "Wannier/totalE");
-
-	//DEBUG
-// 	{
-// 		int blockStart = (totalBlocks * (mpiUtil->iProcess())) / mpiUtil->nProcesses(); //MPI division
-// 		int blockStop = (totalBlocks * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
-// 		int nKpts = nKptsN1/totalBlocks;
-// 		
-// 		matrix3<> GT = 2*M_PI*inv(~R);
-// 		WignerSeitz BZ(GT);
-// 		double kappa = 0.9;
-// 		double Omega = fabs(det(R));
-// 		
-// 		char fname[256]; sprintf(fname, "tempMdebug.%d", mpiUtil->iProcess());
-// 		FILE* fp = fopen(fname, "w");
-// 		for(int block=blockStart; block<blockStop; block++)
-// 		{	Random::seed(block);
-// 			for(int nk1 =0; nk1<nKpts; nk1++)
-// 			{	vector3<> kpnt1, kpnt2;
-// 				for(int j=0; j<3; j++)
-// 				{	kpnt1[j] = Random::uniform();
-// 					kpnt2[j] = Random::uniform();
-// 				}
-// 				kpnt2 = kpnt1 + (Random::uniform()/kpnt2.length()) * kpnt2;
-// 				{	diagMatrix E1 = bs.getStates(kpnt1);
-// 					diagMatrix E2 = bs.getStates(kpnt2);
-// 					diagMatrix omegaPh = bs.getPhononModes(kpnt1-kpnt2);
-// 					std::vector<matrix> HePh = bs.getPhononMatElem(kpnt1, kpnt2);
-// 					double nPairs = 0;
-// 					double Msq = 0;
-// 					for(size_t alpha=0; alpha<HePh.size(); alpha++)
-// 						for(int b=0; b<HePh[alpha].nRows(); b++)
-// 						{	double weight = exp(-std::pow(0.5*(E1[b]+E2[b])/(1.*eV), 2)); //Gaussian selecting 1eV within Fermi level
-// 							Msq += HePh[alpha](b,b).norm() * weight;
-// 							nPairs += (0.5*spinWeight) * weight;
-// 						}
-// 					if(nPairs < 1.) continue;
-// 					Msq *= (HePh.size())/nPairs;
-// 					vector3<> kDiff = BZ.restrict(kpnt1-kpnt2);
-// 					double k = (GT * kDiff).length();
-// 					double MsqOld = std::pow(vl*k,2) * M_PI / (4*Omega*(k*k + kappa*kappa));
-// 					fprintf(fp, "%lg %lg %lg\n", k, sqrt(Msq), sqrt(MsqOld));
-// 				}
-// 			}
-// 		}
-// 		fclose(fp);
-// 		double temp = 0.;
-// 		mpiUtil->bcast(temp);
-// 		if(mpiUtil->isHead())
-// 		{	system("cat tempMdebug.* > tempMdebug");
-// 			system("rm tempMdebug.*");
-// 		}
-// 		finalizeSystem();
-// 		return 0;
-// 	}
+	bs.setCacheSize(2*bunchSize);
 	
 	// Compute T and Gamma
 	double Tsum = 0., TsumSq = 0., GammaSum = 0., GammaSumSq = 0.;
@@ -104,73 +52,90 @@ int main(int argc, char** argv)
 	logPrintf("Calculating T and Gamma... "); logFlush();
 	int blockStart = (totalBlocks * (mpiUtil->iProcess())) / mpiUtil->nProcesses(); //MPI division
 	int blockStop = (totalBlocks * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
-	int nKpts = nKptsN1/totalBlocks;
+	int nKptsMin = nKptsN1/totalBlocks;
 	double Omega = fabs(det(R));
-	double prefacT = spinWeight/(3.*nKpts);
-	double prefacGamma = spinWeight*M_PI/(3*nKpts);
+	const double Emax = 10*T; //max energy from Fermi level to consider
 	double EconserveExpFac = -0.5/(T*T), EconservePrefac = 1./(sqrt(2*M_PI)*T); //energy conserving Gaussian parameters
 	for(int block=blockStart; block<blockStop; block++)
 	{	Random::seed(block);
 		double Tblock = 0., GammaBlock=0.;
 		double gBlock = 0., tauInvBlock=0.;
-		for(int nk1 =0; nk1<nKpts; nk1++)
-		{	vector3<> kpnti, kpntj;
-			for(int j=0; j<3; j++) 
-			{	kpnti[j] = Random::uniform();
-				kpntj[j] = Random::uniform();
-			}
-			
-			//Calculate energies and filter kpoint pairs:
-			double Emax = 10*T; //max energy from Fermi level to consider
-			diagMatrix Ei = bs.getStates(kpnti, Emax);
-			diagMatrix Ej = bs.getStates(kpntj, Emax);
-			bool worthwhileSingle = false, worthwhileDouble = false;
-			for(int v=0; v<Ei.nRows(); v++) if(fabs(Ei[v])<Emax)
-			{	worthwhileSingle = true;
-				for(int c=0; c<Ej.nRows(); c++) if(fabs(Ej[c])<Emax)
-				{	worthwhileDouble = true;
-					break;
-				}
-			}
-			if(!worthwhileSingle) continue;
-			
-			//Calculate remaining (more expensive) quantities for k-point pair:
-			std::vector<vector3<>> vi = bs.getVelocity(kpnti, R, Emax);
-			std::vector<vector3<>> vj;
-			diagMatrix omegaPh;
-			std::vector<matrix> MePh;
-			if(worthwhileDouble)
-			{	vj = bs.getVelocity(kpntj, R, Emax);
-				omegaPh = bs.getPhononModes(kpnti-kpntj);
-				MePh = bs.getPhononMatElem(kpnti,kpntj);
-			}
-			
-			for(int v=0; v<Ei.nRows(); v++)
-			{	double dFdEi = -1/(T*std::pow(2*cosh(Ei[v]/(2*T)),2));
-				double viDotvi = vi[v].length_squared();
-				Tblock += prefacT * viDotvi*(-dFdEi);
-				gBlock += prefacT * (-dFdEi);
-				if(!worthwhileDouble) continue;
-				for(int c=0; c<Ej.nRows(); c++)
-				{	double viDotvj = dot(vi[v], vj[c]);
-					double fj = 1./(exp(Ej[c]/T)+1);
-					for(int alpha=0; alpha<omegaPh.nRows(); alpha ++)
-					{	double gk = 1./(exp(omegaPh[alpha]/T) - 1.);
-						double Msq_by_omega = MePh[alpha](c,v).norm() / omegaPh[alpha];
-						for(int ae=-1; ae<=+1; ae+=2)
-						{	double delta = EconservePrefac * exp(EconserveExpFac * std::pow(Ej[c]-Ei[v] - ae*omegaPh[alpha],2));
-							double occFactors = (-dFdEi) * (gk+0.5 - ae*(0.5-fj));
-							GammaBlock += prefacGamma * (viDotvi -  viDotvj) * occFactors * delta * Msq_by_omega;
-							tauInvBlock += prefacGamma * occFactors * delta * Msq_by_omega;
+		double nKpts = 0.; int nBunches = 0;
+		while(nKpts < nKptsMin)
+		{	//Get a bunch of k-points with states near the Fermi level:
+			std::vector< vector3<> > kArr; kArr.reserve(bunchSize);
+			while(kArr.size() < bunchSize)
+			{	//Diagonalize Hamiltonians at a set of random k-points:
+				std::vector< vector3<> > kTmp(bunchSize);
+				for(vector3<>& k: kTmp)
+					for(int j=0; j<3; j++)
+						k[j] = Random::uniform();
+				std::vector<diagMatrix> Etmp = bs.getStates(kTmp, Emax);
+				//Add k-points with appropriate states:
+				int nFound = 0, nAdded = 0;
+				for(int ik=0; ik<bunchSize; ik++)
+				{	bool worthwhile = false;
+					for(int b=0; b<Etmp[ik].nRows(); b++)
+						if(fabs(Etmp[ik][b]) < Emax)
+						{	worthwhile = true;
+							break;
+						}
+					if(worthwhile)
+					{	nFound++;
+						if(kArr.size() < bunchSize)
+						{	kArr.push_back(kTmp[ik]);
+							nAdded++;
 						}
 					}
 				}
+				nKpts += bunchSize * (nFound ? nAdded * (1./nFound) : 1.); //number of k-points examined to get the relevant ones (needed for normalization)
+			}
+			nBunches++;
+			
+			//Get energies and velocities for selected bunch:
+			std::vector<diagMatrix> Earr = bs.getStates(kArr, Emax);
+			std::vector< vector3<> > vArr[bunchSize];
+			for(int ik=0; ik<bunchSize; ik++)
+				vArr[ik] = bs.getVelocity(kArr[ik], R, Emax);
+			
+			diagMatrix omegaPh[bunchSize];
+			std::vector<matrix> MePh[bunchSize];
+			for(int ik1=0; ik1<bunchSize; ik1++)
+			{	//Calculate phonon stuff for each pair of k-points involving ik1
+				bs.setPhononMatElemArray(kArr[ik1], kArr, MePh);
+				for(int ik2=0; ik2<bunchSize; ik2++)
+					omegaPh[ik2] = bs.getPhononModes(kArr[ik1] - kArr[ik2]);
+				
+				for(int v=0; v<Earr[ik1].nRows(); v++)
+				{	double dFdEi = -1/(T*std::pow(2*cosh(Earr[ik1][v]/(2*T)),2));
+					double viDotvi = vArr[ik1][v].length_squared();
+					Tblock += viDotvi*(-dFdEi);
+					gBlock += (-dFdEi);
+					for(int ik2=0; ik2<bunchSize; ik2++)
+						if(ik2 != ik1)
+							for(int c=0; c<Earr[ik2].nRows(); c++)
+							{	double viDotvj = dot(vArr[ik1][v], vArr[ik2][c]);
+								double fj = 1./(exp(Earr[ik2][c]/T)+1);
+								for(int alpha=0; alpha<omegaPh[ik2].nRows(); alpha++)
+								{	double gk = 1./(exp(omegaPh[ik2][alpha]/T) - 1.);
+									double Msq_by_omega = MePh[ik2][alpha](c,v).norm() / omegaPh[ik2][alpha];
+									for(int ae=-1; ae<=+1; ae+=2)
+									{	double delta = EconservePrefac * exp(EconserveExpFac * std::pow(Earr[ik2][c]-Earr[ik1][v] - ae*omegaPh[ik2][alpha],2));
+										double occFactors = (-dFdEi) * (gk+0.5 - ae*(0.5-fj));
+										GammaBlock += (viDotvi -  viDotvj) * occFactors * delta * Msq_by_omega;
+										tauInvBlock += occFactors * delta * Msq_by_omega;
+									}
+								}
+							}
+				}
 			}
 		}
-		Tsum += Tblock; TsumSq += std::pow(Tblock,2);
-		GammaSum += GammaBlock; GammaSumSq +=std::pow(GammaBlock,2);
-		gSum += gBlock; gSumSq += std::pow(gBlock,2);
-		tauInvSum += tauInvBlock; tauInvSumSq +=std::pow(tauInvBlock,2);
+		double prefacT = spinWeight/(3.*nKpts);
+		double prefacGamma = spinWeight*M_PI/(3*nKpts*nKpts*1./nBunches);
+		Tblock *= prefacT; Tsum += Tblock; TsumSq += std::pow(Tblock,2);
+		gBlock *= prefacT; gSum += gBlock; gSumSq += std::pow(gBlock,2);
+		GammaBlock *= prefacGamma; GammaSum += GammaBlock; GammaSumSq += std::pow(GammaBlock,2);
+		tauInvBlock *= prefacGamma; tauInvSum += tauInvBlock; tauInvSumSq += std::pow(tauInvBlock,2);
 	}
 
 	mpiUtil->allReduce(Tsum, MPIUtil::ReduceSum);
