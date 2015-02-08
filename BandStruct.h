@@ -4,7 +4,6 @@
 #include <core/Util.h>
 #include <electronic/matrix.h>
 #include <vector>
-#include <list>
 #include <memory>
 #include <math.h>
 #include <float.h>
@@ -70,18 +69,28 @@ private:
 	
 	//Caching of unitary rotations and eigenvalues (electrons as well as  phonons):
 	struct CacheEntry
-	{	int nBands; //number of bands in cached entry (could be nMain or nBands in the electronic case)
-		vector3<> k; //wave-vector for cached entry
+	{	size_t rank; //Rank for the cache entry used to find the oldest entries to delete
 		matrix phase; //Fourier transform phase
 		matrix evecs; //discrete unitary rotation
 		diagMatrix eigs; //eigenvalues
+		int nBands() const { return eigs.nRows(); }
 	};
-	std::list< std::shared_ptr<const CacheEntry> > electronCache, phononCache;
+	std::map<vector3<>, std::shared_ptr<const CacheEntry> > electronCache, mainCache, phononCache;
+	size_t rankElectron, rankMain, rankPhonon;
 	//Note that the cache functions may update the cache, but are functionally const (henced marked as such). However they are NOT thread safe.
 	std::shared_ptr<const CacheEntry> getElectronCache(vector3<> k, double omegaMax=DBL_MAX) const;
 	std::shared_ptr<const CacheEntry> getPhononCache(vector3<> q) const;
 	std::vector< std::shared_ptr<const CacheEntry> > getElectronCache(const std::vector< vector3<> >& kArr, double omegaMax=DBL_MAX) const;
 	std::vector< std::shared_ptr<const CacheEntry> > getPhononCache(const std::vector< vector3<> >& qArr) const;
+	//--- Most of the implementation of caching mechanism collected here, and called by above:
+	std::vector< std::shared_ptr<const CacheEntry> > getCache(
+		const std::vector< vector3<> >& kArr, //!< array of k/q-points
+		const std::map<vector3<>, std::shared_ptr<const CacheEntry> >& cache, //!< relevant cache
+		const std::vector< vector3<int> >& cellMap, //!< relevant cell map
+		const matrix& hWannierEff, //!< relevant Hamiltonian
+		const size_t& rank, //!< relevant rank counter
+		bool shouldSqrt //!< whether to take square-root of eigenvalues (needed for phonons)
+	) const;
 	size_t cacheSize;
 };
 

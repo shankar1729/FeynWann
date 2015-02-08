@@ -292,17 +292,18 @@ double BandStruct::get_mk1k2(vector3<> k1, vector3<> k2, double omega, double T)
 std::vector< vector3<> > BandStruct::getVelocity(vector3<> k, const matrix3<>& R, double omegaMax) const
 {	static StopWatch watch("BandStruct::getVelocity"); watch.start();
 	std::shared_ptr<const CacheEntry> ce = getElectronCache(k, omegaMax);
-	const matrix& hWannierEff = ce->nBands==nBands ? hWannier : hWannierMain;
-	std::vector< vector3<> > v(ce->nBands);
+	int nBandsEff = ce->nBands();
+	const matrix& hWannierEff = nBandsEff==nBands ? hWannier : hWannierMain;
+	std::vector< vector3<> > v(nBandsEff);
 	for(int j = 0; j < 3; j++)
 	{	matrix phasePrime = ce->phase;
 		complex* phasePrimeData = phasePrime.data();
 		for(size_t ic=0; ic<cellMap.size(); ic++)
 			phasePrimeData[ic] *= complex(0,cellMap[ic][j]); //multiply phase by I*iR[j] to get phasePrime
 		matrix dHdk = hWannierEff * phasePrime;
-		dHdk.reshape(ce->nBands, ce->nBands);
+		dHdk.reshape(nBandsEff, nBandsEff);
 		diagMatrix vj = diag(dagger(ce->evecs) * dHdk * ce->evecs);
-		for(int b=0; b<ce->nBands; b++) v[b][j] = vj[b];
+		for(int b=0; b<nBandsEff; b++) v[b][j] = vj[b];
 	}
 	for(vector3<>& vb: v) vb = R * vb; //Convert to Cartesian
 	watch.stop();
@@ -375,18 +376,28 @@ std::shared_ptr<const BandStruct::CacheEntry> BandStruct::getPhononCache(vector3
 }
 
 std::vector< std::shared_ptr<const BandStruct::CacheEntry> > BandStruct::getElectronCache(const std::vector< vector3<> >& kArr, double omegaMax) const
-{	static StopWatch watch("BandStruct::getElectronCache");
-	int nBandsEff = omegaMax<omegaMain ? nMain : nBands;
+{	if(omegaMax<omegaMain)
+		return getCache(kArr, mainCache, cellMap, hWannierMain, rankMain, false);
+	else
+		return getCache(kArr, electronCache, cellMap, hWannier, rankElectron, false);
+}
+
+std::vector< std::shared_ptr<const BandStruct::CacheEntry> > BandStruct::getPhononCache(const std::vector< vector3<> >& qArr) const
+{	return getCache(qArr, phononCache, phononCellMap, omegaSqPh, rankPhonon, true);
+}
+
+std::vector< std::shared_ptr<const BandStruct::CacheEntry> > BandStruct::getCache( const std::vector< vector3<> >& kArr, 
+		const std::map<vector3<>, std::shared_ptr<const CacheEntry> >& cache, const std::vector< vector3<int> >& cellMap,
+		const matrix& hWannierEff, const size_t& rank, bool shouldSqrt) const
+{	static StopWatch watch("BandStruct::getCache");
 	std::vector< std::shared_ptr<const BandStruct::CacheEntry> > ceArr(kArr.size());
 	std::vector< vector3<> > kNew; //k's for which results not yet available in cache
 	//Check cache first:
 	for(size_t ik=0; ik<kArr.size(); ik++)
-	{	const vector3<>& k = kArr[ik]; 
-		for(const auto& entry: electronCache)
-		{	if(entry->k == k && entry->nBands == nBandsEff)
-				ceArr[ik] = entry;
-		}
-		if(!ceArr[ik]) kNew.push_back(k);
+	{	const vector3<>& k = kArr[ik];
+		auto iter = cache.find(k);
+		if(iter == cache.end()) kNew.push_back(k);
+		else ceArr[ik] = iter->second;
 	}
 	if(!kNew.size()) return ceArr;
 	//Generate ones not found in cache:
@@ -398,80 +409,43 @@ std::vector< std::shared_ptr<const BandStruct::CacheEntry> > BandStruct::getElec
 		for(size_t ic=0; ic<cellMap.size(); ic++)
 			phase.set(ic,ikNew, cis(-2*M_PI*dot(cellMap[ic],k)));
 	}
-	const matrix& hWannierEff = nBandsEff==nBands ? hWannier : hWannierMain;
 	matrix HkNew = hWannierEff * phase;
 	//--- need to do the remainder (diagonalization etc.) individually:
+	typedef std::map<vector3<>, std::shared_ptr<const CacheEntry> > Cache;
+	Cache& cacheMod = (Cache&)cache; //!< modifiable copy
 	size_t ikNew = 0;
 	for(size_t ik=0; ik<kArr.size(); ik++)
 	{	if(ceArr[ik]) continue; //result already obtained from cache
 		const vector3<>& k = kNew[ikNew];
 		auto ce = std::make_shared<CacheEntry>();
-		ce->nBands = nBandsEff;
-		ce->k = k;
+		ce->rank = (((size_t&)rank)++);
 		//--- collect phase, Hamiltonian at current k and diagonalize:
 		ce->phase = phase(0,phase.nRows(), ikNew,ikNew+1);
 		matrix Hk = HkNew(0,HkNew.nRows(), ikNew,ikNew+1);
-		Hk.reshape(ce->nBands, ce->nBands);
+		int nBandsEff = round(sqrt(HkNew.nRows()));
+		Hk.reshape(nBandsEff, nBandsEff);
 		Hk = dagger_symmetrize(Hk);
 		Hk.diagonalize(ce->evecs, ce->eigs);
+		if(shouldSqrt)
+		{	for(double& x: ce->eigs)
+				x = sqrt(fabs(x));
+		}
 		ceArr[ik] = ce;
-		//--- update cache:
-		BandStruct& bs = *((BandStruct*)this); //modifiable version of this
-		while(electronCache.size() >= cacheSize) bs.electronCache.pop_front(); //discard oldest cache entries
-		bs.electronCache.push_back(ce); //add new one
+		cacheMod[k] = ce; //add to cache
 		ikNew++;
 	}
 	assert(ikNew == kNew.size());
+	//Clean up cache if necessary:
+	if(cacheMod.size() > 2*cacheSize)
+	{	size_t rankMin = rank - cacheSize; //remove everything older
+		for(auto iter=cacheMod.begin(); iter!=cacheMod.end(); )
+		{	auto iterNext = iter; iterNext++;
+			if(iter->second->rank < rankMin)
+				cacheMod.erase(iter);
+			iter = iterNext;
+		}
+	}
 	watch.stop();
 	return ceArr;
 }
 
-std::vector< std::shared_ptr<const BandStruct::CacheEntry> > BandStruct::getPhononCache(const std::vector< vector3<> >& qArr) const
-{	static StopWatch watch("BandStruct::getPhononCache");
-	std::vector< std::shared_ptr<const BandStruct::CacheEntry> > ceArr(qArr.size());
-	std::vector< vector3<> > qNew; //q's for which results not yet available in cache
-	//Checq cache first:
-	for(size_t iq=0; iq<qArr.size(); iq++)
-	{	const vector3<>& q = qArr[iq]; 
-		for(const auto& entry: phononCache)
-		{	if(entry->k == q)
-				ceArr[iq] = entry;
-		}
-		if(!ceArr[iq]) qNew.push_back(q);
-	}
-	if(!qNew.size()) return ceArr;
-	//Generate ones not found in cache:
-	watch.start(); //only time when actually producing new entries
-	//--- combine Fourier transforms into a single BLAS3:
-	matrix phase(phononCellMap.size(), qNew.size());
-	for(size_t iqNew=0; iqNew<qNew.size(); iqNew++)
-	{	const vector3<>& q = qNew[iqNew];
-		for(size_t ic=0; ic<phononCellMap.size(); ic++)
-			phase.set(ic,iqNew, cis(-2*M_PI*dot(phononCellMap[ic],q)));
-	}
-	matrix omegaSq_qNew = omegaSqPh * phase;
-	//--- need to do the remainder (diagonalization etc.) individually:
-	size_t iqNew = 0;
-	for(size_t iq=0; iq<qArr.size(); iq++)
-	{	if(ceArr[iq]) continue; //result already obtained from cache
-		const vector3<>& q = qNew[iqNew];
-		auto ce = std::make_shared<CacheEntry>();
-		ce->k = q;
-		//--- collect phase, Hamiltonian at current q and diagonalize:
-		ce->phase = phase(0,phase.nRows(), iqNew,iqNew+1);
-		matrix omegaSq_q = omegaSq_qNew(0,omegaSq_qNew.nRows(), iqNew,iqNew+1);
-		omegaSq_q.reshape(nModes, nModes);
-		omegaSq_q = dagger_symmetrize(omegaSq_q);
-		omegaSq_q.diagonalize(ce->evecs, ce->eigs);
-		for(double& x: ce->eigs) x = sqrt(fabs(x)); //switch from omegaSq to omega
-		ceArr[iq] = ce;
-		//--- update cache:
-		BandStruct& bs = *((BandStruct*)this); //modifiable version of this
-		while(phononCache.size() >= cacheSize) bs.phononCache.pop_front(); //discard oldest cache entries
-		bs.phononCache.push_back(ce); //add new one
-		iqNew++;
-	}
-	assert(iqNew == qNew.size());
-	watch.stop();
-	return ceArr;
-}
