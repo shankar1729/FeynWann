@@ -71,11 +71,11 @@ int main(int argc, char** argv)
 	Ahat.push_back(kHat1 - I*(eps1.k/eps1.modGammaMinus)*zHat);
 	Ahat.push_back(kHat2 - I*(eps2.k/eps2.modGammaMinus)*zHat);
 	
-	//Initalize line width of intermediate electronic states
-	LineWidth lineWidth("ImSigma.dat");
-
 	//Initialize Wannier bandstructure:
 	BandStruct bs("Wannier/wannier", mu, spinWeight, string(), Ahat);
+
+	//Initalize line width of intermediate electronic states
+	LineWidth lineWidth("Wannier/wannier", bs);
 
 	//Compute the normalization factor
 	int blockStart = (totalBlocks * (mpiUtil->iProcess())) / mpiUtil->nProcesses(); //MPI division
@@ -152,7 +152,7 @@ int main(int argc, char** argv)
 				if(equib)
 				{	ik++;
 					// Calculate transitions at current k-point:
-					diagMatrix E = bs.getStates(kpnt);
+					diagMatrix E = bs.getStates(kpnt), Eim = lineWidth(kpnt);
 					std::vector<matrix> AdotParr = bs.getDipoleMatElem(kpnt);
 					const matrix& AdotP1 = AdotParr[0];
 					const matrix& AdotP2 = AdotParr[1];
@@ -166,7 +166,7 @@ int main(int argc, char** argv)
 							complex Meff = 0.; double weight = 0.;
 							complex num1sum = 0., num2sum = 0.; //partial numerator sums for CEDA
 							for(int l=0; l<E.nRows(); l++)
-							{	complex El(E[l], lineWidth(E[l]));
+							{	complex El(E[l], Eim[l]);
 								double Fl = 1./(1.+exp(E[l]/T)); //occupation
 								complex num1 = AdotP1(c,l)*AdotP2(l,v); num1sum += num1;
 								complex num2 = AdotP2(c,l)*AdotP1(l,v); num2sum += num2;

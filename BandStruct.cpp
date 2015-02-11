@@ -10,12 +10,12 @@
 #include "Units.h"
 
 //Read matrix from file accounting for real-only or complex storage based on spinWeight
-inline void readMatrix(matrix& m, string fname, int spinWeight)
+void readMatrix(matrix& m, string fname, int spinWeight)
 {	if(spinWeight==1) m.read(fname.c_str()); else m.read_real(fname.c_str());
 }
 
 BandStruct::BandStruct(string prefix, double mu, int spinWeight, string phononPrefix, std::vector< vector3<complex> > Ahat)
-: nPol(Ahat.size()), cacheSize(6)
+: spinWeight(spinWeight), nPol(Ahat.size()), cacheSize(6)
 {	//Read cell map
 	ifstream ifs(prefix + ".mlwfCellMap");
 	string headerLine; getline(ifs, headerLine); //read and ignore header line

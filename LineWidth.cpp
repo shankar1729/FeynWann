@@ -8,32 +8,31 @@
 #include <algorithm>
 #include "Units.h"
 
-LineWidth::LineWidth(string inputFilename)
-{	std::ifstream ltFile(inputFilename.c_str());
-	if(!ltFile.is_open())
-		die("Could not open system file '%s' for reading.\n", inputFilename.c_str());
-	while(!ltFile.eof())
-	{	string line; getline(ltFile, line); //line-by-line processing (comments can now be inline)
-		trim(line);
-		if(line[0]=='#' || !line.length()) continue; //ignore comments and blank lines
-		istringstream iss(line);
-		double e, imSig; iss >> e >> imSig;
-		switch(imSigma.size())
-		{	case 0: Emin = e; break;
-			case 1: dE = e-Emin; break;
-			default:
-				if(round((e-Emin)/dE) != imSigma.size())
-					die("Energy grid in '%s' is not uniform\n", inputFilename.c_str());
-		}
-		imSigma.push_back(imSig);
-	}
+void readMatrix(matrix& m, string fname, int spinWeight); //declared in BandStruct.cpp
+
+LineWidth::LineWidth(string prefix, const BandStruct& bs) : bs(bs)
+{
+	//Read e-e scattering:
+	eeWannier.init(bs.nBands*bs.nBands, bs.cellMap.size());
+	readMatrix(eeWannier, prefix + ".mlwfImSigma_ee", bs.spinWeight);
+	
+	//Read e-ph scattering:
+	ePhWannier.init(bs.nBands*bs.nBands, bs.cellMap.size());
+	readMatrix(ePhWannier, prefix + ".mlwfImSigma_ePh", bs.spinWeight);
 }
 
-double LineWidth::operator()(double energy) const
-{	double x = (energy - Emin) / dE;
-	if(x <= 0.) return imSigma.front();
-	if(x >= imSigma.size()-1) return imSigma.back();
-	int i = floor(x);
-	double t = x - i;
-	return imSigma[i]*(1-t) + imSigma[i+1]*t;
+diagMatrix LineWidth::operator()(vector3< double > k) const
+{	static StopWatch watch("LineWidth::operator()"); watch.start();
+	std::shared_ptr<const BandStruct::CacheEntry> ce = bs.getElectronCache(k);
+	matrix ee_k = eeWannier * ce->phase; 
+	matrix ePh_k = ePhWannier * ce->phase;
+	ee_k.reshape(bs.nBands, bs.nBands);
+	ePh_k.reshape(bs.nBands, bs.nBands);
+	ee_k = dagger(ce->evecs) * ee_k * ce->evecs; //switch to eigenbasis of Hk
+	ePh_k = dagger(ce->evecs) * ePh_k * ce->evecs; //switch to eigenbasis of Hk
+	diagMatrix out(bs.nBands);
+	for(int b=0; b<bs.nBands; b++)
+		out[b] = std::max(0.,ee_k(b,b).real()) + exp(ePh_k(b,b).real()); //e-ph is interpolated logarithmically
+	watch.stop();
+	return out;
 }

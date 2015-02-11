@@ -64,11 +64,11 @@ int main(int argc, char** argv)
 	complex I(0.0,1.0);
 	std::vector< vector3<complex> > Ahat(1, kHat - I*(eps.k/eps.modGammaMinus)*zHat);
 	
-	//Initalize line width of intermediate electronic states
-	LineWidth lineWidth("ImSigma.dat");
-
 	//Initialize Wannier bandstructure:
 	BandStruct bs("Wannier/wannier", mu, spinWeight, "Wannier/totalE", Ahat);
+
+	//Initalize line width of intermediate electronic states
+	LineWidth lineWidth("Wannier/wannier", bs);
 
 	//Compute the normalization factor
 	int blockStart = (totalBlocks * (mpiUtil->iProcess())) / mpiUtil->nProcesses(); //MPI division
@@ -153,10 +153,10 @@ int main(int argc, char** argv)
 				if(equib)
 				{	ik++;
 					// Calculate transitions at current k-point:
-					diagMatrix E1 = bs.getStates(kpnt1);
+					diagMatrix E1 = bs.getStates(kpnt1), E1im = lineWidth(kpnt1);
 					std::vector<matrix> Pk1 = bs.getDipoleMatElem(kpnt1);
 					const matrix& AdotPk1 = Pk1[0]; //pre-contracted
-					diagMatrix E2 = bs.getStates(kpnt2);
+					diagMatrix E2 = bs.getStates(kpnt2), E2im = lineWidth(kpnt2);
 					std::vector<matrix> Pk2 = bs.getDipoleMatElem(kpnt2);
 					const matrix& AdotPk2 = Pk2[0]; //pre-contracted
 					diagMatrix P = bs.getPhononModes(kpnt1-kpnt2);
@@ -173,8 +173,8 @@ int main(int argc, char** argv)
 									// Effective matrix elements
 									complex Meff = 0.; double weightSub = 0.;
 									for(int i=0; i<E1.nRows(); i++) // sum over the intermediate states
-									{	complex E1i(E1[i], lineWidth(E1[i]));
-										complex E2i(E2[i], lineWidth(E2[i]));
+									{	complex E1i(E1[i], E1im[i]);
+										complex E2i(E2[i], E2im[i]);
 										double f1i = 1./(1.+exp(E1[i]/T));
 										double f2i = 1./(1.+exp(E2[i]/T));
 										Meff += 
