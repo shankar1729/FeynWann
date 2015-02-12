@@ -2,9 +2,6 @@
 #include <electronic/matrix.h>
 #include <electronic/ColumnBundle.h>
 #include <electronic/Everything.h>
-#include <fstream>
-#include <iterator>
-#include <sstream>
 #include <core/scalar.h>
 #include <core/Random.h>
 #include <core/string.h>

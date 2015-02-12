@@ -30,16 +30,28 @@ LineWidth::LineWidth(string prefix, const BandStruct& bs) : bs(bs)
 }
 
 diagMatrix LineWidth::operator()(vector3< double > k) const
+{	return (*this)(std::vector<vector3<>>(1, k))[0];
+}
+
+std::vector< diagMatrix > LineWidth::operator()(const std::vector< vector3<> >& kArr) const
 {	static StopWatch watch("LineWidth::operator()"); watch.start();
-	std::shared_ptr<const BandStruct::CacheEntry> ce = bs.getElectronCache(k);
-	matrix ImSigma_k = ImSigmaWannier * ce->phase;
-	matrix ee_k = ImSigma_k(0,nBandsSq, 0,1); 
-	matrix ePh_k = ImSigma_k(nBandsSq,2*nBandsSq, 0,1);
-	ee_k.reshape(bs.nBands, bs.nBands); ee_k = dagger(ce->evecs) * ee_k * ce->evecs; //switch to eigenbasis of Hk
-	ePh_k.reshape(bs.nBands, bs.nBands); ePh_k = dagger(ce->evecs) * ePh_k * ce->evecs; //switch to eigenbasis of Hk
-	diagMatrix out(bs.nBands);
-	for(int b=0; b<bs.nBands; b++)
-		out[b] = std::max(0.,ee_k(b,b).real()) + exp(ePh_k(b,b).real()); //e-ph is interpolated logarithmically
+	std::vector< std::shared_ptr<const BandStruct::CacheEntry> > ceArr = bs.getElectronCache(kArr);
+	//Collect phases:
+	matrix phase(nCells, kArr.size());
+	for(size_t ik=0; ik<kArr.size(); ik++)
+		phase.set(0,nCells, ik,ik+1, ceArr[ik]->phase);
+	matrix ImSigma_k = ImSigmaWannier * phase;
+	std::vector<diagMatrix> out(kArr.size());
+	for(size_t ik=0; ik<kArr.size(); ik++)
+	{	const matrix& evecs = ceArr[ik]->evecs;
+		matrix ee_k = ImSigma_k(0,nBandsSq, ik,ik+1); 
+		matrix ePh_k = ImSigma_k(nBandsSq,2*nBandsSq, ik,ik+1);
+		ee_k.reshape(bs.nBands, bs.nBands); ee_k = dagger(evecs) * ee_k * evecs; //switch to eigenbasis of Hk
+		ePh_k.reshape(bs.nBands, bs.nBands); ePh_k = dagger(evecs) * ePh_k * evecs; //switch to eigenbasis of Hk
+		out[ik].resize(bs.nBands);
+		for(int b=0; b<bs.nBands; b++)
+			out[ik][b] = std::max(0.,ee_k(b,b).real()) + exp(ePh_k(b,b).real()); //e-ph is interpolated logarithmically
+	}
 	watch.stop();
 	return out;
 }
