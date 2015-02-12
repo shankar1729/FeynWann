@@ -12,8 +12,9 @@ public:
 	LineWidth(string prefix, const BandStruct& bs);
 	diagMatrix operator()(vector3<> k) const; //returns total ImSigma (e-e + e-ph)
 private:
+	int nBandsSq, nCells;
 	const BandStruct& bs;
-	matrix eeWannier, ePhWannier; //Wannierized e-e and e-Ph contributions to ImSigma
+	matrix ImSigmaWannier; //Wannierized e-e and e-Ph contributions to ImSigma (combined columneiwse for efficient multiply)
 };
 
 #endif //WANNIERMETROPOLIS_LINEWIDTH_H
