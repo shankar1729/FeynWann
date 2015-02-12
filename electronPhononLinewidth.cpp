@@ -122,36 +122,8 @@ int main(int argc, char** argv)
 	}
 	if(fp) fclose(fp);
 	
-	//Raw binary output in JDFTx format: (the version actually used for final Wannierization)
+	//Raw binary output in JDFTx format: (which can then be Wannierized using Wannier)
 	e.eInfo.write(ImSigma, "totalE.ImSigma_ePh", nBands);
-	
-	//Wannierize logImSigma (for debug only - will move to JDFTx/Wannier once e-e formalism is complete):
-	std::map<vector3<int>,double> cellMap = getCellMap(e.gInfo.R, supercell.Rsuper); //Similar to BandStruct::cellMap, but includes weights for boundary symmetrization
-	size_t ikStart = (supercell.kmesh.size() * mpiUtil->iProcess()) / mpiUtil->nProcesses();
-	size_t ikStop = (supercell.kmesh.size() * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
-	size_t nkMine = std::max(size_t(1), ikStop-ikStart); //avoid zero size matrices below
-	matrix phase = zeroes(nkMine, cellMap.size());
-	matrix LogImSigmaWannierTilde = zeroes(nBands*nBands, nkMine);
-	double kWeight = 1./supercell.kmesh.size();
-	for(size_t ik=ikStart; ik<ikStop; ik++)
-	{	//Apply unitary rotations at current k:
-		vector3<> k = supercell.kmesh[ik];
-		matrix evecs; bs.getStates(k, DBL_MAX, &evecs);
-		diagMatrix LogImSigma;
-		for(double IS: ImSigma[supercell.kmeshTransform[ik].iReduced])
-			LogImSigma.push_back(log(IS));
-		matrix LogImSigmaSub = evecs * LogImSigma * dagger(evecs);
-		callPref(eblas_copy)(LogImSigmaWannierTilde.dataPref()+LogImSigmaWannierTilde.index(0,ik-ikStart), LogImSigmaSub.dataPref(), LogImSigmaSub.nData());
-		//Calculate required phases:
-		int iCell = 0;
-		for(auto cell: cellMap)
-			phase.set(ik-ikStart, iCell++, cell.second * kWeight * cis(2*M_PI*dot(k, cell.first)));
-	}
-	//Fourier transform to Wannier space and save
-	matrix LogImSigmaWannier = LogImSigmaWannierTilde * phase;
-	LogImSigmaWannier.allReduce(MPIUtil::ReduceSum);
-	if(mpiUtil->isHead())
-		LogImSigmaWannier.dump("wannier.mlwfLogImSigma_ePh", spinWeight==2);
 	
 	finalizeSystem();
 	return 0;
