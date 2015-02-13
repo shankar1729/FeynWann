@@ -23,6 +23,7 @@ public:
 	std::vector<diagMatrix> getStates(const std::vector< vector3<> >& kArr, double omegaMax=DBL_MAX, matrix* evecs=0) const; //array version of above
 	diagMatrix getPhononModes(vector3<> q) const;
 	std::vector<matrix> getDipoleMatElem(vector3<> k) const; //dipole matrix elements contracted against each specified Ahat in constructor
+	std::vector< std::vector<matrix> > getDipoleMatElem(const std::vector< vector3<> >& kArr) const; //array version of above
 	matrix getDipoleSqMatElem(vector3<> k) const; //matrix elements of (Ahat1.P)(Ahat2.P); must have exactly two Ahat's in constructor
 
 	std::vector<matrix> getPhononMatElem(vector3<> k1, vector3<> k2) const;

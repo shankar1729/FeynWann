@@ -40,7 +40,7 @@ Epsilon::Epsilon(string inputFilename)
 	epsFile.close();
 }
 
-void Epsilon::setFrequency(double omegaIn)
+void Epsilon::setFrequency(double omegaIn, bool print)
 {	// Calculate the dielectric at omega = Eplasmon
 	double omega = omegaIn;
 	complex omegaEpsilonPrime(1.0,0.0), one(1.0,0.0), den;
@@ -56,7 +56,7 @@ void Epsilon::setFrequency(double omegaIn)
 		omegaEpsilonPrime += num * den*den * (std::pow(epsParam[2],2) + omega*omega);
 	}
 
-	// Plasmon mode deatils
+	//Plasmon mode details
 	const double c = 1./7.29735257e-3;
 	double realEpsilon = real(epsilon);
 	k = (omega/c) * sqrt(realEpsilon/(realEpsilon+1));
@@ -64,5 +64,6 @@ void Epsilon::setFrequency(double omegaIn)
 	modGammaMinus = sqrt(k*k - (realEpsilon*(omega/c)*(omega/c)));
 	Lquant = (1/(4*std::pow(modGammaPlus,3))) * (std::pow(modGammaPlus,2) + k*k + std::pow((omega/c),2))
 		+ (1/(4*std::pow(modGammaMinus,3))) * ((std::pow(modGammaMinus,2)+k*k)*real(omegaEpsilonPrime)+(std::pow((real(epsilon*omega/c)),2)));
-	logPrintf("omega = %lg  k = %lg  modGammaMinus  = %lg  modGammaPlus = %lg  Lquant = %lg\n", omega, k, modGammaMinus, modGammaPlus, Lquant);
+	
+	if(print) logPrintf("omega = %lg  k = %lg  modGammaMinus  = %lg  modGammaPlus = %lg  Lquant = %lg\n", omega, k, modGammaMinus, modGammaPlus, Lquant);
 }

@@ -234,8 +234,8 @@ int main(int argc, char** argv)
 	//Carrier distributions:
 	char fname[256];
 	sprintf(fname, "Distrib-%.1lfeV+%.1lfeV-metro.dat", Eplasmon1/eV, Eplasmon2/eV);
-	EcHist.allReduce(MPIUtil::ReduceSum); EcHist.print(string("e")+fname, eV);
-	EvHist.allReduce(MPIUtil::ReduceSum); EvHist.print(string("h")+fname, eV);
+	EcHist.allReduce(MPIUtil::ReduceSum); EcHist.print(string("e")+fname, 1./eV, eV);
+	EvHist.allReduce(MPIUtil::ReduceSum); EvHist.print(string("h")+fname, 1./eV, eV);
 
 	//Empty-state convergence:
 	mpiUtil->allReduce(GammaConv.data(), GammaConv.size(), MPIUtil::ReduceSum);

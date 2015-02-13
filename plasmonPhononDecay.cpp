@@ -13,7 +13,7 @@
 
 int main(int argc, char** argv)
 {   string inputFilename; bool dryRun, printDefaults;
-	initSystemCmdline(argc, argv, "Metropolis calculation of plasmon decay rate", inputFilename, dryRun, printDefaults);
+	initSystemCmdline(argc, argv, "Metropolis calculation of phonon-assisted plasmon decay rate", inputFilename, dryRun, printDefaults);
 
 	//Get the system parameters (mu, T, lattice vectors etc.)
 	InputMap inputMap(inputFilename);
@@ -239,8 +239,8 @@ int main(int argc, char** argv)
 	//Carrier distributions:
 	char fname[256];
 	sprintf(fname, "Distrib-%.1lfeV-phonon.dat", Eplasmon/eV);
-	EcHist.allReduce(MPIUtil::ReduceSum); EcHist.print(string("e")+fname, eV);
-	EvHist.allReduce(MPIUtil::ReduceSum); EvHist.print(string("h")+fname, eV);
+	EcHist.allReduce(MPIUtil::ReduceSum); EcHist.print(string("e")+fname, 1./eV, eV);
+	EvHist.allReduce(MPIUtil::ReduceSum); EvHist.print(string("h")+fname, 1./eV, eV);
 
 	//Experimental lineWidth
 	complex arg = eps.epsilon / (eps.epsilon + 1);

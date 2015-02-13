@@ -200,16 +200,31 @@ diagMatrix BandStruct::getPhononModes(vector3<> q) const
 }
 
 std::vector<matrix> BandStruct::getDipoleMatElem(vector3<> k) const
+{	return getDipoleMatElem(std::vector<vector3<>>(1, k))[0];
+}
+
+std::vector< std::vector<matrix> > BandStruct::getDipoleMatElem(const std::vector< vector3<> >& kArr) const
 {	static StopWatch watch("BandStruct::getDipoleMatElem"); watch.start();
 	assert(nPol);
-	std::shared_ptr<const CacheEntry> ce = getElectronCache(k);
-	matrix Pk = pWannier * ce->phase;
-	Pk.reshape(nPacked, nPol);
-	std::vector<matrix> pk(nPol);
-	for(int iPol=0; iPol<nPol; iPol++)
-		pk[iPol] = dagger(ce->evecs) * unpackMatElem(Pk,iPol) * ce->evecs; //switch to eigenbasis of Hk
+	std::vector< std::shared_ptr<const BandStruct::CacheEntry> > ceArr = getElectronCache(kArr);
+	//Collect phases:
+	matrix phase(cellMap.size(), kArr.size());
+	for(size_t ik=0; ik<kArr.size(); ik++)
+		phase.set(0,phase.nRows(), ik,ik+1, ceArr[ik]->phase);
+	//Single matrix multiply for Fourier transforms:
+	matrix PkArr = pWannier * phase;
+	//Apply unitary rotations individually:
+	std::vector< std::vector<matrix> > out(kArr.size());
+	for(size_t ik=0; ik<kArr.size(); ik++)
+	{	const matrix& evecs = ceArr[ik]->evecs;
+		matrix Pk = PkArr(0,PkArr.nRows(), ik,ik+1);
+		Pk.reshape(nPacked, nPol);
+		out[ik].resize(nPol);
+		for(int iPol=0; iPol<nPol; iPol++)
+			out[ik][iPol] = dagger(evecs) * unpackMatElem(Pk,iPol) * evecs; //switch to eigenbasis of Hk
+	}
 	watch.stop();
-	return pk;
+	return out;
 }
 
 matrix BandStruct::getDipoleSqMatElem(vector3<> k) const

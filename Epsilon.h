@@ -11,6 +11,6 @@ public:
 	double omega_p, omega, Eplasmon, modGammaPlus, modGammaMinus, Lquant, k;
 	complex epsilon;
 	Epsilon(string inputFilename);
-	void setFrequency(double omegaIn);
+	void setFrequency(double omegaIn, bool print=true);
 };
 #endif //WANNIERMETROPOLIS_EPSILON_H
