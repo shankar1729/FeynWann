@@ -7,29 +7,27 @@
 #include <math.h>
 #include <algorithm>
 
-class Histogram
+struct Histogram
 {
-private:
 	double Emin, dE, normFac;
 	std::vector<double> out;
-public:
+
 	Histogram(double Emin, double dE, double Emax);
 	void addEvent(double E, double weight);
 	void allReduce(MPIUtil::ReduceOp op, bool safeMode=false); //collect over MPI
-	void print(string fname, double Escale, double histScale) const; //write to file (with optional scale factors)
+	void print(string fname, double Escale, double histScale) const; //write to file
 };
 
-class Histogram2D
+struct Histogram2D
 {
-private:
 	double Emin, dE, omegaMin, domega, normFac;
 	int nE, nomega;
 	std::vector<double> out; //nE by nomega with E inner dimension and omega outer
-public:
+
 	Histogram2D(double Emin, double dE, double Emax, double omegaMin, double domega, double omegaMax);
 	void addEvent(double E, double omega, double weight);
 	void allReduce(MPIUtil::ReduceOp op, bool safeMode=false); //collect over MPI
-	void print(string fname, double Escale, double omegaScale, double histScale) const; //write to file (with optional unit conversion)
+	void print(string fname, double Escale, double omegaScale, double histScale) const;
 };
 
 #endif //WANNIERMETROPOLIS_HISTOGRAM_H
