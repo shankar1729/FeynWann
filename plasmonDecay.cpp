@@ -195,9 +195,8 @@ int main(int argc, char** argv)
 	{	ofstream ofs("GammaAll-expt.dat");
 		for(double omega = gaussMargin; omega <= EplasmonMax-gaussMargin; omega += T)
 		{	eps.setFrequency(omega, false);
-			complex arg = eps.epsilon / (eps.epsilon + 1);
-			double omegaIm = fabs(sin(0.5*atan2(imag(arg),real(arg)))) * omega;
-			ofs << omega/eV << '\t' << omegaIm/eV << '\n';
+			double GammaExpt = (omega / (2.*eps.modGammaMinus*eps.Lquant)) * (1. + std::pow(eps.k/eps.modGammaMinus, 2)) * imag(eps.epsilon);
+			ofs << omega/eV << '\t' << GammaExpt/eV << '\n';
 		}
 	}
 	
