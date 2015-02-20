@@ -40,29 +40,10 @@ BandStruct::BandStruct(string prefix, double mu, int spinWeight, string phononPr
 			hWannier.set(0,nBands*nBands, ic,ic+1, hWannier(0,nBands*nBands, ic,ic+1) - mu * id);
 		}
 
-	//Read CEDA energies:
-	Eceda.resize(nBands);
-	{	string fname = prefix + ".mlwfCEDA";
-		FILE* fp = fopen(fname.c_str(), "r");
-		if(!fp) die("Could not open %s for reading.\n", fname.c_str());
-		for(int b=0; b<nBands; b++)
-		{	if(fscanf(fp, "%lf", &Eceda[b]) != 1)
-				die("Error reading CEDA energies from %s.\n", fname.c_str());
-				Eceda[b] -= mu;
-		}
-		fclose(fp);
-	}
-	
 	//Read momentum matrix elements
 	if(nPol)
 	{	pWannier.init(nBands*nBands*3, cellMap.size());
 		readMatrix(pWannier, prefix + ".mlwfP", spinWeight);
-	}
-
-	//Read momentum-squared matrix elements
-	if(nPol == 2)
-	{	pSqWannier.init(nBands*nBands*6, cellMap.size());
-		readMatrix(pSqWannier, prefix + ".mlwfPsq", spinWeight);
 	}
 
 	//Initialize main window (if available):
@@ -139,20 +120,12 @@ BandStruct::BandStruct(string prefix, double mu, int spinWeight, string phononPr
 		//Read phonon matrix elements:
 		wannierHePh.init(nModes*nBands*nBands * phononCellMap.size(), phononCellMap.size());
 		readMatrix(wannierHePh, prefix + ".mlwfHePh", spinWeight);
-		
-		//Read phonon-momentum matrix elements:
-		if(nPol)
-		{	wannierHPePh.init(3*nModes*nBands*nBands * phononCellMap.size(), phononCellMap.size());
-			readMatrix(wannierHPePh, prefix + ".mlwfHPePh", spinWeight);
-		}
 	}
 	
 	//Pack matrix elements:
 	nPacked = nMain*nMain + 2*nMain*(nBands-nMain);
 	if(pWannier) compressMatElemArr(pWannier);
-	if(pSqWannier) compressMatElemArr(pSqWannier);
 	if(wannierHePh) compressMatElemArr(wannierHePh);
-	if(wannierHPePh) compressMatElemArr(wannierHPePh);
 	
 	//Pre-contract photon polarizations wherever applicable:
 	//--- momentum matrix elements
@@ -162,29 +135,6 @@ BandStruct::BandStruct(string prefix, double mu, int spinWeight, string phononPr
 			for(int iDir=0; iDir<3; iDir++)
 				rot.set(iDir, iPol, Ahat[iPol][iDir]);
 		transformMatElemArr(pWannier, rot);
-	}
-	//--- momentum-squared matrix elements
-	if(pSqWannier)
-	{	matrix rot(6, 1); //express contraction with symmetric tensor Ahat1 * Ahat2'
-		for(int iDir=0; iDir<3; iDir++)
-		{	//Diagonal
-			rot.set(iDir,0, Ahat[0][iDir]*Ahat[1][iDir]);
-			//Off-diagonal
-			int jDir = (iDir + 1) % 3;
-			int kDir = (iDir + 2) % 3;
-			rot.set(iDir+3,0, Ahat[0][jDir]*Ahat[1][kDir] + Ahat[0][kDir]*Ahat[1][jDir]);
-		}
-		transformMatElemArr(pSqWannier, rot);
-	}
-	//--- phonon-momentum matrix elements
-	if(wannierHPePh)
-	{	matrix rot = zeroes(3*nModes, nPol*nModes); //for each mode, contract momentum directions against Ahat
-		for(int alpha=0; alpha<nModes; alpha++)
-		{	for(int pDir=0; pDir<3; pDir++)
-				for(int pol=0; pol<nPol; pol++)
-					rot.set(pDir*nModes+alpha, pol*nModes+alpha, Ahat[pol][pDir]);
-		}
-		transformMatElemArr(wannierHPePh, rot);
 	}
 }
 
@@ -240,22 +190,13 @@ std::vector< std::vector<matrix> > BandStruct::getDipoleMatElem(const std::vecto
 	return out;
 }
 
-matrix BandStruct::getDipoleSqMatElem(vector3<> k) const
-{	static StopWatch watch("BandStruct::getDipoleSqMatElem"); watch.start();
-	assert(nPol == 2);
-	std::shared_ptr<const CacheEntry> ce = getElectronCache(k);
-	matrix Psq = unpackMatElem(pSqWannier * ce->phase, 0);
-	watch.stop();
-	return Psq;
-}
-
-std::vector<matrix> BandStruct::getPhononMatElem(vector3<> k1, vector3<> k2, std::vector< std::vector<matrix> >* resultP) const
+std::vector<matrix> BandStruct::getPhononMatElem(vector3<> k1, vector3<> k2) const
 {	std::vector<matrix> result;
-	setPhononMatElemArray(k1, std::vector< vector3<> >(1, k2), &result, resultP);
+	setPhononMatElemArray(k1, std::vector< vector3<> >(1, k2), &result);
 	return result;
 }
 
-void BandStruct::setPhononMatElemArray(vector3<> k1, const std::vector< vector3<> >& k2arr, std::vector<matrix>* result, std::vector< std::vector<matrix> >* resultP) const
+void BandStruct::setPhononMatElemArray(vector3<> k1, const std::vector< vector3<> >& k2arr, std::vector<matrix>* result) const
 {	static StopWatch watch("BandStruct::getPhononMatElem"), watchFT("BandStruct::getPhononMatEl_FT"); watch.start();
 	int nk2 = k2arr.size();
 	//Compute double Fourier transform for fixed k1 and all k2 together:
@@ -279,13 +220,6 @@ void BandStruct::setPhononMatElemArray(vector3<> k1, const std::vector< vector3<
 	matrix HePhArr = wannierHePh * phase1; //fourier transform for k1
 	HePhArr.reshape(0, phononCellMap.size());
 	HePhArr = HePhArr * phase2; //fourier transform for each k2; now a nBands*nBands*nModes x nk2 matrix
-	//Analogously for phonon-momentum matrix elements
-	matrix HPePhArr;
-	if(resultP)
-	{	HPePhArr = wannierHPePh * phase1; //fourier transform for k1
-		HPePhArr.reshape(0, phononCellMap.size());
-		HPePhArr = HPePhArr * phase2; //fourier transform for each k2; now a nBands*nBands*nModes*3 x nk2 matrix
-	}
 	watchFT.stop();
 	//Get electronic caches for all k-points together:
 	std::vector< vector3<> > kAll = k2arr;
@@ -307,20 +241,6 @@ void BandStruct::setPhononMatElemArray(vector3<> k1, const std::vector< vector3<
 		result[ik2].resize(nModes);
 		for(int alpha=0; alpha<nModes; alpha++)
 			result[ik2][alpha] = dagger(cEl1.evecs) * unpackMatElem(HePh, alpha) * cEl2.evecs; //electron unitary rotations
-		//Analogously for phonon-momentum matrix elements
-		if(resultP)
-		{	resultP[ik2].resize(nPol);
-			for(int pol=0; pol<nPol; pol++)
-			{	int nPerPol = nPacked*nModes;
-				matrix HPePh = HPePhArr(pol*nPerPol,(pol+1)*nPerPol, ik2,ik2+1);
-				HPePh.reshape(nPacked, nModes); //now each column is matrix elements for a specific nuclear displacement
-				//Apply unitary transformations:
-				HPePh = HPePh * cPhAll[ik2]->evecs; //phonon unitary rotation
-				resultP[ik2][pol].resize(nModes);
-				for(int alpha=0; alpha<nModes; alpha++)
-					resultP[ik2][pol][alpha] = dagger(cEl1.evecs) * unpackMatElem(HPePh, alpha) * cEl2.evecs; //electron unitary rotations
-			}
-		}
 	}
 	watch.stop();
 }
@@ -506,4 +426,3 @@ std::vector< std::shared_ptr<const BandStruct::CacheEntry> > BandStruct::getCach
 	watch.stop();
 	return ceArr;
 }
-
