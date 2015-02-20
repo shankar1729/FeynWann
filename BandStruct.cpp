@@ -11,7 +11,9 @@
 
 //Read matrix from file accounting for real-only or complex storage based on spinWeight
 void readMatrix(matrix& m, string fname, int spinWeight)
-{	if(spinWeight==1) m.read(fname.c_str()); else m.read_real(fname.c_str());
+{	logPrintf("Reading '%s' ... ", fname.c_str()); logFlush();
+	if(spinWeight==1) m.read(fname.c_str()); else m.read_real(fname.c_str());
+	logPrintf("done.\n"); logFlush();
 }
 
 BandStruct::BandStruct(string prefix, double mu, int spinWeight, string phononPrefix, std::vector< vector3<complex> > Ahat)
@@ -134,14 +136,15 @@ BandStruct::BandStruct(string prefix, double mu, int spinWeight, string phononPr
 			pairIter++;
 		}
 		
-		//Read phonon matrix elements
-		wannierHePh.init(nModes*nBands*nBands, phononCellMapSq.size());
+		//Read phonon matrix elements:
+		wannierHePh.init(nModes*nBands*nBands * phononCellMap.size(), phononCellMap.size());
 		readMatrix(wannierHePh, prefix + ".mlwfHePh", spinWeight);
 		
-		//Reshape matrix elements for two-phase transform:
-		//--- make the second index iR1 alone, and lump iR2 into the first index
-		//--- (possible because of the order enforced above)
-		wannierHePh.reshape(nModes*nBands*nBands*phononCellMap.size(), phononCellMap.size());
+		//Read phonon-momentum matrix elements:
+		if(nPol)
+		{	wannierHPePh.init(3*nModes*nBands*nBands * phononCellMap.size(), phononCellMap.size());
+			readMatrix(wannierHPePh, prefix + ".mlwfHPePh", spinWeight);
+		}
 	}
 	
 	//Pack matrix elements:
@@ -149,9 +152,9 @@ BandStruct::BandStruct(string prefix, double mu, int spinWeight, string phononPr
 	if(pWannier) compressMatElemArr(pWannier);
 	if(pSqWannier) compressMatElemArr(pSqWannier);
 	if(wannierHePh) compressMatElemArr(wannierHePh);
+	if(wannierHPePh) compressMatElemArr(wannierHPePh);
 	
 	//Pre-contract photon polarizations wherever applicable:
-	int nPol = Ahat.size();
 	//--- momentum matrix elements
 	if(pWannier)
 	{	matrix rot(3, Ahat.size());
@@ -172,6 +175,16 @@ BandStruct::BandStruct(string prefix, double mu, int spinWeight, string phononPr
 			rot.set(iDir+3,0, Ahat[0][jDir]*Ahat[1][kDir] + Ahat[0][kDir]*Ahat[1][jDir]);
 		}
 		transformMatElemArr(pSqWannier, rot);
+	}
+	//--- phonon-momentum matrix elements
+	if(wannierHPePh)
+	{	matrix rot = zeroes(3*nModes, nPol*nModes); //for each mode, contract momentum directions against Ahat
+		for(int alpha=0; alpha<nModes; alpha++)
+		{	for(int pDir=0; pDir<3; pDir++)
+				for(int pol=0; pol<nPol; pol++)
+					rot.set(pDir*nModes+alpha, pol*nModes+alpha, Ahat[pol][pDir]);
+		}
+		transformMatElemArr(wannierHPePh, rot);
 	}
 }
 
@@ -236,13 +249,13 @@ matrix BandStruct::getDipoleSqMatElem(vector3<> k) const
 	return Psq;
 }
 
-std::vector<matrix> BandStruct::getPhononMatElem(vector3<> k1, vector3<> k2) const
+std::vector<matrix> BandStruct::getPhononMatElem(vector3<> k1, vector3<> k2, std::vector< std::vector<matrix> >* resultP) const
 {	std::vector<matrix> result;
-	setPhononMatElemArray(k1, std::vector< vector3<> >(1, k2), &result);
+	setPhononMatElemArray(k1, std::vector< vector3<> >(1, k2), &result, resultP);
 	return result;
 }
 
-void BandStruct::setPhononMatElemArray(vector3<> k1, const std::vector< vector3<> >& k2arr, std::vector<matrix>* result) const
+void BandStruct::setPhononMatElemArray(vector3<> k1, const std::vector< vector3<> >& k2arr, std::vector<matrix>* result, std::vector< std::vector<matrix> >* resultP) const
 {	static StopWatch watch("BandStruct::getPhononMatElem"), watchFT("BandStruct::getPhononMatEl_FT"); watch.start();
 	int nk2 = k2arr.size();
 	//Compute double Fourier transform for fixed k1 and all k2 together:
@@ -266,6 +279,13 @@ void BandStruct::setPhononMatElemArray(vector3<> k1, const std::vector< vector3<
 	matrix HePhArr = wannierHePh * phase1; //fourier transform for k1
 	HePhArr.reshape(0, phononCellMap.size());
 	HePhArr = HePhArr * phase2; //fourier transform for each k2; now a nBands*nBands*nModes x nk2 matrix
+	//Analogously for phonon-momentum matrix elements
+	matrix HPePhArr;
+	if(resultP)
+	{	HPePhArr = wannierHPePh * phase1; //fourier transform for k1
+		HPePhArr.reshape(0, phononCellMap.size());
+		HPePhArr = HPePhArr * phase2; //fourier transform for each k2; now a nBands*nBands*nModes*3 x nk2 matrix
+	}
 	watchFT.stop();
 	//Get electronic caches for all k-points together:
 	std::vector< vector3<> > kAll = k2arr;
@@ -287,6 +307,20 @@ void BandStruct::setPhononMatElemArray(vector3<> k1, const std::vector< vector3<
 		result[ik2].resize(nModes);
 		for(int alpha=0; alpha<nModes; alpha++)
 			result[ik2][alpha] = dagger(cEl1.evecs) * unpackMatElem(HePh, alpha) * cEl2.evecs; //electron unitary rotations
+		//Analogously for phonon-momentum matrix elements
+		if(resultP)
+		{	resultP[ik2].resize(nPol);
+			for(int pol=0; pol<nPol; pol++)
+			{	int nPerPol = nPacked*nModes;
+				matrix HPePh = HPePhArr(pol*nPerPol,(pol+1)*nPerPol, ik2,ik2+1);
+				HPePh.reshape(nPacked, nModes); //now each column is matrix elements for a specific nuclear displacement
+				//Apply unitary transformations:
+				HPePh = HPePh * cPhAll[ik2]->evecs; //phonon unitary rotation
+				resultP[ik2][pol].resize(nModes);
+				for(int alpha=0; alpha<nModes; alpha++)
+					resultP[ik2][pol][alpha] = dagger(cEl1.evecs) * unpackMatElem(HPePh, alpha) * cEl2.evecs; //electron unitary rotations
+			}
+		}
 	}
 	watch.stop();
 }

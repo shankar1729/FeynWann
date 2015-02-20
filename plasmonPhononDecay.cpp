@@ -117,6 +117,7 @@ int main(int argc, char** argv)
 	Histogram EvHist(-Eplasmon-5*T, 0.5*T, 10*T);
 	double acceptRatioSum = 0., acceptRatioSumSq = 0., GammaSum = 0., GammaSumSq = 0.;
 	std::vector<double> GammaConv(bs.getStates(vector3<>()).nRows(), 0.); //empty-state convergence
+	std::vector<double> GammaConvCEDA(bs.getStates(vector3<>()).nRows(), 0.); //empty-state convergence with CEDA
 	int walkerStart = (totalWalkers * (mpiUtil->iProcess())) / mpiUtil->nProcesses(); // MPI division
 	int walkerStop = (totalWalkers * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
 	StopWatch watchMet("metropolis"); watchMet.start();
@@ -157,7 +158,22 @@ int main(int argc, char** argv)
 					std::vector<matrix> Pk2 = bs.getDipoleMatElem(kpnt2);
 					const matrix& AdotPk2 = Pk2[0]; //pre-contracted
 					diagMatrix P = bs.getPhononModes(kpnt1-kpnt2);
-					std::vector<matrix> PePh = bs.getPhononMatElem(kpnt1,kpnt2);
+					std::vector<std::vector<matrix> > HPePh;
+					std::vector<matrix> HePh = bs.getPhononMatElem(kpnt1,kpnt2, &HPePh);
+					const std::vector<matrix>& HePhAdotPk1 = HPePh[0]; //pre-contracted
+					
+// 					int nBands = E1.nRows();
+// 					int nMain = bs.getStates(kpnt1, T).nRows();
+// 					for(int alpha=0; alpha<P.nRows(); alpha ++)
+// 					{	for(int b=nMain; b<nBands; b++)
+// 						{	matrix tempSum = HePh[alpha](0,nMain, 0,b) * AdotPk1(0,b, 0,nMain);
+// 							//matrix tempSum = AdotPk2(0,nMain, 0,b) * HePh[alpha](0,b, 0,nMain);
+// 							logPrintf("With %d bands: |HePh * P| = %le\n", b, nrm2(tempSum));
+// 						}
+// 						logPrintf("|HPePh| = %le\n", nrm2(HePhAdotPk1[alpha](0,nMain, 0,nMain)));
+// 					}
+// 					die("Testing.\n");
+					
 					for(int v=0; v<E1.nRows(); v++) if(E1[v]<10.*T)
 					{	for(int c=0; c<E2.nRows(); c++) if(E2[c]>-10.*T)
 						{	double weight = 0.;
@@ -165,20 +181,33 @@ int main(int argc, char** argv)
 							{	for(int ae=-1; ae<=+1; ae+=2) // +/- for phonon absorption or emmision
 								{	double mk_cv = BandStruct::mk_sub(E2[c], E1[v], Eplasmon + ae*P[alpha], T);
 									double g_kPh = 1./(exp(P[alpha]/T) - 1.);
-									double weightEconserve = exp(0.5*(mk1k2-mk_cv)/(T*T))/(T*sqrt(2*M_PI)) * (g_kPh+0.5*(1.-ae))/P[alpha]; //weight contribution (including phonon and electron occupation factors) due to energy conservation
+									double weightEconserve = (0.5*spinWeight) * exp(0.5*(mk1k2-mk_cv)/(T*T))/(T*sqrt(2*M_PI)) * (g_kPh+0.5*(1.-ae))/P[alpha]; //weight contribution (including phonon and electron occupation factors) due to energy conservation
 									if(weightEconserve < weightCut) continue;
 									// Effective matrix elements
 									complex Meff = 0.; double weightSub = 0.;
+									complex num1sum = 0., num2sum = 0.; //partial numerator sums for CEDA
 									for(int i=0; i<E1.nRows(); i++) // sum over the intermediate states
 									{	complex E1i(E1[i], E1im[i]);
 										complex E2i(E2[i], E2im[i]);
 										double f1i = 1./(1.+exp(E1[i]/T));
 										double f2i = 1./(1.+exp(E2[i]/T));
-										Meff += 
-											( AdotPk2(c,i) * (1.-f2i) * PePh[alpha](i,v) / (E2i - (E2[c] - Eplasmon))
-											+ PePh[alpha](c,i) * (1.-f1i) * AdotPk1(i,v) / (E1i - (E1[v] + Eplasmon)) );
-										weightSub =  (0.5*spinWeight) * weightEconserve * gammaPrefac * Meff.norm();  //norm = abs^2
+										complex num1 = HePh[alpha](c,i) * AdotPk1(i,v); num1sum += num1;
+										complex num2 = AdotPk2(c,i) * 0*HePh[alpha](i,v); num2sum += num2; //HACK
+										complex den1 = one / (E1i - (E1[v] + Eplasmon));
+										complex den2 = one / (E2i - (E2[c] - Eplasmon));
+										Meff += (1.-f1i)*num1*den1 + (1.-f2i)*num2*den2;
+										weightSub =  weightEconserve * gammaPrefac * Meff.norm();  //norm = abs^2
 										GammaConv[i] += weightSub; //estimate based on truncating to i bands
+										//CEDA corrections:
+										double Ebar = bs.Eceda[i];
+										double den1ceda = 1./(Ebar - (E1[v] + Eplasmon));
+										double den2ceda = 1./(Ebar - (E2[c] - Eplasmon));
+										complex MeffCEDA = Meff
+											- den1ceda * num1sum
+											- den2ceda * num2sum
+											+ (den1ceda * HePhAdotPk1[alpha](c,v) + den2ceda * 0.); //HACK
+										weightSub = weightEconserve * gammaPrefac * MeffCEDA.norm(); //overwrite weight with CEDA (so that final result uses CEDA)
+										GammaConvCEDA[i] += weightSub; //estimate based on truncating to i bands
 									}
 									weight += weightSub; //result using all available bands
 								}
@@ -249,10 +278,11 @@ int main(int argc, char** argv)
 
 	//Empty-state convergence:
 	mpiUtil->allReduce(GammaConv.data(), GammaConv.size(), MPIUtil::ReduceSum);
+	mpiUtil->allReduce(GammaConvCEDA.data(), GammaConvCEDA.size(), MPIUtil::ReduceSum);
 	sprintf(fname, "bandConvergence-%.1lfeV-phonon.dat", Eplasmon/eV);
 	FILE* fp = fopen(fname, "w");
-	for(double Gamma: GammaConv)
-		fprintf(fp, "%lg\n", Gamma/eV);
+	for(int i=0; i<int(GammaConv.size()); i++)
+		fprintf(fp, "%d %lg %lg\n", i+1, GammaConv[i]/eV, GammaConvCEDA[i]/eV);
 	fclose(fp);
 	
 	finalizeSystem();

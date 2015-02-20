@@ -26,8 +26,8 @@ public:
 	std::vector< std::vector<matrix> > getDipoleMatElem(const std::vector< vector3<> >& kArr) const; //array version of above
 	matrix getDipoleSqMatElem(vector3<> k) const; //matrix elements of (Ahat1.P)(Ahat2.P); must have exactly two Ahat's in constructor
 
-	std::vector<matrix> getPhononMatElem(vector3<> k1, vector3<> k2) const;
-	void setPhononMatElemArray(vector3<> k1, const std::vector< vector3<> >& k2arr, std::vector<matrix>* result) const; //get matrix elements for fixed k1 and ana array of k2 (for efficiency)
+	std::vector<matrix> getPhononMatElem(vector3<> k1, vector3<> k2, std::vector< std::vector<matrix> >* resultP=0) const; //optionally also retrieve phonon * momentum matrix elements for CEDA
+	void setPhononMatElemArray(vector3<> k1, const std::vector< vector3<> >& k2arr, std::vector<matrix>* result, std::vector< std::vector<matrix> >* resultP=0) const; //get matrix elements for fixed k1 and ana array of k2 (for efficiency)
 	
 	double get_mk(vector3<> k, double omega, double T) const; //calculate the energy conservation weight at a given k-point
 	double get_mk1k2(vector3<> k1, vector3<> k2, double omega, double T) const; //calculate the energy conservation weight at a given k-point pair
@@ -65,7 +65,7 @@ private:
 	matrix omegaSqPh; //phonon force matrix
 	
 	//Electron-phonon interaction:
-	matrix wannierHePh; //electron-phonon matrix elements in Wannier basis
+	matrix wannierHePh, wannierHPePh; //electron-phonon (and with momentum) matrix elements in Wannier basis
 	struct CellPair { vector3<int> iR1, iR2; };
 	std::vector<CellPair> phononCellMapSq; //pairs of cells for which electron-phonon matrix elements are stored
 	
