@@ -40,12 +40,6 @@ BandStruct::BandStruct(string prefix, double mu, int spinWeight, string phononPr
 			hWannier.set(0,nBands*nBands, ic,ic+1, hWannier(0,nBands*nBands, ic,ic+1) - mu * id);
 		}
 
-	//Read momentum matrix elements
-	if(nPol)
-	{	pWannier.init(nBands*nBands*3, cellMap.size());
-		readMatrix(pWannier, prefix + ".mlwfP", spinWeight);
-	}
-
 	//Initialize main window (if available):
 	nMain = 0; mainFirst = 0; omegaMain = 0.;
 	{	//read Wannier band contrib file
@@ -116,25 +110,35 @@ BandStruct::BandStruct(string prefix, double mu, int spinWeight, string phononPr
 				die("Phonon cell map squared is not in required order (with outer index iR1 and inner index iR2)\n");
 			pairIter++;
 		}
-		
-		//Read phonon matrix elements:
-		wannierHePh.init(nModes*nBands*nBands * phononCellMap.size(), phononCellMap.size());
-		readMatrix(wannierHePh, prefix + ".mlwfHePh", spinWeight);
 	}
 	
-	//Pack matrix elements:
+	//Read and compress matrix elements if necessary:
 	nPacked = nMain*nMain + 2*nMain*(nBands-nMain);
-	if(pWannier) compressMatElemArr(pWannier);
-	if(wannierHePh) compressMatElemArr(wannierHePh);
-	
-	//Pre-contract photon polarizations wherever applicable:
 	//--- momentum matrix elements
-	if(pWannier)
-	{	matrix rot(3, Ahat.size());
-		for(int iPol=0; iPol<nPol; iPol++)
-			for(int iDir=0; iDir<3; iDir++)
-				rot.set(iDir, iPol, Ahat[iPol][iDir]);
-		transformMatElemArr(pWannier, rot);
+	if(nPol)
+	{	if(mpiUtil->isHead())
+		{	pWannier.init(nBands*nBands*3, cellMap.size());
+			readMatrix(pWannier, prefix + ".mlwfP", spinWeight);
+			compressMatElemArr(pWannier);
+			//Pre-contract photon polarizations:
+			matrix rot(3, nPol);
+			for(int iPol=0; iPol<nPol; iPol++)
+				for(int iDir=0; iDir<3; iDir++)
+					rot.set(iDir, iPol, Ahat[iPol][iDir]);
+			transformMatElemArr(pWannier, rot);
+		}
+		else pWannier.init(nPacked*nPol, cellMap.size());
+		pWannier.bcast();
+	}
+	//--- electron-phonon matrix elements
+	if(omegaSqPh)
+	{	if(mpiUtil->isHead())
+		{	wannierHePh.init(nModes*nBands*nBands * phononCellMap.size(), phononCellMap.size());
+			readMatrix(wannierHePh, prefix + ".mlwfHePh", spinWeight);
+			compressMatElemArr(wannierHePh);
+		}
+		else wannierHePh.init(nModes*nPacked * phononCellMap.size(), phononCellMap.size());
+		wannierHePh.bcast();
 	}
 }
 
