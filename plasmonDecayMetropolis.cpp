@@ -25,7 +25,6 @@ int main(int argc, char** argv)
 	const double mu = inputMap.get("mu");
 	const double T = inputMap.get("T") * eV;
 	const int spinWeight = round(inputMap.get("spinWeight"));
-	const int eventSaveInterval = inputMap.get("eventSaveInterval", 0); //default 0 => no save
 	matrix3<> R = matrix3<>(0,1,1, 1,0,1, 1,1,0) * (0.5*inputMap.get("aCubic")*Angstrom);
 
 	logPrintf("\nInputs after conversion to atomic units:\n");
@@ -53,10 +52,14 @@ int main(int argc, char** argv)
 	double omega = Eplasmon;
 	eps.setFrequency(omega);
 	
+	//Compute effective mode vector
+	complex one(1.0,0.0);
+	vector3<complex> zHat(0.0, 0.0, one);
+	vector3<complex> kHat(cos(kPhi), sin(kPhi), 0.0);
+	complex I(0.0,1.0);
+	std::vector< vector3<complex> > Ahat(1, kHat - I*(eps.k/eps.modGammaMinus)*zHat);
+	
 	//Initialize Wannier bandstructure:
-	std::vector< vector3<complex> > Ahat(3); //use Cartesian basis unlike other executables so that event lists can have the general uncontracted matrix element
-	for(int iDir=0; iDir<3; iDir++)
-		Ahat[iDir][iDir] = 1.;
 	BandStruct bs("Wannier/wannier", mu, spinWeight, string(), Ahat);
 
 	//Compute the normalization factor
@@ -93,32 +96,17 @@ int main(int argc, char** argv)
 	// Metropolis sampling of BZ:
 	logPrintf("Starting Metropolis sampling of BZ\n");
 	
-	// Compute effective mode vector
-	complex one(1.0,0.0);
-	vector3<complex> zHat(0.0, 0.0, one);
-	vector3<complex> kHat(cos(kPhi), sin(kPhi), 0.0);
-	complex I(0.0,1.0);
-	vector3<complex> sqrtGammaPrefac = (M_PI * sqrt(N1/((nKptsMetro*fabs(det(R)))*eps.modGammaMinus*omega*eps.Lquant)) ) * (kHat - I*(eps.k/eps.modGammaMinus)*zHat);
-	logPrintf("sqrtGammaPrefac Real = %lg %lg %lg\n",  real(sqrtGammaPrefac[0]), real(sqrtGammaPrefac[1]), real(sqrtGammaPrefac[2]));
-	logPrintf("sqrtGammaPrefac Imag = %lg %lg %lg\n",  imag(sqrtGammaPrefac[0]), imag(sqrtGammaPrefac[1]), imag(sqrtGammaPrefac[2]));
-	
-	//Prepare for event collection:
-	double eventPrefac = N1*eventSaveInterval/(nKptsMetro*fabs(det(R)));
-	struct Event
-	{	double Ev, Ec;
-		vector3<> vv, vc;
-		vector3<complex> Pcv;
-	};
-	std::vector<Event> events;
-	if(eventSaveInterval) events.reserve(totalWalkers / mpiUtil->nProcesses());
-	
+	//Compute normalization factor
+	nKpts = nKptsMetro / totalWalkers;
+	double gammaPrefac = std::pow(M_PI,2) * N1/(nKptsMetro*fabs(det(R))*eps.modGammaMinus*omega*eps.Lquant);
+	logPrintf("gammaPrefac = %lg\n",  gammaPrefac);
+
 	const double weightCut = 1e-6;
 	Histogram EcHist(-10*T, 0.5*T, Eplasmon+5*T);
 	Histogram EvHist(-Eplasmon-5*T, 0.5*T, 10*T);
 	double acceptRatioSum = 0., acceptRatioSumSq = 0., GammaSum = 0., GammaSumSq = 0.;
 	int walkerStart = (totalWalkers * (mpiUtil->iProcess())) / mpiUtil->nProcesses(); // MPI division
 	int walkerStop = (totalWalkers * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
-	nKpts = nKptsMetro / totalWalkers;
 	StopWatch watchMet("metropolis"); watchMet.start();
 	if(!skipMetro) for(int walker=walkerStart; walker<walkerStop; walker++)
 	{	Random::seed(walker);
@@ -145,28 +133,20 @@ int main(int argc, char** argv)
 			
 				if(equib)
 				{	ik++;
-					bool eventSave = eventSaveInterval && (ik % eventSaveInterval == 0);
 					// Calculate transitions at current k-point:
 					diagMatrix E = bs.getStates(kpnt, Eplasmon);
 					std::vector<matrix> Pk = bs.getDipoleMatElem(kpnt);
-					std::vector<vector3<>> vk; if(eventSave) vk = bs.getVelocity(kpnt, R, Eplasmon);
+					const matrix& AdotPk = Pk[0]; //pre-contracted
 					for(int v=0; v<E.nRows(); v++) if(E[v]<10.*T)
 					{	for(int c=0; c<E.nRows(); c++) if(E[c]>-10.*T)
 						{	double mk_cv = BandStruct::mk_sub(E[c], E[v], Eplasmon, T);
 							double weightEconserve = (0.5*spinWeight) * exp(0.5*(mk-mk_cv)/(T*T))/(T*sqrt(2*M_PI)); //weight contribution due to energy conservation (and spin)
 							if(weightEconserve < weightCut) continue;
-							// Effective matrix elements
-							vector3<complex> Pk_cv; for(int j=0; j<3; j++) Pk_cv[j] = Pk[j](c,v);
-							double weight = weightEconserve * dot(sqrtGammaPrefac, Pk_cv).norm(); //norm = abs^2
+							double weight = weightEconserve * gammaPrefac * AdotPk(c,v).norm(); //norm = abs^2
 							//Include in statistics:
 							GammaBlock += weight;
 							EcHist.addEvent(E[c], weight);
 							EvHist.addEvent(E[v], weight);
-							//Save event if necessary:
-							if(eventSave)
-							{	Event event = { E[v], E[c], vk[v], vk[c], sqrt(eventPrefac * weightEconserve) * Pk_cv };
-								events.push_back(event);
-							}
 						}
 					}
 				}
@@ -217,21 +197,5 @@ int main(int argc, char** argv)
 	EcHist.allReduce(MPIUtil::ReduceSum); EcHist.print(string("e")+fname, 1./eV, eV);
 	EvHist.allReduce(MPIUtil::ReduceSum); EvHist.print(string("h")+fname, 1./eV, eV);
 
-	//Write events:
-	if(eventSaveInterval)
-	{	MPIUtil::File fpEvent;
-		sprintf(fname, "events-%.1lfeV-metro.dat", Eplasmon/eV);
-		unsigned long nEventsPrev = 0; //number of events from previous processes
-		for(int jProcess=0; jProcess<mpiUtil->nProcesses(); jProcess++)
-		{	unsigned long nEvents = events.size();
-			mpiUtil->bcast(nEvents, jProcess); //nEvents is now the number of events on jProcess
-			if(jProcess < mpiUtil->iProcess()) nEventsPrev += nEvents;
-		}
-		mpiUtil->fopenWrite(fpEvent, fname);
-		mpiUtil->fseek(fpEvent, nEventsPrev*sizeof(Event), SEEK_SET);
-		mpiUtil->fwrite(events.data(), sizeof(Event), events.size(), fpEvent);
-		mpiUtil->fclose(fpEvent);
-	}
-	
 	finalizeSystem();
 }
