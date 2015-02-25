@@ -3,7 +3,6 @@
 #include <core/scalar.h>
 #include <core/Random.h>
 #include <core/string.h>
-#include <core/WignerSeitz.h>
 #include "BandStruct.h"
 #include "Histogram.h"
 #include "Epsilon.h"

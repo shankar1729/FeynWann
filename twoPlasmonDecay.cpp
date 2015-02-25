@@ -3,44 +3,32 @@
 #include <core/scalar.h>
 #include <core/Random.h>
 #include <core/string.h>
-#include "Units.h"
 #include "BandStruct.h"
 #include "Histogram.h"
 #include "Epsilon.h"
-#include "InputMap.h"
 #include "LineWidth.h"
+#include "InputMap.h"
+#include "Units.h"
 
 int main(int argc, char** argv)
 {   string inputFilename; bool dryRun, printDefaults;
-	initSystemCmdline(argc, argv, "Metropolis calculation of two-plasmon decay rate", inputFilename, dryRun, printDefaults);
+	initSystemCmdline(argc, argv, "Monte Carlo estimate of two-plasmon decay rate", inputFilename, dryRun, printDefaults);
 
 	//Get the system parameters (mu, T, lattice vectors etc.)
 	InputMap inputMap(inputFilename);
 	const int nKptsN1 = inputMap.get("nKptsN1");
-	const int totalBlocks = inputMap.get("totalBlocks"); assert(totalBlocks>0);
-	const int nKptsMetro = inputMap.get("nKptsMetro");
-	const double dk = inputMap.get("dk");
-	const int totalWalkers = inputMap.get("totalWalkers"); assert(totalWalkers>0);
-	const double kPhi1 = inputMap.get("kPhi");
-	const double kPhi2 = inputMap.get("kPhi2");
-	const double Eplasmon1 = inputMap.get("Eplasmon") * eV;
-	const double Eplasmon2 = inputMap.get("Eplasmon2") * eV;
+	const double kPhi = inputMap.get("kPhi");
+	const double EplasmonMax = inputMap.get("EplasmonMax") * eV;
 	const double mu = inputMap.get("mu");
 	const double T = inputMap.get("T") * eV;
 	const int spinWeight = round(inputMap.get("spinWeight"));
-	matrix3<> R = matrix3<>(0,1,1, 1,0,1, 1,1,0) * (0.5*inputMap.get("aCubic")*Angstrom);
-	const double Squant = std::pow(10*Angstrom, 2) * std::pow(128.,-3); //1 nm^2 DIVIDED BY ~ 2 million (HACK)
+	const matrix3<> R = matrix3<>(0,1,1, 1,0,1, 1,1,0) * (0.5*inputMap.get("aCubic")*Angstrom);
+	const double Squant = std::pow(10*Angstrom, 2); //1 nm^2
 	
 	logPrintf("\nInputs after conversion to atomic units:\n");
 	logPrintf("nKptsN1 = %d\n", nKptsN1);
-	logPrintf("totalBlocks = %d\n", totalBlocks);
-	logPrintf("nKptsMetro = %d\n", nKptsMetro);
-	logPrintf("dK = %lg\n", dk);
-	logPrintf("totalWalkers = %d\n", totalWalkers);
-	logPrintf("kPhi = %lg\n", kPhi1);
-	logPrintf("kPhi2 = %lg\n", kPhi2);
-	logPrintf("Eplasmon = %lg\n", Eplasmon1);
-	logPrintf("Eplasmon2 = %lg\n", Eplasmon2);
+	logPrintf("kPhi = %lg\n", kPhi);
+	logPrintf("EplasmonMax = %lg\n", EplasmonMax);
 	logPrintf("mu = %lg\n", mu);
 	logPrintf("T = %lg\n", T);
 	logPrintf("spinWeight = %d\n", spinWeight);
@@ -54,185 +42,118 @@ int main(int argc, char** argv)
 	logPrintf("\n");
 
 	//Initialize dielectric model:
-	Epsilon eps1("epsilon.txt"); eps1.setFrequency(Eplasmon1);
-	Epsilon eps2(eps1); eps2.setFrequency(Eplasmon2);
-	double EplasmonTot = Eplasmon1 + Eplasmon2;
-	
-	// Compute effective mode vectors
-	complex one(1.0,0.0);
-	vector3<complex> zHat(0.0, 0.0, one);
-	vector3<complex> kHat1(cos(kPhi1), sin(kPhi1), 0.0);
-	vector3<complex> kHat2(cos(kPhi2), sin(kPhi2), 0.0);
-	complex I(0.0,1.0);
-	std::vector< vector3<complex> > Ahat;
-	Ahat.push_back(kHat1 - I*(eps1.k/eps1.modGammaMinus)*zHat);
-	Ahat.push_back(kHat2 - I*(eps2.k/eps2.modGammaMinus)*zHat);
+	Epsilon eps("epsilon.txt");
 	
 	//Initialize Wannier bandstructure:
+	std::vector< vector3<complex> > Ahat(2); //contract for zHat and kHat, which will be combined in a frequency dependent way
+	Ahat[0] = vector3<complex>(cos(kPhi), sin(kPhi), 0.); //kHat
+	Ahat[1] = vector3<complex>(0., 0., 1.); //zHat
 	BandStruct bs("Wannier/wannier", mu, spinWeight, string(), Ahat);
+	const int bunchSize = 32;
+	bs.setCacheSize(bunchSize);
 
 	//Initalize line width of intermediate electronic states
 	LineWidth lineWidth("Wannier/wannier", bs);
 
-	//Compute the normalization factor
-	int blockStart = (totalBlocks * (mpiUtil->iProcess())) / mpiUtil->nProcesses(); //MPI division
-	int blockStop = (totalBlocks * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
-	int nKpts = nKptsN1/totalBlocks;
-	double N1sum = 0., N1sumSq = 0.;
-	StopWatch watchNorm("normalization"); watchNorm.start();
-	logPrintf("Calculating normalization factor ... "); logFlush();
-	for(int block=blockStart; block<blockStop; block++)
-	{	Random::seed(block);
-		double N1block = 0.;
-		for(int nk =0; nk<nKpts; nk++)
-		{	vector3<> kpnt; for(int j=0; j<3; j++) kpnt[j] = Random::uniform();
-			double mk = bs.get_mk(kpnt, EplasmonTot, T);
-			N1block += exp(-0.5*mk/(T*T));
-		}
-		N1block /=  nKpts;
-		N1sum += N1block;
-		N1sumSq += std::pow(N1block,2);
-	}
-	watchNorm.stop();
-	mpiUtil->allReduce(N1sum, MPIUtil::ReduceSum);
-	mpiUtil->allReduce(N1sumSq, MPIUtil::ReduceSum);
-	double N1 = N1sum / totalBlocks;
-	double N1std = sqrt(N1sumSq/totalBlocks - N1*N1)/sqrt(totalBlocks);
-	logPrintf("N1 = %lg +/- %lg\n", N1, N1std);
-	bool skipMetro = false;
-	if(fabs(N1) < 1e-8)
-	{	skipMetro = true;
-		logPrintf("Warning: N1 is too small => no allowed transitions; skipping Metropolis sampling.\n");
-	}
+	//Initialize sampling parameters:
+	int ikStart, ikStop; TaskDivision(nKptsN1, mpiUtil).myRange(ikStart, ikStop);
+	int nBunchesMine = ceil((ikStop-ikStart)*1./bunchSize); //number of bunches on current process
+	int nKpts = nBunchesMine * bunchSize; mpiUtil->allReduce(nKpts, MPIUtil::ReduceSum); //total number of sampled k-points
+	int nBands = bs.getStates(vector3<>()).nRows();
+	complex I(0,1);
+	double gammaPrefac0 = (0.5*spinWeight) * std::pow(M_PI,3) / (nKpts * 2*fabs(det(R)) * Squant); //frequency independent part of prefac
 	
-	// Metropolis sampling of BZ:
-	logPrintf("Starting Metropolis sampling of BZ\n");
-	
-	double gammaPrefac = N1 * std::pow(M_PI,3) /
-		( nKptsMetro * 2*fabs(det(R)) * (eps1.modGammaMinus + eps2.modGammaMinus)
-		 * Eplasmon1 * Eplasmon2 * eps1.Lquant * eps2.Lquant * Squant );
-	logPrintf("gammaPrefac = %lg\n",  gammaPrefac);
-	
-	const double weightCut = 1e-6;
-	Histogram EcHist(-10*T, 0.5*T, EplasmonTot+5*T);
-	Histogram EvHist(-EplasmonTot-5*T, 0.5*T, 10*T);
-	double acceptRatioSum = 0., acceptRatioSumSq = 0., GammaSum = 0., GammaSumSq = 0.;
-	std::vector<double> GammaConv(bs.getStates(vector3<>()).nRows(), 0.); //empty-state convergence
-	int walkerStart = (totalWalkers * (mpiUtil->iProcess())) / mpiUtil->nProcesses(); // MPI division
-	int walkerStop = (totalWalkers * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
-	nKpts = nKptsMetro / totalWalkers;
-	StopWatch watchMet("metropolis"); watchMet.start();
-	if(!skipMetro) for(int walker=walkerStart; walker<walkerStop; walker++)
-	{	Random::seed(walker);
-		logPrintf("Metropolis walk# %d ... ", walker); logFlush();
-		vector3<> kpntPrev;
-		for(int j=0; j<3; j++)
-			kpntPrev[j] = Random::uniform();
-		vector3<> kpnt = kpntPrev;
-		int nKptsTot = 0; //denominator of accept ratio
-		int nKptsEquib = 0;
-		bool equib = false;
-		double mkPrev = INFINITY, GammaBlock = 0.;
+	//Initialize histograms
+	double gaussMargin = 5*T;
+	double fermiMargin = 10*T;
+	double EplasmonTotMax = 2*EplasmonMax; //max on sum of two plasmon energies
+	Histogram2D Ev(-EplasmonTotMax-gaussMargin, T, fermiMargin,  gaussMargin, T, EplasmonMax-gaussMargin);
+	Histogram2D Ec(-fermiMargin, T, EplasmonTotMax+gaussMargin,  gaussMargin, T, EplasmonMax-gaussMargin);
+	Histogram Gamma(gaussMargin, T, EplasmonMax-gaussMargin);
+	std::vector<Histogram> conv(nBands,  Gamma); //empty-state convergence
 
-		for(int ik=0; ik<nKpts; )
-		{	// Calculate mk:
-			double mk = bs.get_mk(kpnt, EplasmonTot, T);
-
-			// Metropolis accept - reject:
-			if(exp(0.5*(mkPrev - mk)/(T*T)) > Random::uniform())
-			{	mkPrev = mk;
-				kpntPrev = kpnt;
-				
-				if(mk < 2*T*T) equib = true;
-			
-				if(equib)
-				{	ik++;
-					// Calculate transitions at current k-point:
-					diagMatrix E = bs.getStates(kpnt), Eim = lineWidth(kpnt);
-					std::vector<matrix> AdotParr = bs.getDipoleMatElem(kpnt);
-					const matrix& AdotP1 = AdotParr[0];
-					const matrix& AdotP2 = AdotParr[1];
-					for(int v=0; v<E.nRows(); v++) if(E[v]<10.*T)
-					{	for(int c=0; c<E.nRows(); c++) if(E[c]>-10.*T)
-						{	double mk_cv = BandStruct::mk_sub(E[c], E[v], EplasmonTot, T);
-							double weightEconserve = (0.5*spinWeight) * exp(0.5*(mk-mk_cv)/(T*T))/(T*sqrt(2*M_PI)); //weight contribution due to energy conservation (and spin)
-							if(weightEconserve < weightCut) continue;
-							//Effective matrix element
-							complex Meff = 0.; double weight = 0.;
-							for(int l=0; l<E.nRows(); l++)
-							{	complex El(E[l], Eim[l]);
-								double Fl = 1./(1.+exp(E[l]/T)); //occupation
-								complex num1 = AdotP1(c,l)*AdotP2(l,v);
-								complex num2 = AdotP2(c,l)*AdotP1(l,v);
-								complex den1 = one/(El-E[v]-Eplasmon2);
-								complex den2 = one/(El-E[v]-Eplasmon1);
-								Meff += (1.-Fl) * (num1*den1 + num2*den2);
-								weight = gammaPrefac * weightEconserve * Meff.norm(); //norm = abs^2;
-								GammaConv[l] += weight; //estimate based on truncating to i bands
-							}
-							//Include in statistics:
-							GammaBlock += weight;
-							EcHist.addEvent(E[c], weight);
-							EvHist.addEvent(E[v], weight);
-						}
-					}
-				}
-			}
-			// Generate next kpoint
+	//Monte Carlo loop:
+	int iBunchInterval = std::max(1, int(round(nBunchesMine/50.))); //interval for reporting progress
+	logPrintf("\nProgress: "); logFlush();
+	for(int iBunch=0; iBunch<nBunchesMine; iBunch++)
+	{
+		//Generate a bunch of k-points:
+		std::vector< vector3<> > kArr(bunchSize);
+		for(vector3<>& k: kArr)
 			for(int j=0; j<3; j++)
-				kpnt[j] = kpntPrev[j] + dk * Random::normal();
-			if(equib) nKptsTot++;
-			else
-			{	nKptsEquib++;
-				if(nKptsEquib > nKpts/2) //heuristic to prevent getting stuck in local pockets
-				{	logPrintf("\n\tReseting walker due to too many equilibration steps.\n");
-					for(int j=0; j<3; j++) kpntPrev[j] = Random::uniform();
-					kpnt = kpntPrev;
-					mkPrev = INFINITY;
-					nKptsEquib = 0;
+				k[j] = Random::uniform();
+		
+		//Calculate electronic states and matrix elements for bunch:
+		std::vector<diagMatrix> Earr = bs.getStates(kArr);
+		std::vector<diagMatrix> ImEarr = lineWidth(kArr);
+		std::vector< std::vector<matrix> > Parr = bs.getDipoleMatElem(kArr);
+		
+		//Direct transitions:
+		for(int ik=0; ik<bunchSize; ik++)
+		{	const diagMatrix& E = Earr[ik];
+			const diagMatrix& ImE = ImEarr[ik];
+			const std::vector<matrix>& P = Parr[ik];
+			diagMatrix F = E; //convert to fillings:
+			for(double& f: F)
+			{	double e = f/T; //E/T actually
+				f = (e>30 ? exp(-e) : 1./(1. + exp(e))); //avoid overflow issues
+			}
+			
+			for(int v=0; v<nBands; v++) if(E[v]<10.*T)
+			{	for(int c=0; c<nBands; c++) if(E[c]>-10.*T)
+				{	double omegaTot = E[c] - E[v]; //energy conservation
+					double omega = 0.5*omegaTot; //only considering processes with equal plasmon energies
+					if(omega<=0 || omega>=EplasmonMax) continue; //irrelevant event
+					eps.setFrequency(omega, false);
+					double gammaPrefac = gammaPrefac0 / ( (2.*eps.modGammaMinus) * std::pow(omega*eps.Lquant,2) ); //linking two plasmon energies together
+					if(!std::isfinite(gammaPrefac) || gammaPrefac<0.) continue; //avoid over-damped region
+					double weightPrefac = gammaPrefac * F[v] * (1.-F[c]); //include occupation factors
+					//Effective matrix element
+					complex Meff = 0.; double weight = 0.;
+					for(int i=0; i<nBands; i++) // sum over the intermediate states
+					{	complex Ei(E[i], ImE[i]);
+						complex AdotPiv = P[0](i,v) - I*(eps.k/eps.modGammaMinus)*P[1](i,v);
+						complex AdotPci = P[0](c,i) - I*(eps.k/eps.modGammaMinus)*P[1](c,i);
+						Meff += (2. * (1.-F[i]) * AdotPci * AdotPiv) / (Ei-E[v]-omega); //factor of 2 from exchanged term (identical for two plasmons with same mode)
+						weight = weightPrefac * Meff.norm(); //norm = abs^2;
+						conv[i].addEvent(omega, weight); //estimate based on truncating to i bands
+					}
+					//Include in statistics:
+					Ev.addEvent(E[v], omega, weight);
+					Ec.addEvent(E[c], omega, weight);
+					Gamma.addEvent(omega, weight);
 				}
 			}
 		}
-		double acceptRatio = (double)nKpts/nKptsTot;
-		acceptRatioSum += acceptRatio;
-		acceptRatioSumSq += std::pow(acceptRatio,2);
-		GammaBlock *= totalWalkers; //prefactor is normalized for total kpts, not per block
-		GammaSum += GammaBlock;
-		GammaSumSq += std::pow(GammaBlock,2);
-		logPrintf("acceptRatio = %lg  nKptsTot = %d  Gamma = %lg eV\n", acceptRatio, nKptsTot, GammaBlock/eV); logFlush();
+		
+		//Print progress:
+		if((iBunch+1) % iBunchInterval == 0)
+		{	logPrintf("%d%% ", int(round((iBunch+1)*100./nBunchesMine)));
+			logFlush();
+		}
 	}
-	watchMet.stop();
+	logPrintf("done.\n"); logFlush();
 	
-	//Acceptance ratio:
-	mpiUtil->allReduce(acceptRatioSum, MPIUtil::ReduceSum);
-	mpiUtil->allReduce(acceptRatioSumSq, MPIUtil::ReduceSum);
-	double acceptRatio = acceptRatioSum / totalWalkers;
-	double acceptRatioStd = sqrt(acceptRatioSumSq/totalWalkers - acceptRatio*acceptRatio)/sqrt(totalWalkers);
-	logPrintf("acceptRatio = %lg +/- %lg\n", acceptRatio, acceptRatioStd);
-
-	//Decay rate:
-	mpiUtil->allReduce(GammaSum, MPIUtil::ReduceSum);
-	mpiUtil->allReduce(GammaSumSq, MPIUtil::ReduceSum);
-	double Gamma = GammaSum / totalWalkers;
-	double GammaStd = sqrt(GammaSumSq/totalWalkers - Gamma*Gamma)/sqrt(totalWalkers);
-	GammaStd = hypot(GammaStd, Gamma*N1std/N1); //propagate error in N1
-	logPrintf("Gamma = %lg +/- %lg eV\n", Gamma/eV, GammaStd/eV);
+	Ev.allReduce(MPIUtil::ReduceSum); Ev.print("hDistribAll-twoplasmon.dat", 1./eV, 1./eV, 1.);
+	Ec.allReduce(MPIUtil::ReduceSum); Ec.print("eDistribAll-twoplasmon.dat", 1./eV, 1./eV, 1.);
+	Gamma.allReduce(MPIUtil::ReduceSum); Gamma.print("GammaAll-twoplasmon.dat", 1./eV, 1./eV);
 	
-	//Carrier distributions:
-	char fname[256];
-	sprintf(fname, "Distrib-%.1lfeV+%.1lfeV-metro.dat", Eplasmon1/eV, Eplasmon2/eV);
-	EcHist.allReduce(MPIUtil::ReduceSum); EcHist.print(string("e")+fname, 1./eV, eV);
-	EvHist.allReduce(MPIUtil::ReduceSum); EvHist.print(string("h")+fname, 1./eV, eV);
-
-	//Empty-state convergence:
-	mpiUtil->allReduce(GammaConv.data(), GammaConv.size(), MPIUtil::ReduceSum);
+	//Print phonon convergence:
+	for(Histogram& h: conv) h.allReduce(MPIUtil::ReduceSum);
 	if(mpiUtil->isHead())
-	{	sprintf(fname, "bandConvergence-%.1lfeV+%.1lfeV-metro.dat", Eplasmon1/eV, Eplasmon2/eV);
-		FILE* fp = fopen(fname, "w");
-		for(int i=0; i<int(GammaConv.size()); i++)
-			fprintf(fp, "%d %lg\n", i+1, GammaConv[i]/eV);
-		fclose(fp);
+	{	ofstream ofs("bandConvergenceAll-twoplasmon.dat");
+		ofs << "#omega[eV]";
+		for(size_t i=0; i<conv[0].out.size(); i++)
+			ofs << '\t' << (conv[0].Emin + i*conv[0].dE)/eV;
+		ofs << '\n';
+		for(int b=0; b<nBands; b++)
+		{	ofs << (b+1);
+			for(double Gamma: conv[b].out)
+				ofs << '\t' << Gamma/eV;
+			ofs << '\n';
+		}
 	}
 	
 	finalizeSystem();
+	return 0;
 }
