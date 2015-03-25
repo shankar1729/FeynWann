@@ -94,10 +94,10 @@ int main(int argc, char** argv)
 				vArr[ik] = bs.getVelocity(kArr[ik], R, Emax);
 			
 			diagMatrix omegaPh[bunchSize];
-			std::vector<matrix> MePh[bunchSize];
+			std::vector<matrix> gePh[bunchSize];
 			for(int ik1=0; ik1<bunchSize; ik1++)
 			{	//Calculate phonon stuff for each pair of k-points involving ik1
-				bs.setPhononMatElemArray(kArr[ik1], kArr, MePh);
+				bs.setPhononMatElemArray(kArr[ik1], kArr, gePh);
 				for(int ik2=0; ik2<bunchSize; ik2++)
 					omegaPh[ik2] = bs.getPhononModes(kArr[ik1] - kArr[ik2]);
 				
@@ -112,13 +112,13 @@ int main(int argc, char** argv)
 							{	double viDotvj = dot(vArr[ik1][v], vArr[ik2][c]);
 								double fj = 1./(exp(Earr[ik2][c]/T)+1);
 								for(int alpha=0; alpha<omegaPh[ik2].nRows(); alpha++)
-								{	double gk = 1./(exp(omegaPh[ik2][alpha]/T) - 1.);
-									double Msq_by_omega = MePh[ik2][alpha](c,v).norm() / omegaPh[ik2][alpha];
+								{	double nPh = 1./(exp(omegaPh[ik2][alpha]/T) - 1.);
+									double gePhSq = gePh[ik2][alpha](c,v).norm();
 									for(int ae=-1; ae<=+1; ae+=2)
 									{	double delta = EconservePrefac * exp(EconserveExpFac * std::pow(Earr[ik2][c]-Earr[ik1][v] - ae*omegaPh[ik2][alpha],2));
-										double occFactors = (-dFdEi) * (gk+0.5 - ae*(0.5-fj));
-										GammaBlock += (viDotvi -  viDotvj) * occFactors * delta * Msq_by_omega;
-										tauInvBlock += occFactors * delta * Msq_by_omega;
+										double occFactors = (-dFdEi) * (nPh+0.5 - ae*(0.5-fj));
+										GammaBlock += (viDotvi -  viDotvj) * occFactors * delta * gePhSq;
+										tauInvBlock += occFactors * delta * gePhSq;
 									}
 								}
 							}
@@ -126,7 +126,7 @@ int main(int argc, char** argv)
 			}
 		}
 		double prefacT = spinWeight/(3.*nKpts);
-		double prefacGamma = spinWeight*M_PI/(3*nKpts*nKpts*1./nBunches);
+		double prefacGamma = spinWeight*(2*M_PI)/(3*nKpts*nKpts*1./nBunches);
 		Tblock *= prefacT; Tsum += Tblock; TsumSq += std::pow(Tblock,2);
 		gBlock *= prefacT; gSum += gBlock; gSumSq += std::pow(gBlock,2);
 		GammaBlock *= prefacGamma; GammaSum += GammaBlock; GammaSumSq += std::pow(GammaBlock,2);

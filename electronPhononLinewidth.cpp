@@ -58,9 +58,9 @@ int main(int argc, char** argv)
 	//Calculate lifetimes for states in irreducible wedge:
 	int nBands = bs.getStates(vector3<>()).nRows();
 	std::vector<diagMatrix> ImSigma(e.eInfo.nStates, diagMatrix(nBands, 0.)); //imaginary part of self-energy in irreducible wedge
-	double prefacImSigma = 0.5 * M_PI/(Nk*Nk*Nk); //Note factor of 0.5 between decay rate and ImSigma due to squaring of wavefunctions to probability
+	double prefacImSigma = 0.5 * 2*M_PI/(Nk*Nk*Nk); //Note factor of 0.5 between decay rate and ImSigma due to squaring of wavefunctions to probability
 	double EconserveScaleFac = 1./T, EconservePrefac = 1./(M_PI*T); //energy conserving Lorentzian parameters
-	std::vector< std::vector<matrix> > MePhArr(Nk);
+	std::vector< std::vector<matrix> > gePhArr(Nk);
 	//Loop over blocks of one dimension of second k-point
 	std::vector< vector3<> > k2arr(Nk);
 	int ik01start = (Nk*Nk * mpiUtil->iProcess()) / mpiUtil->nProcesses();
@@ -82,24 +82,23 @@ int main(int argc, char** argv)
 		//Loop over first k-point (irreducible wedge):
 		for(int q=0; q<e.eInfo.nStates; q++)
 		{	vector3<> k1 = e.eInfo.qnums[q].k;
-			bs.setPhononMatElemArray(k1, k2arr, MePhArr.data());
+			bs.setPhononMatElemArray(k1, k2arr, gePhArr.data());
 			const diagMatrix& E1 = bs.getStates(k1);
 			for(int ik2=0; ik2<Nk; ik2++)
 			{	const vector3<>& k2 = k2arr[ik2];
 				diagMatrix E2 = bs.getStates(k2);
 				diagMatrix omegaPh = bs.getPhononModes(k1 - k2);
-				const std::vector<matrix>& MePh = MePhArr[ik2];
+				const std::vector<matrix>& gePh = gePhArr[ik2];
 				
 				for(int b1=0; b1<E1.nRows(); b1++)
 				{	for(int b2=0; b2<E2.nRows(); b2++)
 					{	double f2 = 1./(exp(E2[b2]/T)+1);
 						for(int alpha=0; alpha<omegaPh.nRows(); alpha ++)
-						{	double gk = 1./(exp(omegaPh[alpha]/T) - 1.);
-							double Msq_by_omega = MePh[alpha](b2,b1).norm() / omegaPh[alpha];
+						{	double nPh = 1./(exp(omegaPh[alpha]/T) - 1.);
 							for(int ae=-1; ae<=+1; ae+=2)
 							{	double delta = EconservePrefac / (1. + std::pow(EconserveScaleFac * (E2[b2]-E1[b1] - ae*omegaPh[alpha]),2));
-								double occFactors = (gk+0.5 - ae*(0.5-f2));
-								ImSigma[q][b1] += prefacImSigma * occFactors * delta * Msq_by_omega;
+								double occFactors = (nPh+0.5 - ae*(0.5-f2));
+								ImSigma[q][b1] += prefacImSigma * occFactors * delta * gePh[alpha](b2,b1).norm();
 							}
 						}
 					}

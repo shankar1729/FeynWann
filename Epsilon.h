@@ -12,5 +12,6 @@ public:
 	complex epsilon;
 	Epsilon(string inputFilename);
 	void setFrequency(double omegaIn, bool print=true);
+	double exptLinewidth() const; //!< calculate experimental linewidth
 };
 #endif //WANNIERMETROPOLIS_EPSILON_H

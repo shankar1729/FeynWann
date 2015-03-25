@@ -244,7 +244,8 @@ void BandStruct::setPhononMatElemArray(vector3<> k1, const std::vector< vector3<
 		const CacheEntry& cEl2 = *(cElAll[ik2]);
 		result[ik2].resize(nModes);
 		for(int alpha=0; alpha<nModes; alpha++)
-			result[ik2][alpha] = dagger(cEl1.evecs) * unpackMatElem(HePh, alpha) * cEl2.evecs; //electron unitary rotations
+			result[ik2][alpha] = sqrt(0.5/cPhAll[ik2]->eigs[alpha]) //frequency-dependent phonon amplitude
+				* (dagger(cEl1.evecs) * unpackMatElem(HePh, alpha) * cEl2.evecs); //electron unitary rotations
 	}
 	watch.stop();
 }

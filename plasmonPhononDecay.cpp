@@ -108,7 +108,7 @@ int main(int argc, char** argv)
 	
 	// Compute normalization factor
 	nKpts = nKptsMetro / totalWalkers;
-	double gammaPrefac = std::pow(M_PI,2) *  N1/(nKptsMetro*4*fabs(det(R))*eps.modGammaMinus*omega*eps.Lquant);
+	double gammaPrefac = spinWeight * (2*std::pow(M_PI,2)/(eps.modGammaMinus*omega*eps.Lquant*fabs(det(R)))) * N1/nKptsMetro;
 	logPrintf("gammaPrefac = %lg\n",  gammaPrefac);
 
 	// Values for use in metropolis sampling
@@ -156,31 +156,29 @@ int main(int argc, char** argv)
 					diagMatrix E2 = bs.getStates(kpnt2), E2im = lineWidth(kpnt2);
 					std::vector<matrix> Pk2 = bs.getDipoleMatElem(kpnt2);
 					const matrix& AdotPk2 = Pk2[0]; //pre-contracted
-					diagMatrix P = bs.getPhononModes(kpnt1-kpnt2);
+					diagMatrix omegaPh = bs.getPhononModes(kpnt1-kpnt2);
 					std::vector<std::vector<matrix> > HPePh;
-					std::vector<matrix> HePh = bs.getPhononMatElem(kpnt1,kpnt2);
+					std::vector<matrix> gePh = bs.getPhononMatElem(kpnt1,kpnt2);
 					
 					for(int v=0; v<E1.nRows(); v++) if(E1[v]<10.*T)
 					{	for(int c=0; c<E2.nRows(); c++) if(E2[c]>-10.*T)
 						{	double weight = 0.;
-							for(int alpha=0; alpha<P.nRows(); alpha ++)
+							for(int alpha=0; alpha<omegaPh.nRows(); alpha ++)
 							{	for(int ae=-1; ae<=+1; ae+=2) // +/- for phonon absorption or emmision
-								{	double mk_cv = BandStruct::mk_sub(E2[c], E1[v], Eplasmon + ae*P[alpha], T);
-									double g_kPh = 1./(exp(P[alpha]/T) - 1.);
-									double weightEconserve = (0.5*spinWeight) * exp(0.5*(mk1k2-mk_cv)/(T*T))/(T*sqrt(2*M_PI)) * (g_kPh+0.5*(1.-ae))/P[alpha]; //weight contribution (including phonon and electron occupation factors) due to energy conservation
+								{	double mk_cv = BandStruct::mk_sub(E2[c], E1[v], Eplasmon + ae*omegaPh[alpha], T);
+									double nPh = 1./(exp(omegaPh[alpha]/T) - 1.);
+									double weightEconserve = exp(0.5*(mk1k2-mk_cv)/(T*T))/(T*sqrt(2*M_PI)) * (nPh+0.5*(1.-ae)); //weight contribution (including phonon and electron occupation factors) due to energy conservation
 									if(weightEconserve < weightCut) continue;
 									// Effective matrix elements
 									complex Meff = 0.; double weightSub = 0.;
 									for(int i=0; i<E1.nRows(); i++) // sum over the intermediate states
 									{	complex E1i(E1[i], E1im[i]);
 										complex E2i(E2[i], E2im[i]);
-										double f1i = 1./(1.+exp(E1[i]/T));
-										double f2i = 1./(1.+exp(E2[i]/T));
-										complex num1 = HePh[alpha](c,i) * AdotPk1(i,v);
-										complex num2 = AdotPk2(c,i) * HePh[alpha](i,v);
+										complex num1 = gePh[alpha](c,i) * AdotPk1(i,v);
+										complex num2 = AdotPk2(c,i) * gePh[alpha](i,v);
 										complex den1 = one / (E1i - (E1[v] + Eplasmon));
 										complex den2 = one / (E2i - (E2[c] - Eplasmon));
-										Meff += (1.-f1i)*num1*den1 + (1.-f2i)*num2*den2;
+										Meff += num1*den1 + num2*den2;
 										weightSub =  weightEconserve * gammaPrefac * Meff.norm();  //norm = abs^2
 										GammaConv[i] += weightSub; //estimate based on truncating to i bands
 									}
@@ -247,9 +245,7 @@ int main(int argc, char** argv)
 	EvHist.allReduce(MPIUtil::ReduceSum); EvHist.print(string("h")+fname, 1./eV, eV);
 
 	//Experimental lineWidth
-	complex arg = eps.epsilon / (eps.epsilon + 1);
-	double omegaIm = fabs(sin(0.5*atan2(imag(arg),real(arg)))) * omega;
-	logPrintf("Experimental Linewidth = %lg eV\n", omegaIm/eV);
+	logPrintf("Experimental Linewidth = %lg eV\n", eps.exptLinewidth()/eV);
 
 	//Empty-state convergence:
 	mpiUtil->allReduce(GammaConv.data(), GammaConv.size(), MPIUtil::ReduceSum);

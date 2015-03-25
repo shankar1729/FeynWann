@@ -98,7 +98,7 @@ int main(int argc, char** argv)
 	
 	//Compute normalization factor
 	nKpts = nKptsMetro / totalWalkers;
-	double gammaPrefac = std::pow(M_PI,2) * N1/(nKptsMetro*fabs(det(R))*eps.modGammaMinus*omega*eps.Lquant);
+	double gammaPrefac = spinWeight * (2*std::pow(M_PI,2)/(eps.modGammaMinus*omega*eps.Lquant*fabs(det(R)))) * N1/nKptsMetro;
 	logPrintf("gammaPrefac = %lg\n",  gammaPrefac);
 
 	const double weightCut = 1e-6;
@@ -140,7 +140,7 @@ int main(int argc, char** argv)
 					for(int v=0; v<E.nRows(); v++) if(E[v]<10.*T)
 					{	for(int c=0; c<E.nRows(); c++) if(E[c]>-10.*T)
 						{	double mk_cv = BandStruct::mk_sub(E[c], E[v], Eplasmon, T);
-							double weightEconserve = (0.5*spinWeight) * exp(0.5*(mk-mk_cv)/(T*T))/(T*sqrt(2*M_PI)); //weight contribution due to energy conservation (and spin)
+							double weightEconserve = exp(0.5*(mk-mk_cv)/(T*T))/(T*sqrt(2*M_PI)); //weight contribution due to energy conservation (and spin)
 							if(weightEconserve < weightCut) continue;
 							double weight = weightEconserve * gammaPrefac * AdotPk(c,v).norm(); //norm = abs^2
 							//Include in statistics:
@@ -191,6 +191,9 @@ int main(int argc, char** argv)
 	GammaStd = hypot(GammaStd, Gamma*N1std/N1); //propagate error in N1
 	logPrintf("Gamma = %lg +/- %lg eV\n", Gamma/eV, GammaStd/eV);
 	
+	//Experimental lineWidth
+	logPrintf("Experimental Linewidth = %lg eV\n", eps.exptLinewidth()/eV);
+
 	//Carrier distributions:
 	char fname[256];
 	sprintf(fname, "Distrib-%.1lfeV-metro.dat", Eplasmon/eV);

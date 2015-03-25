@@ -67,9 +67,9 @@ int main(int argc, char** argv)
 	#ifdef PHONON_ENABLED
 	int nModes = bs.getPhononModes(vector3<>()).nRows();
 	int nKpairs = nKpts * (bunchSize-1); //total number of sampled k-point pairs for phonon-assisted transitions
-	double phononPrefac0 = 4 * std::pow(M_PI,2) * spinWeight / (nKpairs*4*fabs(det(R))); //frequency independent part of prefac
+	double phononPrefac0 = 4 * std::pow(M_PI,2) * spinWeight / (nKpairs*fabs(det(R))); //frequency independent part of prefac
 	#endif
-	double directPrefac0 = 4 * std::pow(M_PI,2) * spinWeight / (nKpts * fabs(det(R))); //frequency independent part of prefac
+	double directPrefac0 = 4 * std::pow(M_PI,2) * spinWeight / (nKpts*fabs(det(R))); //frequency independent part of prefac
 
 	//Initialize histograms
 	double gaussMargin = 5*T;
@@ -125,11 +125,11 @@ int main(int argc, char** argv)
 			const diagMatrix& F1 = Farr[ik1];
 			const std::vector<matrix>& P1 = Parr[ik1];
 			//phonon matrix elements for ik1 with rest of bunch:
-			std::vector<matrix> MePhArr[bunchSize];
-			bs.setPhononMatElemArray(kArr[ik1], kArr, MePhArr);
+			std::vector<matrix> gePhArr[bunchSize];
+			bs.setPhononMatElemArray(kArr[ik1], kArr, gePhArr);
 			//Loop over second k-point:
 			for(int ik2=0; ik2<bunchSize; ik2++) if(ik2!=ik1) //avoid gamma-point phonon singularity
-			{	const std::vector<matrix>& MePh = MePhArr[ik2];
+			{	const std::vector<matrix>& gePh = gePhArr[ik2];
 				diagMatrix omegaPh = bs.getPhononModes(kArr[ik1] - kArr[ik2]);
 				const diagMatrix& E2 = Earr[ik2];
 				const diagMatrix& ImE2 = ImEarr[ik2];
@@ -142,16 +142,16 @@ int main(int argc, char** argv)
 						{	for(int ae=-1; ae<=+1; ae+=2) // +/- for phonon absorption or emmision
 							{	double omega = E2[c] - E1[v] - ae*omegaPh[alpha]; //energy conservation
 								if(omega<=0 || omega>=EplasmonMax) continue; //irrelevant event
-								double g_kPh = 1./(exp(omegaPh[alpha]/T) - 1.);
-								double weightPrefac = (phononPrefac/(omega*omega)) * F1[v] * (1.-F2[c]) * (g_kPh + 0.5*(1.-ae))/omegaPh[alpha];
+								double nPh = 1./(exp(omegaPh[alpha]/T) - 1.);
+								double weightPrefac = (phononPrefac/(omega*omega)) * F1[v] * (1.-F2[c]) * (nPh + 0.5*(1.-ae));
 								// Effective matrix elements
 								complex Meff = 0.; double weight = 0.;
 								for(int i=0; i<nBands; i++) // sum over the intermediate states
 								{	complex E1i(E1[i], ImE1[i]);
 									complex E2i(E2[i], ImE2[i]);
 									Meff += 
-										( P2[0](c,i) * (1.-F2[i]) * MePh[alpha](i,v) / (E2i - (E2[c] - omega))
-										+ MePh[alpha](c,i) * (1.-F1[i]) * P1[0](i,v) / (E1i - (E1[v] + omega)) );
+										( P2[0](c,i) * gePh[alpha](i,v) / (E2i - (E2[c] - omega))
+										+ gePh[alpha](c,i) * P1[0](i,v) / (E1i - (E1[v] + omega)) );
 									weight =  weightPrefac * Meff.norm();  //norm = abs^2
 								}
 								ImEpsPhonon.addEvent(omega, weight);

@@ -310,7 +310,7 @@ int main(int argc, char** argv)
 	
 	//Fill matrix 'S' in the derivation:
 	SparseMatrix S(nStates, nStates, (nPairs*1.*nStates*nStates)/nPairsTot);
-	double prefacS = M_PI/NkProd;
+	double prefacS = 2*M_PI/NkProd;
 	double tauInvNum = 0.;
 	int pairSetStart = (kpairSets.size() * mpiUtil->iProcess()) / mpiUtil->nProcesses();
 	int pairSetStop = (kpairSets.size() * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
@@ -318,13 +318,13 @@ int main(int argc, char** argv)
 	{	const KpairSet& kpairSet = kpairSets[pairSet];
 		int kIndex1 = kpairSet.kIndex1;
 		//Get e-ph elements for all pairs in set together:
-		std::vector< std::vector<matrix> > MePhArr(kpairSet.kIndex2set.size());
+		std::vector< std::vector<matrix> > gePhArr(kpairSet.kIndex2set.size());
 		{	vector3<> k1 = invDiagNk * ikList[kIndex1];
 			std::vector< vector3<> > k2arr;
 			k2arr.reserve(kpairSet.kIndex2set.size());
 			for(int kIndex2: kpairSet.kIndex2set)
 				k2arr.push_back(invDiagNk * ikList[kIndex2]);
-			bs.setPhononMatElemArray(k1, k2arr, MePhArr.data());
+			bs.setPhononMatElemArray(k1, k2arr, gePhArr.data());
 		}
 		//Now process one pair at a time:
 		for(size_t iBlockEntry=0; iBlockEntry<kpairSet.kIndex2set.size(); iBlockEntry++)
@@ -334,7 +334,7 @@ int main(int argc, char** argv)
 			vector3<> k1 = invDiagNk * ik1;
 			vector3<> k2 = invDiagNk * ik2;
 			diagMatrix omegaPh = bs.getPhononModes(k1-k2);
-			std::vector<matrix>& MePh = MePhArr[iBlockEntry];
+			std::vector<matrix>& gePh = gePhArr[iBlockEntry];
 			for(int swapped=0; swapped<2; swapped++)
 			{	for(int iState1: stateMap[ik1])
 				for(int iState2: stateMap[ik2])
@@ -343,11 +343,11 @@ int main(int argc, char** argv)
 					const State& state2 = states[iState2];
 					for(int alpha=0; alpha<omegaPh.nRows(); alpha ++)
 					{	double gk = 1./(exp(omegaPh[alpha]/T) - 1.); //Bose factor
-						double Msq_by_omega = MePh[alpha](state1.b,state2.b).norm() / omegaPh[alpha];
+						double gePhSq = gePh[alpha](state1.b,state2.b).norm();
 						for(int ae=-1; ae<=+1; ae+=2)
 						{	double delta = EconservePrefac * exp(EconserveExpFac * std::pow(state2.e - state1.e - ae*omegaPh[alpha],2));
-							Scur += prefacS * (gk+0.5 + ae*(0.5-state1.f)) * delta * Msq_by_omega;
-							tauInvNum += prefacS * state1.fPrime * (gk+0.5 + ae*0.5) * delta * Msq_by_omega;
+							Scur += prefacS * (gk+0.5 + ae*(0.5-state1.f)) * delta * gePhSq;
+							tauInvNum += prefacS * state1.fPrime * (gk+0.5 + ae*0.5) * delta * gePhSq;
 						}
 					}
 					S.entries.push_back(SparseMatrix::Entry(iState1,iState2, Scur));
@@ -355,7 +355,7 @@ int main(int argc, char** argv)
 				if(!swapped) //need to do this only after first time (at most 2 passes through loop)
 				{	std::swap(ik1, ik2);
 					std::swap(k1, k2);
-					for(matrix& M: MePh) M = dagger(M);
+					for(matrix& M: gePh) M = dagger(M);
 				}
 			}
 		}

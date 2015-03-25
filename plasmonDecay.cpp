@@ -62,8 +62,7 @@ int main(int argc, char** argv)
 	int nBands = bs.getStates(vector3<>()).nRows();
 	int nModes = bs.getPhononModes(vector3<>()).nRows();
 	complex I(0,1);
-	double directPrefac0 = (0.5*spinWeight) * std::pow(M_PI,2) / (nKpts * fabs(det(R))); //frequency independent part of prefac
-	double phononPrefac0 = (0.5*spinWeight) * std::pow(M_PI,2) / (nKpairs*4*fabs(det(R))); //frequency independent part of prefac
+	double prefac0 = spinWeight * 2*std::pow(M_PI,2)/fabs(det(R)); //frequency independent part of prefactor
 
 	//Initialize histograms
 	double gaussMargin = 5*T;
@@ -109,7 +108,7 @@ int main(int argc, char** argv)
 					if(omega<=0 || omega>=EplasmonMax) continue; //irrelevant event
 					eps.setFrequency(omega, false);
 					complex AdotPcv = P[0](c,v) - I*(eps.k/eps.modGammaMinus)*P[1](c,v);
-					double directPrefac = directPrefac0 / (eps.modGammaMinus * omega * eps.Lquant);
+					double directPrefac = prefac0 / (eps.modGammaMinus * omega * eps.Lquant * nKpts);
 					if(!std::isfinite(directPrefac) || directPrefac<0.) continue; //avoid over-damped region
 					double weight = directPrefac * F[v] * (1.-F[c]) * AdotPcv.norm(); //norm=abs^2
 					EvDirect.addEvent(E[v], omega, weight);
@@ -126,11 +125,11 @@ int main(int argc, char** argv)
 			const diagMatrix& F1 = Farr[ik1];
 			const std::vector<matrix>& P1 = Parr[ik1];
 			//phonon matrix elements for ik1 with rest of bunch:
-			std::vector<matrix> MePhArr[bunchSize];
-			bs.setPhononMatElemArray(kArr[ik1], kArr, MePhArr);
+			std::vector<matrix> gePhArr[bunchSize];
+			bs.setPhononMatElemArray(kArr[ik1], kArr, gePhArr);
 			//Loop over second k-point:
 			for(int ik2=0; ik2<bunchSize; ik2++) if(ik2!=ik1) //avoid gamma-point phonon singularity
-			{	const std::vector<matrix>& MePh = MePhArr[ik2];
+			{	const std::vector<matrix>& gePh = gePhArr[ik2];
 				diagMatrix omegaPh = bs.getPhononModes(kArr[ik1] - kArr[ik2]);
 				const diagMatrix& E2 = Earr[ik2];
 				const diagMatrix& ImE2 = ImEarr[ik2];
@@ -144,10 +143,10 @@ int main(int argc, char** argv)
 							{	double omega = E2[c] - E1[v] - ae*omegaPh[alpha]; //energy conservation
 								if(omega<=0 || omega>=EplasmonMax) continue; //irrelevant event
 								eps.setFrequency(omega, false);
-								double phononPrefac = phononPrefac0 / (eps.modGammaMinus * omega * eps.Lquant);
+								double phononPrefac = prefac0 / (eps.modGammaMinus * omega * eps.Lquant * nKpairs);
 								if(!std::isfinite(phononPrefac) || phononPrefac<0.) continue; //avoid over-damped region
-								double g_kPh = 1./(exp(omegaPh[alpha]/T) - 1.);
-								double weightPrefac = phononPrefac * F1[v] * (1.-F2[c]) * (g_kPh + 0.5*(1.-ae))/omegaPh[alpha];
+								double nPh = 1./(exp(omegaPh[alpha]/T) - 1.);
+								double weightPrefac = phononPrefac * F1[v] * (1.-F2[c]) * (nPh + 0.5*(1.-ae));
 								// Effective matrix elements
 								complex Meff = 0.; double weight = 0.;
 								for(int i=0; i<nBands; i++) // sum over the intermediate states
@@ -156,8 +155,8 @@ int main(int argc, char** argv)
 									complex AdotP1iv = P1[0](i,v) - I*(eps.k/eps.modGammaMinus)*P1[1](i,v);
 									complex AdotP2ci = P2[0](c,i) - I*(eps.k/eps.modGammaMinus)*P2[1](c,i);
 									Meff += 
-										( AdotP2ci * (1.-F2[i]) * MePh[alpha](i,v) / (E2i - (E2[c] - omega))
-										+ MePh[alpha](c,i) * (1.-F1[i]) * AdotP1iv / (E1i - (E1[v] + omega)) );
+										( AdotP2ci * gePh[alpha](i,v) / (E2i - (E2[c] - omega))
+										+ gePh[alpha](c,i) * AdotP1iv / (E1i - (E1[v] + omega)) );
 									weight =  weightPrefac * Meff.norm();  //norm = abs^2
 									convPhonon[i].addEvent(omega, weight); //estimate based on truncating to i bands
 								}
@@ -194,8 +193,7 @@ int main(int argc, char** argv)
 	{	ofstream ofs("GammaAll-expt.dat");
 		for(double omega = gaussMargin; omega <= EplasmonMax-gaussMargin; omega += T)
 		{	eps.setFrequency(omega, false);
-			double GammaExpt = (omega / (2.*eps.modGammaMinus*eps.Lquant)) * (1. + std::pow(eps.k/eps.modGammaMinus, 2)) * imag(eps.epsilon);
-			ofs << omega/eV << '\t' << GammaExpt/eV << '\n';
+			ofs << omega/eV << '\t' << eps.exptLinewidth()/eV << '\n';
 		}
 	}
 	

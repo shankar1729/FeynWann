@@ -42,7 +42,7 @@ Epsilon::Epsilon(string inputFilename)
 
 void Epsilon::setFrequency(double omegaIn, bool print)
 {	// Calculate the dielectric at omega = Eplasmon
-	double omega = omegaIn;
+	omega = omegaIn;
 	complex omegaEpsilonPrime(1.0,0.0), one(1.0,0.0), den;
 	double num;
 	vector3<double> epsParam;
@@ -66,4 +66,8 @@ void Epsilon::setFrequency(double omegaIn, bool print)
 		+ (1/(4*std::pow(modGammaMinus,3))) * ((std::pow(modGammaMinus,2)+k*k)*real(omegaEpsilonPrime)+(std::pow((real(epsilon*omega/c)),2)));
 	
 	if(print) logPrintf("omega = %lg  k = %lg  modGammaMinus  = %lg  modGammaPlus = %lg  Lquant = %lg\n", omega, k, modGammaMinus, modGammaPlus, Lquant);
+}
+
+double Epsilon::exptLinewidth() const
+{	return (omega / (2.*modGammaMinus*Lquant)) * (1. + std::pow(k/modGammaMinus, 2)) * imag(epsilon);
 }
