@@ -6,7 +6,6 @@
 #include "BandStruct.h"
 #include "Histogram.h"
 #include "Epsilon.h"
-#include "LineWidth.h"
 #include "InputMap.h"
 #include "Units.h"
 
@@ -51,9 +50,6 @@ int main(int argc, char** argv)
 	const int bunchSize = 32;
 	bs.setCacheSize(2*bunchSize);
 	
-	//Initalize line width of intermediate electronic states
-	LineWidth lineWidth("Wannier/wannier", bs);
-
 	//Initialize sampling parameters:
 	int ikStart, ikStop; TaskDivision(nKptsN1, mpiUtil).myRange(ikStart, ikStop);
 	int nBunchesMine = ceil((ikStop-ikStart)*1./bunchSize); //number of bunches on current process
@@ -63,7 +59,13 @@ int main(int argc, char** argv)
 	int nModes = bs.getPhononModes(vector3<>()).nRows();
 	complex I(0,1);
 	double prefac0 = spinWeight * 2*std::pow(M_PI,2)/fabs(det(R)); //frequency independent part of prefactor
-
+	
+	//Singularity extrapolation parameters
+	double extrapCoeff[] = {-19./12, 13./3, -7./4 }; //account for constant, 1/eta and eta^2 dependence
+	//double extrapCoeff[] = { -1, 2.}; //account for constant and 1/eta dependence
+	const int nExtrap = sizeof(extrapCoeff)/sizeof(double);
+	const double eta = 0.1*eV;
+	
 	//Initialize histograms
 	double gaussMargin = 5*T;
 	double fermiMargin = 10*T;
@@ -88,7 +90,6 @@ int main(int argc, char** argv)
 		
 		//Calculate electronic states and matrix elements for bunch:
 		std::vector<diagMatrix> Earr = bs.getStates(kArr);
-		std::vector<diagMatrix> ImEarr = lineWidth(kArr);
 		std::vector< std::vector<matrix> > Parr = bs.getDipoleMatElem(kArr);
 		std::vector<diagMatrix> Farr = Earr; //convert to fillings:
 		for(diagMatrix& F: Farr)
@@ -110,7 +111,7 @@ int main(int argc, char** argv)
 					complex AdotPcv = P[0](c,v) - I*(eps.k/eps.modGammaMinus)*P[1](c,v);
 					double directPrefac = prefac0 / (eps.modGammaMinus * omega * eps.Lquant * nKpts);
 					if(!std::isfinite(directPrefac) || directPrefac<0.) continue; //avoid over-damped region
-					double weight = directPrefac * F[v] * (1.-F[c]) * AdotPcv.norm(); //norm=abs^2
+					double weight = directPrefac * (F[v]-F[c]) * AdotPcv.norm(); //norm=abs^2
 					EvDirect.addEvent(E[v], omega, weight);
 					EcDirect.addEvent(E[c], omega, weight);
 					GammaDirect.addEvent(omega, weight);
@@ -121,7 +122,6 @@ int main(int argc, char** argv)
 		//Phonon-assisted transitions:
 		for(int ik1=0; ik1<bunchSize; ik1++)
 		{	const diagMatrix& E1 = Earr[ik1];
-			const diagMatrix& ImE1 = ImEarr[ik1];
 			const diagMatrix& F1 = Farr[ik1];
 			const std::vector<matrix>& P1 = Parr[ik1];
 			//phonon matrix elements for ik1 with rest of bunch:
@@ -132,7 +132,6 @@ int main(int argc, char** argv)
 			{	const std::vector<matrix>& gePh = gePhArr[ik2];
 				diagMatrix omegaPh = bs.getPhononModes(kArr[ik1] - kArr[ik2]);
 				const diagMatrix& E2 = Earr[ik2];
-				const diagMatrix& ImE2 = ImEarr[ik2];
 				const diagMatrix& F2 = Farr[ik2];
 				const std::vector<matrix>& P2 = Parr[ik2];
 				//Loops over bands and phonon modes:
@@ -146,18 +145,21 @@ int main(int argc, char** argv)
 								double phononPrefac = prefac0 / (eps.modGammaMinus * omega * eps.Lquant * nKpairs);
 								if(!std::isfinite(phononPrefac) || phononPrefac<0.) continue; //avoid over-damped region
 								double nPh = 1./(exp(omegaPh[alpha]/T) - 1.);
-								double weightPrefac = phononPrefac * F1[v] * (1.-F2[c]) * (nPh + 0.5*(1.-ae));
+								double weightPrefac = phononPrefac * (F1[v]-F2[c]) * (nPh + 0.5*(1.-ae));
 								// Effective matrix elements
-								complex Meff = 0.; double weight = 0.;
+								std::vector<complex> Meff(nExtrap, 0.); double weight = 0.;
 								for(int i=0; i<nBands; i++) // sum over the intermediate states
-								{	complex E1i(E1[i], ImE1[i]);
-									complex E2i(E2[i], ImE2[i]);
-									complex AdotP1iv = P1[0](i,v) - I*(eps.k/eps.modGammaMinus)*P1[1](i,v);
+								{	complex AdotP1iv = P1[0](i,v) - I*(eps.k/eps.modGammaMinus)*P1[1](i,v);
 									complex AdotP2ci = P2[0](c,i) - I*(eps.k/eps.modGammaMinus)*P2[1](c,i);
-									Meff += 
-										( AdotP2ci * gePh[alpha](i,v) / (E2i - (E2[c] - omega))
-										+ gePh[alpha](c,i) * AdotP1iv / (E1i - (E1[v] + omega)) );
-									weight =  weightPrefac * Meff.norm();  //norm = abs^2
+									double MeffSqExtrap = 0.;
+									for(int z=0; z<nExtrap; z++)
+									{	complex iEta(0, (z+1)*eta);
+										Meff[z] += 
+											( AdotP2ci * gePh[alpha](i,v) / (E2[i]+iEta - (E2[c] - omega))
+											+ gePh[alpha](c,i) * AdotP1iv / (E1[i]+iEta - (E1[v] + omega)) );
+										MeffSqExtrap += extrapCoeff[z] * Meff[z].norm();
+									}
+									weight = weightPrefac * MeffSqExtrap;
 									convPhonon[i].addEvent(omega, weight); //estimate based on truncating to i bands
 								}
 								//Results using all available bands:
