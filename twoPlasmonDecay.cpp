@@ -11,7 +11,7 @@
 #include "Units.h"
 
 int main(int argc, char** argv)
-{   string inputFilename; bool dryRun, printDefaults;
+{	string inputFilename; bool dryRun, printDefaults;
 	initSystemCmdline(argc, argv, "Monte Carlo estimate of two-plasmon decay rate", inputFilename, dryRun, printDefaults);
 
 	//Get the system parameters (mu, T, lattice vectors etc.)
@@ -42,7 +42,7 @@ int main(int argc, char** argv)
 	logPrintf("\n");
 
 	//Initialize dielectric model:
-	Epsilon eps("epsilon.txt");
+	Epsilon eps("Wannier/epsilon.dat");
 	
 	//Initialize Wannier bandstructure:
 	std::vector< vector3<complex> > Ahat(2); //contract for zHat and kHat, which will be combined in a frequency dependent way

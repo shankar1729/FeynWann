@@ -2,15 +2,22 @@
 #define WANNIERMETROPOLIS_EPSILON_H
 
 #include <core/string.h>
-#include <core/vector3.h>
 #include <vector>
 
 class Epsilon
-{	std::vector<vector3<double>> epsParams;
+{	double omegaStart, domega, omegaStop; //!< frequency grid
+	complex epsilonStart; //!< epsilon at omegaStart; the splines store the difference from this value
+	std::vector<double> coeffRe, coeffIm; //!< quintic spline coefficients for epsilon real and imaginary parts
+	double Gamma0, OmegaPsq; //!< Drude model parameters for omega < omegaStart
 public:
-	double omega_p, omega, Eplasmon, modGammaPlus, modGammaMinus, Lquant, k;
-	complex epsilon;
-	Epsilon(string inputFilename);
+	double omega; //!< current frequency
+	complex epsilon; //!< complex dielectric constant
+	double modGammaPlus; //!< decay length of plasmon in vacuum
+	double modGammaMinus; //!< decay length of plasmon in metal
+	double Lquant; //!< quantization length of plasmon
+	double k; //!< propagation wave-vector
+	
+	Epsilon(string filename); //!< initialize fom a numerical tabulation of the dielectric constant
 	void setFrequency(double omegaIn, bool print=true);
 	double exptLinewidth() const; //!< calculate experimental linewidth
 };

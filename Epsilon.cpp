@@ -1,4 +1,5 @@
 #include <core/Util.h>
+#include <core/Spline.h>
 #include <electronic/matrix.h>
 #include <iostream>
 #include <fstream>
@@ -7,63 +8,93 @@
 #include "Epsilon.h"
 #include "Units.h"
 
-Epsilon::Epsilon(string inputFilename)
-{	//Get the Epsilon parameters
-	std::ifstream epsFile(inputFilename.c_str());
-	if(!epsFile.is_open())
-		die("Could not open system file '%s' for reading.\n", inputFilename.c_str());
-	logPrintf("---- Initializing dielectric model ----\n");
-	while(!epsFile.eof())
-	{	string line; getline(epsFile, line); //line-by-line processing (comments can now be inline)
-		trim(line);
-		if(line[0]=='#' || !line.length()) continue; //ignore comments and blank lines
-		istringstream iss(line);
-		string name; iss >> name;
-		if(name == "omega_p")
-		{	iss >> omega_p;
-			omega_p *= eV;
-			logPrintf("omega_p = %lg Eh\n", omega_p);
-		}
-		else if(name == "epsParams")
-		{	double f, Gamma, omega0;
-			iss >> f >> Gamma >> omega0;
-			Gamma *= eV;
-			omega0 *= eV;
-			epsParams.push_back(vector3<>(f, Gamma, omega0));
-			logPrintf( "epsParams:  f = %lg  Gamma = %lg Eh  omega0 = %lg Eh\n", f, Gamma, omega0);
-		}
-		else
-		{	die("Error: invalid command '%s' in dielectric parameter file '%s'.\n", name.c_str(), inputFilename.c_str())
-		}
+Epsilon::Epsilon(string filename)
+{	logPrintf("\n---- Initializing dielectric model ----\n");
+	
+	//Read data from file:
+	std::ifstream ifs(filename.c_str());
+	if(!ifs.is_open())
+		die("Could not open dielectric file '%s' for reading.\n", filename.c_str());
+	std::vector<double> omegaArr, reArr, imArr;
+	while(!ifs.eof())
+	{	double omega, re, im;
+		ifs >> omega >> re >> im;
+		if(!ifs.good()) break;
+		omegaArr.push_back(omega);
+		reArr.push_back(re);
+		imArr.push_back(im);
 	}
+	ifs.close();
+	
+	//Check frequency grid:
+	omegaStart = omegaArr[0];
+	omegaStop = omegaArr.back();
+	domega = (omegaStop - omegaStart) / (omegaArr.size() - 1);
+	for(size_t i=0; i<omegaArr.size(); i++)
+		if(fabs(omegaStart + i*domega - omegaArr[i]) > 1e-3*domega)
+			die("Dielectric file '%s' does not have a uniform frequency grid.\n", filename.c_str());
+	
+	//Report frequencies:
+	logPrintf("omegaMax: %lg eV\n", omegaStop/eV);
+	#define REPORTomega(name, epsCut) \
+		for(size_t i=0; i<omegaArr.size()-1; i++) \
+		{	if(reArr[i]<epsCut && reArr[i+1]>epsCut) \
+			{	double omegaCut = (omegaArr[i]*(reArr[i+1]-epsCut) + omegaArr[i+1]*(epsCut-reArr[i])) / (reArr[i+1] - reArr[i]); \
+				logPrintf("omega%s: %lg eV\n", #name, omegaCut/eV); \
+				break; \
+			} \
+		}
+	REPORTomega(SPP, -1.)
+	REPORTomega(Dip, -2.)
+	#undef REPORTomega
+	
+	//Initialize Drude fit for low frequencies:
+	Gamma0 = omegaStart * imArr[0] / (1. - reArr[0]);
+	OmegaPsq = hypot(1.-reArr[0], imArr[0]) * omegaStart * hypot(omegaStart,Gamma0);
+
+	//Initialize quintic spline for remainder:
+	epsilonStart = complex(reArr[0], imArr[0]);
+	for(double& re: reArr) re -= epsilonStart.real();
+	for(double& im: imArr) im -= epsilonStart.imag();
+	coeffRe = QuinticSpline::getCoeff(reArr, true);
+	coeffIm = QuinticSpline::getCoeff(imArr, true);
+	
 	logPrintf("\n");
-	epsFile.close();
 }
 
 void Epsilon::setFrequency(double omegaIn, bool print)
-{	// Calculate the dielectric at omega = Eplasmon
+{	//Check frequency:
 	omega = omegaIn;
-	complex omegaEpsilonPrime(1.0,0.0), one(1.0,0.0), den;
-	double num;
-	vector3<double> epsParam;
-	complex I(0.0,1.0);
-	epsilon = one;
-	for(size_t iPole = 0; iPole < epsParams.size(); iPole++)
-	{	epsParam = epsParams[iPole];
-		num = epsParam[0]*(std::pow(omega_p,2));
-		den = one/(std::pow(epsParam[2],2) - omega*omega - I * omega * epsParam[1]);
-		epsilon += num *den;
-		omegaEpsilonPrime += num * den*den * (std::pow(epsParam[2],2) + omega*omega);
+	if(omega <= 0. || omega > omegaStop)
+	{	epsilon = NAN;
+		modGammaPlus = modGammaMinus = Lquant = k = NAN;
+		if(print) logPrintf("omega = %lg  OUT OF RANGE\n", omega);
+		return;
+	}
+	
+	//Calculate epsilon and d(omega epsilon)/domega
+	double omegaEpsilonPrime;
+	if(omega < omegaStart)
+	{	complex den = complex(1) / complex(omega,Gamma0); // = 1/(omega + I*Gamma0)
+		epsilon = 1. - (OmegaPsq/omega)*den;
+		omegaEpsilonPrime = 1. + OmegaPsq*(den*den).real();
+	}
+	else
+	{	double x = (omega - omegaStart) / domega;
+		complex deps(QuinticSpline::value(coeffRe.data(), x), QuinticSpline::value(coeffIm.data(), x));
+		double deps_x = QuinticSpline::deriv(coeffRe.data(), x); //need real part only so far
+		epsilon = epsilonStart + deps;
+		omegaEpsilonPrime = epsilon.real() + omega * deps_x / domega;
 	}
 
 	//Plasmon mode details
 	const double c = 1./7.29735257e-3;
-	double realEpsilon = real(epsilon);
-	k = (omega/c) * sqrt(realEpsilon/(realEpsilon+1));
+	double epsRe = real(epsilon);
+	k = (omega/c) * sqrt(epsRe/(epsRe+1));
 	modGammaPlus = sqrt(k*k - (omega/c)*(omega/c));
-	modGammaMinus = sqrt(k*k - (realEpsilon*(omega/c)*(omega/c)));
+	modGammaMinus = sqrt(k*k - (epsRe*(omega/c)*(omega/c)));
 	Lquant = (1/(4*std::pow(modGammaPlus,3))) * (std::pow(modGammaPlus,2) + k*k + std::pow((omega/c),2))
-		+ (1/(4*std::pow(modGammaMinus,3))) * ((std::pow(modGammaMinus,2)+k*k)*real(omegaEpsilonPrime)+(std::pow((real(epsilon*omega/c)),2)));
+		+ (1/(4*std::pow(modGammaMinus,3))) * ((std::pow(modGammaMinus,2)+k*k)*omegaEpsilonPrime+(std::pow((real(epsilon*omega/c)),2)));
 	
 	if(print) logPrintf("omega = %lg  k = %lg  modGammaMinus  = %lg  modGammaPlus = %lg  Lquant = %lg\n", omega, k, modGammaMinus, modGammaPlus, Lquant);
 }

@@ -38,7 +38,7 @@ int main(int argc, char** argv)
 	logPrintf("\n");
 
 	//Initialize dielectric model:
-	Epsilon eps("epsilon.txt");
+	Epsilon eps("Wannier/epsilon.dat");
 	double omega = Eplasmon;
 	eps.setFrequency(omega);
 	

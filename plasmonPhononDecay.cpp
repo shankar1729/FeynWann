@@ -12,7 +12,7 @@
 #include "Units.h"
 
 int main(int argc, char** argv)
-{   string inputFilename; bool dryRun, printDefaults;
+{	string inputFilename; bool dryRun, printDefaults;
 	initSystemCmdline(argc, argv, "Metropolis calculation of phonon-assisted plasmon decay rate", inputFilename, dryRun, printDefaults);
 
 	//Get the system parameters (mu, T, lattice vectors etc.)
@@ -50,7 +50,7 @@ int main(int argc, char** argv)
 	logPrintf("\n");
 
 	//Initialize dielectric model:
-	Epsilon eps("epsilon.txt");
+	Epsilon eps("Wannier/epsilon.dat");
 	double omega = Eplasmon;
 	eps.setFrequency(omega);
 	

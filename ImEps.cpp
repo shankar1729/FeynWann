@@ -41,7 +41,7 @@ int main(int argc, char** argv)
 	logPrintf("\n");
 
 	//Initialize dielectric model:
-	Epsilon eps("epsilon.txt");
+	Epsilon eps("Wannier/epsilon.dat");
 
 	//Initialize Wannier bandstructure:
 	std::vector< vector3<complex> > Ahat(1); //assume cubic symmetry and only calculate x-axis
