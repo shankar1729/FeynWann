@@ -8,6 +8,7 @@
 #include "Epsilon.h"
 #include "InputMap.h"
 #include "Units.h"
+#include "Histogram.h"
 
 int main(int argc, char** argv)
 {	string inputFilename; bool dryRun, printDefaults;
@@ -41,7 +42,8 @@ int main(int argc, char** argv)
 	Epsilon eps("Wannier/epsilon.dat");
 
 	//Initialize Wannier bandstructure:
-	BandStruct bs("Wannier/wannier", mu, spinWeight, "Wannier/totalE");
+	std::vector< vector3<complex> > AhatArr(1, vector3<complex>(1,0,0));
+	BandStruct bs("Wannier/wannier", mu, spinWeight, "Wannier/totalE", AhatArr);
 	const int bunchSize = 32;
 	bs.setCacheSize(2*bunchSize);
 
@@ -51,13 +53,21 @@ int main(int argc, char** argv)
 	//Initialize sampling parameters:
 	int ikStart, ikStop; TaskDivision(nKptsN1, mpiUtil).myRange(ikStart, ikStop);
 	int nBunchesMine = ceil((ikStop-ikStart)*1./bunchSize); //number of bunches on current process
+	long nKpts = nBunchesMine * bunchSize; mpiUtil->allReduce(nKpts, MPIUtil::ReduceSum); //total number of sampled k-points
 	int nBands = bs.getStates(vector3<>()).nRows();
 	
+	//Initialize histograms:
+	double gaussMargin = 5*T;
+	Histogram ImEpsPhonon(gaussMargin, T, EplasmonMax-gaussMargin);
+	Histogram ImEps2eh(gaussMargin, T, EplasmonMax-gaussMargin);
+
 	//Calculate average linewidths near Fermi level:
 	double Esigma = 0.5*eV; //Use a Gaussian energy window near the Fermi level
 	double gaussPrefac = 1./(Esigma*sqrt(2*M_PI)), gaussExpfac = -0.5/(Esigma*Esigma);
+	double EconserveScaleFac = 1./T, EconservePrefac = 1./(M_PI*T); //energy conserving Lorentzian parameters
+	double phononPrefac = (2*M_PI*spinWeight)/(nKpts * fabs(det(R)));
 	int iBunchInterval = std::max(1, int(round(nBunchesMine/50.))); //interval for reporting progress
-	double eeNum = 0., eeDen = 0., ePhNum = 0., ePhDen = 0.;
+	double eeNum = 0., eeNumSim = 0., eeDen = 0., ePhNum = 0., ePhNumSim = 0., ePhDen = 0.;
 	logPrintf("\nProgress: "); logFlush();
 	for(int iBunch=0; iBunch<nBunchesMine; iBunch++)
 	{	//Generate a bunch of k-points:
@@ -65,11 +75,18 @@ int main(int argc, char** argv)
 		for(vector3<>& k: kArr)
 			for(int j=0; j<3; j++)
 				k[j] = Random::uniform();
-		//Calculate electronic energies and lifetimes for bunch:
+		//Calculate electronic energies, fillings, momentum matrix elements and lifetimes for bunch:
 		std::vector<diagMatrix> Earr = bs.getStates(kArr);
+		std::vector<std::vector<matrix>> Parr = bs.getDipoleMatElem(kArr);
 		std::vector<diagMatrix> eeImEarr  = lineWidth(kArr, 1., 0.);
 		std::vector<diagMatrix> ePhImEarr = lineWidth(kArr, 0., 1.);
-		//Calculate weighted sums:
+		std::vector<diagMatrix> Farr = Earr; //convert to fillings:
+		for(diagMatrix& F: Farr)
+			for(double& f: F)
+			{	double e = f/T; //E/T actually
+				f = (e>30 ? exp(-e) : 1./(1. + exp(e))); //avoid overflow issues
+			}
+		//Calculate weighted sums of lifetimes:
 		for(int ik=0; ik<bunchSize; ik++)
 		{	const diagMatrix& E = Earr[ik];
 			const diagMatrix& eeImE  = eeImEarr[ik];
@@ -83,6 +100,34 @@ int main(int argc, char** argv)
 				ePhDen += w;
 			}
 		}
+		//Calculate sums for phonon-assisted estimate:
+		for(int ik1=0; ik1<bunchSize; ik1++)
+		{	const diagMatrix& E1 = Earr[ik1];
+			const diagMatrix& F1 = Farr[ik1];
+			const matrix& AdotP1 = Parr[ik1][0];
+			//Loop over second k-point:
+			for(int ik2=0; ik2<bunchSize; ik2++) if(ik2!=ik1) //avoid gamma-point phonon singularity
+			{	const diagMatrix& E2 = Earr[ik2];
+				const diagMatrix& F2 = Farr[ik2];
+				const matrix& AdotP2 = Parr[ik2][0];
+				//Loops over bands:
+				for(int v=0; v<nBands; v++)
+				{	double w = gaussPrefac * exp(gaussExpfac*E1[v]*E1[v]);
+					for(int c=0; c<nBands; c++)
+					{	//Phonon-assisted contribution:
+						double omega = E2[c] - E1[v]; //energy conservation (neglecting phonon energy)
+						if(omega > 0 && omega < EplasmonMax)
+						{	double weight = phononPrefac * (F1[v]-F2[c]) * (AdotP1(v,v)-AdotP2(c,c)).norm();
+							ImEpsPhonon.addEvent(omega, weight);
+						}
+						//e-ph scattering constribution:
+						double delta = EconservePrefac / (1. + std::pow(EconserveScaleFac*(E2[c]-E1[v]),2));
+						ePhNumSim += w * delta;
+					}
+				}
+			}
+		}
+		
 		//Print progress:
 		if((iBunch+1) % iBunchInterval == 0)
 		{	logPrintf("%d%% ", int(round((iBunch+1)*100./nBunchesMine)));
@@ -91,27 +136,29 @@ int main(int argc, char** argv)
 	}
 	logPrintf("done.\n"); logFlush();
 	//Collect averages:
-	mpiUtil->allReduce(eeNum, MPIUtil::MPIUtil::ReduceSum);  mpiUtil->allReduce(eeDen, MPIUtil::MPIUtil::ReduceSum);
-	mpiUtil->allReduce(ePhNum, MPIUtil::MPIUtil::ReduceSum); mpiUtil->allReduce(ePhDen, MPIUtil::MPIUtil::ReduceSum);
+	mpiUtil->allReduce(eeNum, MPIUtil::ReduceSum);
+	mpiUtil->allReduce(eeDen, MPIUtil::ReduceSum);
+	mpiUtil->allReduce(ePhNum, MPIUtil::ReduceSum);
+	mpiUtil->allReduce(ePhDen, MPIUtil::ReduceSum);
 	double eeGamma0 = 2 * eeNum / eeDen; //factor of 2 to go from ImSigma to Gamma
 	double ePhGamma0 = 2 * ePhNum / ePhDen;
 	logPrintf("Weight sum: %lg\n", ePhDen); //should be >> 1 for a reliable average
 	logPrintf("tau0_ee = %lg fs-eV^2\n", 1./(eeGamma0 * fs * eV*eV));
 	logPrintf("tau0_ePh = %lg fs\n", 1./(ePhGamma0 * fs));
 	
-	//Output linewidth estimates:
-	double Zjellium = (spinWeight==1 ? 1. : 3.); //HACK: currently only Al nonrelativistic and rest relativistic
-	double nJellium = Zjellium / fabs(det(R));
-	double omegaPsq = 4*M_PI*nJellium;
-	double kF = pow(3*M_PI*M_PI*nJellium, 1./3);
-	double gaussMargin = 5*T;
+	//Output plasmon Gamma contributions from ImEps contributions:
+	ImEpsPhonon.allReduce(MPIUtil::ReduceSum);
+	ImEps2eh.allReduce(MPIUtil::ReduceSum);
+	mpiUtil->allReduce(eeNumSim, MPIUtil::ReduceSum);
+	mpiUtil->allReduce(ePhNumSim, MPIUtil::ReduceSum);
 	if(mpiUtil->isHead())
 	{	ofstream ofs("GammaAll-IntrabandEstimate.dat");
-		for(double omega = gaussMargin; omega <= EplasmonMax-gaussMargin; omega += T)
-		{	eps.setFrequency(omega, false);
+		for(size_t i=0; i<ImEpsPhonon.out.size(); i++)
+		{	double omega = ImEpsPhonon.Emin + i * ImEpsPhonon.dE;
+			eps.setFrequency(omega, false);
 			double prefac = eps.exptLinewidth()/eps.epsilon.imag(); //ratio between plasmon linewidth and imaginary part of epsilon
-			double ePhImEps = omegaPsq * ePhGamma0 / (std::pow(omega, 3) * std::pow(4*Zjellium, 2./3));
 			double eeImEps = 0.;
+			double ePhImEps = ImEpsPhonon.out[i] * ePhGamma0 / (std::pow(omega, 4) * ePhNumSim / ePhDen);
 			ofs << omega/eV << '\t' << prefac*eeImEps/eV << '\t' << prefac*ePhImEps/eV << '\n';
 		}
 	}
