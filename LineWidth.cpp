@@ -29,11 +29,11 @@ LineWidth::LineWidth(string prefix, const BandStruct& bs) : bs(bs)
 	ImSigmaWannier.set(nBandsSq,2*nBandsSq, 0,nCells, ePhWannier);
 }
 
-diagMatrix LineWidth::operator()(vector3< double > k) const
-{	return (*this)(std::vector<vector3<>>(1, k))[0];
+diagMatrix LineWidth::operator()(vector3< double > k, double eeWeight, double ePhWeight) const
+{	return (*this)(std::vector<vector3<>>(1, k), eeWeight, ePhWeight)[0];
 }
 
-std::vector< diagMatrix > LineWidth::operator()(const std::vector< vector3<> >& kArr) const
+std::vector< diagMatrix > LineWidth::operator()(const std::vector< vector3<> >& kArr, double eeWeight, double ePhWeight) const
 {	static StopWatch watch("LineWidth::operator()"); watch.start();
 	std::vector< std::shared_ptr<const BandStruct::CacheEntry> > ceArr = bs.getElectronCache(kArr);
 	//Collect phases:
@@ -50,7 +50,7 @@ std::vector< diagMatrix > LineWidth::operator()(const std::vector< vector3<> >& 
 		ePh_k.reshape(bs.nBands, bs.nBands); ePh_k = dagger(evecs) * ePh_k * evecs; //switch to eigenbasis of Hk
 		out[ik].resize(bs.nBands);
 		for(int b=0; b<bs.nBands; b++)
-			out[ik][b] = std::max(0.,ee_k(b,b).real()) + exp(ePh_k(b,b).real()); //e-ph is interpolated logarithmically
+			out[ik][b] = std::max(0.,eeWeight * ee_k(b,b).real()) + ePhWeight * exp(ePh_k(b,b).real()); //e-ph is interpolated logarithmically
 	}
 	watch.stop();
 	return out;
