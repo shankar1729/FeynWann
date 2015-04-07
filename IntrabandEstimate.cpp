@@ -47,6 +47,7 @@ int main(int argc, char** argv)
 	const double n = z / cellVol; // electron density
 	const double tau = sigma /n;
 	const double omega_p = sqrt(4*M_PI*n);
+	const double omega_pSqr = 4*M_PI*n;
 	logPrintf("cellVol = %lg\n", cellVol); 	
 	logPrintf("elctron denisty = %lg\n", n);
 	logPrintf("tau = %lg\n", tau);
@@ -54,16 +55,15 @@ int main(int argc, char** argv)
 
         //Initialize dielectric model:
         Epsilon eps("Wannier/epsilon.dat");
-	double reDrudeEps;
-	double imDrudeEps;
+	complex epsilon;
 
 	ofstream ofs("drudeEpsilon.dat");
         for(double omega=0.01; omega<6; omega+=0.01)
         {       eps.setFrequency(omega*eV,false);
-		reDrudeEps = omega_p*omega_p / (omega*omega + 1/(tau*tau));
-		imDrudeEps = omega_p*omega_p / (omega*omega*omega*tau + omega/tau);
+		complex denom = complex(1) / complex(omega,1/tau);
+		epsilon = 1. - (omega_pSqr/omega)*denom;
 		double prefac = eps.exptLinewidth()/eps.epsilon.imag(); //ratio between plasmon linewidth and imaginary part of epsilo
-                ofs << omega*eV << '\t' << reDrudeEps << '\t' << imDrudeEps << '\t' << prefac*imDrudeEps << '\n';
+                ofs << omega*eV << '\t' << real(epsilon) << '\t' << imag(epsilon) << '\t' << prefac*imag(epsilon) << '\n';
 	}
 
 	finalizeSystem();
