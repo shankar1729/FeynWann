@@ -9,6 +9,7 @@
 #include "InputMap.h"
 #include "Units.h"
 #include "Histogram.h"
+#include <complex>
 
 int main(int argc, char** argv)
 {	string inputFilename; bool dryRun, printDefaults;
@@ -44,32 +45,18 @@ int main(int argc, char** argv)
 	const double n = z / cellVol; // electron density
 	const double tau = sigma /n;
 	const double omega_p = 4*M_PI*n;
- 		
+	complex<float>i = sqrt( complex<float>(-1) );
+ 	
+        //Initialize dielectric model:
+        Epsilon eps("Wannier/epsilon.dat");
+
 	ofstream ofs("drudeEpsilon.dat");
         for(double omega=0.01*eV; omega<10*eV; omega+=0.01*eV)
-        {       complex drudeEps = 1 - omega_p^2 / (omega^2 + i*omega/tau);
-                ofs << omega << '\t' << real(drudeEps) << '\t' << imag(drudeEps) << '\t' << '\n';
+        {       eps.setFrequency(omega,false);
+		complex drudeEps = 1 - omega_p^2 / (omega^2 + i*omega/tau);
+		double prefac = eps.exptLinewidth()/eps.epsilon.imag(); //ratio between plasmon linewidth and imaginary part of epsilo
+                ofs << omega << '\t' << real(drudeEps) << '\t' << imag(drudeEps) << '\t' << prefac*imag(drudeEps) << '\n';
 	}
 
-	//Initialize dielectric model:
-	Epsilon eps("drudeEpsilon.dat");
-	
-	//Output plasmon Gamma contributions from ImEps contributions:
-	ImEpsPhonon.allReduce(MPIUtil::ReduceSum);
-	ImEps2eh.allReduce(MPIUtil::ReduceSum);
-	mpiUtil->allReduce(eeNumSim, MPIUtil::ReduceSum);
-	mpiUtil->allReduce(ePhNumSim, MPIUtil::ReduceSum);
-	if(mpiUtil->isHead())
-	{	ofstream ofs("Drude-IntrabandEstimate.dat");
-		for(size_t i=0; i<ImEpsPhonon.out.size(); i++)
-		{	double omega = ImEpsPhonon.Emin + i * ImEpsPhonon.dE;
-			eps.setFrequency(omega, false);
-			double prefac = eps.exptLinewidth()/eps.epsilon.imag(); //ratio between plasmon linewidth and imaginary part of epsilon
-			double eeImEps = ImEps2eh.out[i] * eeGamma0 / (std::pow(omega, 4) * eeNumSim / eeDen);
-			double ePhImEps = ImEpsPhonon.out[i] * ePhGamma0 / (std::pow(omega, 4) * ePhNumSim / ePhDen);
-			ofs << omega/eV << '\t' << prefac*eeImEps/eV << '\t' << prefac*ePhImEps/eV << '\n';
-		}
-	}
-	
 	finalizeSystem();
 }
