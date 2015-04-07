@@ -22,8 +22,8 @@ int main(int argc, char** argv)
 	const double T = inputMap.get("T") * eV;
 	const int spinWeight = round(inputMap.get("spinWeight"));
 	const matrix3<> R = matrix3<>(0,1,1, 1,0,1, 1,1,0) * (0.5*inputMap.get("aCubic")*Angstrom);
-	const z = inputMap.get("z");
-	const sigma = inputMap.get("sigma") / Ohm;
+	const int z = inputMap.get("z");
+	const double sigma = inputMap.get("sigma") / Ohm;
 
 	logPrintf("\nInputs after conversion to atomic units:\n");
 	logPrintf("nKptsN1 = %d\n", nKptsN1);
@@ -43,7 +43,7 @@ int main(int argc, char** argv)
 	const double cellVol = fabs(det(R)); //unit cell vol
 	const double n = z / cellVol; // electron density
 	const double tau = sigma /n;
-	const omega_p = 4*M_PI*n;
+	const double omega_p = 4*M_PI*n;
  		
 	ofstream ofs("drudeEpsilon.dat");
         for(double omega=0.01*eV; omega<10*eV; omega+=0.01*eV)
@@ -60,7 +60,7 @@ int main(int argc, char** argv)
 	mpiUtil->allReduce(eeNumSim, MPIUtil::ReduceSum);
 	mpiUtil->allReduce(ePhNumSim, MPIUtil::ReduceSum);
 	if(mpiUtil->isHead())
-	{	ofstream ofs("GammaAll-IntrabandEstimate.dat");
+	{	ofstream ofs("Drude-IntrabandEstimate.dat");
 		for(size_t i=0; i<ImEpsPhonon.out.size(); i++)
 		{	double omega = ImEpsPhonon.Emin + i * ImEpsPhonon.dE;
 			eps.setFrequency(omega, false);
