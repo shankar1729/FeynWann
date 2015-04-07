@@ -56,15 +56,17 @@ int main(int argc, char** argv)
 	Epsilon eps("Wannier/epsilon.dat");
 	complex epsilon;
 
-	ofstream ofs("drudeEpsilon.dat");
-	
+	ofstream ofs1("drudeEpsilon.dat");
+	ofstream ofs2("drudeGamma.dat");	
+
 	double gaussMargin = 5*T;
 	for(double omega = gaussMargin; omega <= EplasmonMax-gaussMargin; omega += T)
 	{	eps.setFrequency(omega, false);
 		complex denom = complex(1) / complex(omega,1/tau);
 		epsilon = 1. - (omega_pSqr/omega)*denom;
 		double prefac = eps.exptLinewidth()/eps.epsilon.imag(); //ratio between plasmon linewidth and imaginary part of epsilon
-		ofs << omega/eV << '\t' << real(epsilon) << '\t' << imag(epsilon) << '\t' << prefac*imag(epsilon)/eV << '\n'; //Output energies in eV units
+		ofs1 << omega/eV << '\t' << real(epsilon) << '\t' << imag(epsilon) << '\n'; //Output energies in eV units
+		ofs2 << omega/eV << '\t' << prefac*imag(epsilon)/eV << '\n'; //Output energies in eV units
 	}
 
 	finalizeSystem();
