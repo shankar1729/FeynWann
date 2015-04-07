@@ -34,6 +34,8 @@ int main(int argc, char** argv)
 	logPrintf("spinWeight = %d\n", spinWeight);
 	logPrintf("R:\n");
 	R.print(globalLog, " %lg ");
+	logPrintf("z = %d\n", z);
+	logPrintf("sigma = %lg\n", sigma);
 	if(dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
 		finalizeSystem();
@@ -45,17 +47,22 @@ int main(int argc, char** argv)
 	const double n = z / cellVol; // electron density
 	const double tau = sigma /n;
 	const double omega_p = 4*M_PI*n;
-	complex<float>i = sqrt( complex<float>(-1) );
+	//complex i = sqrt(-1);
  	
         //Initialize dielectric model:
         Epsilon eps("Wannier/epsilon.dat");
+	double reDrudeEps;
+	double imDrudeEps;
 
 	ofstream ofs("drudeEpsilon.dat");
         for(double omega=0.01*eV; omega<10*eV; omega+=0.01*eV)
         {       eps.setFrequency(omega,false);
-		complex drudeEps = 1 - omega_p^2 / (omega^2 + i*omega/tau);
+		reDrudeEps = omega_p*omega_p / (omega*omega + 1/(tau*tau));
+		imDrudeEps = omega_p*omega_p / (omega*omega*omega*tau + omega/tau);
+		//complex drudeEps = 1 - omega_p*omega_p / (omega*omega + i*omega/tau);
 		double prefac = eps.exptLinewidth()/eps.epsilon.imag(); //ratio between plasmon linewidth and imaginary part of epsilo
-                ofs << omega << '\t' << real(drudeEps) << '\t' << imag(drudeEps) << '\t' << prefac*imag(drudeEps) << '\n';
+                ofs << omega << '\t' << reDrudeEps << '\t' << imDrudeEps << '\t' << prefac*imDrudeEps << '\n';
+                //ofs << omega << '\t' << real(drudeEps) << '\t' << imag(drudeEps) << '\t' << prefac*imag(drudeEps) << '\n';
 	}
 
 	finalizeSystem();
