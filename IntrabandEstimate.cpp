@@ -43,12 +43,17 @@ int main(int argc, char** argv)
 	const double cellVol = fabs(det(R)); //unit cell vol
 	const double n = z / cellVol; // electron density
 	const double tau = sigma /n;
-	//const vector omega = 		
+	const omega_p = 4*M_PI*n;
+ 		
+	ofstream ofs("drudeEpsilon.dat");
+        for(double omega=0.01*eV; omega<10*eV; omega+=0.01*eV)
+        {       complex drudeEps = 1 - omega_p^2 / (omega^2 + i*omega/tau);
+                ofs << omega << '\t' << real(drudeEps) << '\t' << imag(drudeEps) << '\t' << '\n';
+	}
 
 	//Initialize dielectric model:
-	Epsilon eps("Wannier/epsilon.dat");
-
-
+	Epsilon eps("drudeEpsilon.dat");
+	
 	//Output plasmon Gamma contributions from ImEps contributions:
 	ImEpsPhonon.allReduce(MPIUtil::ReduceSum);
 	ImEps2eh.allReduce(MPIUtil::ReduceSum);
