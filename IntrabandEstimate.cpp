@@ -24,7 +24,7 @@ int main(int argc, char** argv)
 	const int spinWeight = round(inputMap.get("spinWeight"));
 	const matrix3<> R = matrix3<>(0,1,1, 1,0,1, 1,1,0) * (0.5*inputMap.get("aCubic")*Angstrom);
 	const int z = inputMap.get("z");
-	const double sigma = inputMap.get("sigma") / Ohm;
+	const double sigma = inputMap.get("sigma") / (Ohm * meter);
 
 	logPrintf("\nInputs after conversion to atomic units:\n");
 	logPrintf("nKptsN1 = %d\n", nKptsN1);
@@ -46,9 +46,12 @@ int main(int argc, char** argv)
 	const double cellVol = fabs(det(R)); //unit cell vol
 	const double n = z / cellVol; // electron density
 	const double tau = sigma /n;
-	const double omega_p = 4*M_PI*n;
-	//complex i = sqrt(-1);
- 	
+	const double omega_p = sqrt(4*M_PI*n);
+	logPrintf("cellVol = %lg\n", cellVol); 	
+	logPrintf("elctron denisty = %lg\n", n);
+	logPrintf("tau = %lg\n", tau);
+	logPrintf("omega_p = %lg Eh\n", omega_p);
+
         //Initialize dielectric model:
         Epsilon eps("Wannier/epsilon.dat");
 	double reDrudeEps;
@@ -59,10 +62,8 @@ int main(int argc, char** argv)
         {       eps.setFrequency(omega,false);
 		reDrudeEps = omega_p*omega_p / (omega*omega + 1/(tau*tau));
 		imDrudeEps = omega_p*omega_p / (omega*omega*omega*tau + omega/tau);
-		//complex drudeEps = 1 - omega_p*omega_p / (omega*omega + i*omega/tau);
 		double prefac = eps.exptLinewidth()/eps.epsilon.imag(); //ratio between plasmon linewidth and imaginary part of epsilo
                 ofs << omega << '\t' << reDrudeEps << '\t' << imDrudeEps << '\t' << prefac*imDrudeEps << '\n';
-                //ofs << omega << '\t' << real(drudeEps) << '\t' << imag(drudeEps) << '\t' << prefac*imag(drudeEps) << '\n';
 	}
 
 	finalizeSystem();
