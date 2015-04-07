@@ -46,24 +46,25 @@ int main(int argc, char** argv)
 	const double cellVol = fabs(det(R)); //unit cell vol
 	const double n = z / cellVol; // electron density
 	const double tau = sigma /n;
-	const double omega_p = sqrt(4*M_PI*n);
 	const double omega_pSqr = 4*M_PI*n;
 	logPrintf("cellVol = %lg\n", cellVol); 	
 	logPrintf("elctron denisty = %lg\n", n);
 	logPrintf("tau = %lg\n", tau);
-	logPrintf("omega_p = %lg Eh\n", omega_p);
+	logPrintf("omega_p = %lg eV\n", sqrt(omega_pSqr)/eV);
 
-        //Initialize dielectric model:
-        Epsilon eps("Wannier/epsilon.dat");
+	//Initialize dielectric model:
+	Epsilon eps("Wannier/epsilon.dat");
 	complex epsilon;
 
 	ofstream ofs("drudeEpsilon.dat");
-        for(double omega=0.01; omega<6; omega+=0.01)
-        {       eps.setFrequency(omega*eV,false);
+	
+	double gaussMargin = 5*T;
+	for(double omega = gaussMargin; omega <= EplasmonMax-gaussMargin; omega += T)
+	{	eps.setFrequency(omega, false);
 		complex denom = complex(1) / complex(omega,1/tau);
 		epsilon = 1. - (omega_pSqr/omega)*denom;
-		double prefac = eps.exptLinewidth()/eps.epsilon.imag(); //ratio between plasmon linewidth and imaginary part of epsilo
-                ofs << omega*eV << '\t' << real(epsilon) << '\t' << imag(epsilon) << '\t' << prefac*imag(epsilon) << '\n';
+		double prefac = eps.exptLinewidth()/eps.epsilon.imag(); //ratio between plasmon linewidth and imaginary part of epsilon
+		ofs << omega/eV << '\t' << real(epsilon) << '\t' << imag(epsilon) << '\t' << prefac*imag(epsilon)/eV << '\n'; //Output energies in eV units
 	}
 
 	finalizeSystem();
