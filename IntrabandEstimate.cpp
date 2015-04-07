@@ -58,12 +58,12 @@ int main(int argc, char** argv)
 	double imDrudeEps;
 
 	ofstream ofs("drudeEpsilon.dat");
-        for(double omega=0.01*eV; omega<10*eV; omega+=0.01*eV)
-        {       eps.setFrequency(omega,false);
+        for(double omega=0.01; omega<6; omega+=0.01)
+        {       eps.setFrequency(omega*eV,false);
 		reDrudeEps = omega_p*omega_p / (omega*omega + 1/(tau*tau));
 		imDrudeEps = omega_p*omega_p / (omega*omega*omega*tau + omega/tau);
 		double prefac = eps.exptLinewidth()/eps.epsilon.imag(); //ratio between plasmon linewidth and imaginary part of epsilo
-                ofs << omega << '\t' << reDrudeEps << '\t' << imDrudeEps << '\t' << prefac*imDrudeEps << '\n';
+                ofs << omega*eV << '\t' << reDrudeEps << '\t' << imDrudeEps << '\t' << prefac*imDrudeEps << '\n';
 	}
 
 	finalizeSystem();
