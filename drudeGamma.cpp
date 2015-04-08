@@ -49,7 +49,7 @@ int main(int argc, char** argv)
 	const double omega_pSqr = 4*M_PI*n;
 	logPrintf("cellVol = %lg\n", cellVol); 	
 	logPrintf("elctron denisty = %lg\n", n);
-	logPrintf("tau = %lg\n", tau);
+	logPrintf("tau = %lg fs\n", tau/fs);
 	logPrintf("omega_p = %lg eV\n", sqrt(omega_pSqr)/eV);
 
 	//Initialize dielectric model:
