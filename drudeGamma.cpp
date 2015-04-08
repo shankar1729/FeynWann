@@ -23,8 +23,9 @@ int main(int argc, char** argv)
 	const double T = inputMap.get("T") * eV;
 	const int spinWeight = round(inputMap.get("spinWeight"));
 	const matrix3<> R = matrix3<>(0,1,1, 1,0,1, 1,1,0) * (0.5*inputMap.get("aCubic")*Angstrom);
-	const int z = inputMap.get("z");
-	const double sigma = inputMap.get("sigma") / (Ohm * meter);
+	const int tau = inputMap.get("tau")*fs;
+	const double rho = inputMap.get("rho") * (Ohm * meter);
+	const double sigma_o = 1/rho;
 
 	logPrintf("\nInputs after conversion to atomic units:\n");
 	logPrintf("nKptsN1 = %d\n", nKptsN1);
@@ -34,8 +35,9 @@ int main(int argc, char** argv)
 	logPrintf("spinWeight = %d\n", spinWeight);
 	logPrintf("R:\n");
 	R.print(globalLog, " %lg ");
-	logPrintf("z = %d\n", z);
-	logPrintf("sigma = %lg\n", sigma);
+	logPrintf("tau = %lg fs\n", tau/fs);
+	logPrintf("rho = %lg ohm-m\n", rho/(Ohm*meter));
+	logPrintf("sigma_o = %lg 1/(ohm-m)\n", sigma_o*Ohm*meter);
 	if(dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
 		finalizeSystem();
@@ -43,14 +45,6 @@ int main(int argc, char** argv)
 	}
 	logPrintf("\n");
 
-	const double cellVol = fabs(det(R)); //unit cell vol
-	const double n = z / cellVol; // electron density
-	const double tau = sigma /n;
-	const double omega_pSqr = 4*M_PI*n;
-	logPrintf("cellVol = %lg\n", cellVol); 	
-	logPrintf("elctron denisty = %lg\n", n);
-	logPrintf("tau = %lg fs\n", tau/fs);
-	logPrintf("omega_p = %lg eV\n", sqrt(omega_pSqr)/eV);
 
 	//Initialize dielectric model:
 	Epsilon eps("Wannier/epsilon.dat");
@@ -62,8 +56,8 @@ int main(int argc, char** argv)
 	double gaussMargin = 5*T;
 	for(double omega = gaussMargin; omega <= EplasmonMax-gaussMargin; omega += T)
 	{	eps.setFrequency(omega, false);
-		complex denom = complex(1) / complex(omega,1/tau);
-		epsilon = 1. - (omega_pSqr/omega)*denom;
+		complex sigma = complex(sigma_o) / complex(1,-omega*tau);
+		epsilon = 1.+ 4*M_PI*complex(-imag(sigma),real(sigma)) / complex(omega);
 		double prefac = eps.exptLinewidth()/eps.epsilon.imag(); //ratio between plasmon linewidth and imaginary part of epsilon
 		ofs1 << omega/eV << '\t' << real(epsilon) << '\t' << imag(epsilon) << '\n'; //Output energies in eV units
 		ofs2 << omega/eV << '\t' << prefac*imag(epsilon)/eV << '\n'; //Output energies in eV units
