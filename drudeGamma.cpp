@@ -23,6 +23,7 @@ int main(int argc, char** argv)
 	const double T = inputMap.get("T") * eV;
 	const int spinWeight = round(inputMap.get("spinWeight"));
 	const matrix3<> R = matrix3<>(0,1,1, 1,0,1, 1,1,0) * (0.5*inputMap.get("aCubic")*Angstrom);
+	const double Zjellium = inputMap.get("Zjellium");
 	const int tau = inputMap.get("tau")*fs;
 	const double rho = inputMap.get("rho") * (Ohm * meter);
 	const double sigma_o = 1/rho;
@@ -35,6 +36,7 @@ int main(int argc, char** argv)
 	logPrintf("spinWeight = %d\n", spinWeight);
 	logPrintf("R:\n");
 	R.print(globalLog, " %lg ");
+	logPrintf("Zjellium = %lg\n", Zjellium);
 	logPrintf("tau = %lg fs\n", tau/fs);
 	logPrintf("rho = %lg ohm-m\n", rho/(Ohm*meter));
 	logPrintf("sigma_o = %lg 1/(ohm-m)\n", sigma_o*Ohm*meter);
@@ -45,7 +47,11 @@ int main(int argc, char** argv)
 	}
 	logPrintf("\n");
 
-
+	//Jellium parameters:
+	double nJellium = Zjellium / fabs(det(R));
+	double omegaPsq = 4*M_PI * nJellium; logPrintf("Jellium plasma frequency: %lg eV\n", sqrt(omegaPsq)/eV);
+	double vF = std::pow(nJellium/(3*M_PI*M_PI), 1./3); //same as kF in atomic units
+	
 	//Initialize dielectric model:
 	Epsilon eps("Wannier/epsilon.dat");
 	complex epsilon;
@@ -58,9 +64,10 @@ int main(int argc, char** argv)
 	{	eps.setFrequency(omega, false);
 		complex sigma = complex(sigma_o) / complex(1,-omega*tau);
 		epsilon = 1.+ 4*M_PI*complex(-imag(sigma),real(sigma)) / complex(omega);
+		double imEpsSurface = 0.75 * omegaPsq * eps.modGammaMinus * vF / std::pow(omega,3);
 		double prefac = eps.exptLinewidth()/eps.epsilon.imag(); //ratio between plasmon linewidth and imaginary part of epsilon
 		ofs1 << omega/eV << '\t' << real(epsilon) << '\t' << imag(epsilon) << '\n'; //Output energies in eV units
-		ofs2 << omega/eV << '\t' << prefac*imag(epsilon)/eV << '\n'; //Output energies in eV units
+		ofs2 << omega/eV << '\t' << prefac*imag(epsilon)/eV << '\t' << prefac*imEpsSurface/eV << '\n'; //Output energies in eV units
 	}
 
 	finalizeSystem();
