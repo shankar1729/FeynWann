@@ -102,7 +102,7 @@ int main(int argc, char** argv)
 	mpiUtil->allReduce(CeSumSq, MPIUtil::ReduceSum);
 	double Ce = CeSum / totalBlocks;
 	double CeStd = sqrt(CeSumSq/totalBlocks - Ce*Ce)/sqrt(totalBlocks);
-	logPrintf("Ce = %lg +/- %lg\n", Ce, CeStd);
+	logPrintf("Ce = %lg +/- %lg J/eV\n", Ce/(Joule/eV), CeStd/(Joule/eV));
 	
 	finalizeSystem();
 }
