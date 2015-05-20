@@ -27,7 +27,6 @@ int main(int argc, char** argv)
 	logPrintf("mu = %lg\n", mu);
 	logPrintf("T = %lg\n", T);
 	logPrintf("spinWeight = %d\n", spinWeight);
-	logPrintf("kb = %lg\n", kb);
 	logPrintf("R:\n");
 	R.print(globalLog, " %lg ");
 	if(dryRun)
@@ -88,11 +87,12 @@ int main(int argc, char** argv)
 			std::vector<diagMatrix> Earr = bs.getStates(kArr, Emax);
 			
 			for(int ik1=0; ik1<bunchSize; ik1++)
-			{	//Calculate heat capacity for each k-point ik1
-				double dfdTNumerator = (Earr[ik1][ik1] - mu) * exp((Earr[ik1][ik1]-mu)/T); //kb=1 in atomic units
-				double dfdTDenominator = std::pow(T,2) * std::pow(exp((Earr[ik1][ik1]-mu)/T)+1,2);
-				double dfdT = dfdTNumerator / dfdTDenominator;
-				CeBlock += dfdT * Earr[ik1][ik1];
+			{	//Calculate heat capacity for each k-point ik1i
+				for(int v=0; v<Earr[ik1].nRows(); v++) //for each band
+				{	//kb=1 in atomic units, E-mu already happened in bandstruct
+					double dfdT = (Earr[ik1][v] * std::pow(1/cosh(Earr[ik1][v]/(2*T)),2)) / (4*T*T);
+					CeBlock += dfdT * Earr[ik1][v];
+				}
 			}
 		}
 		CeSum += CeBlock; CeSumSq += std::pow(CeBlock,2);
