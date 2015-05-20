@@ -16,9 +16,10 @@ int main(int argc, char** argv)
 	InputMap inputMap(inputFilename);
 	const int nKptsN1 = inputMap.get("nKptsN1");
 	const int totalBlocks = inputMap.get("totalBlocks"); assert(totalBlocks>0);
-	const double mu = inputMap.get("mu");
+	double mu = inputMap.get("mu");
 	const double T = inputMap.get("T") * eV;
 	const int spinWeight = round(inputMap.get("spinWeight"));
+	const double Z = inputMap.get("Z");
 	const matrix3<> R = matrix3<>(0,1,1, 1,0,1, 1,1,0) * (0.5*inputMap.get("aCubic")*Angstrom);
 
 	logPrintf("\nInputs after conversion to atomic units:\n");
@@ -27,6 +28,7 @@ int main(int argc, char** argv)
 	logPrintf("mu = %lg\n", mu);
 	logPrintf("T = %lg\n", T);
 	logPrintf("spinWeight = %d\n", spinWeight);
+	logPrintf("Z (electrons per unit cell) = %lg\n", Z);
 	logPrintf("R:\n");
 	R.print(globalLog, " %lg ");
 	if(dryRun)
@@ -41,63 +43,80 @@ int main(int argc, char** argv)
 	BandStruct bs("Wannier/wannier", mu, spinWeight, "Wannier/totalE");
 	bs.setCacheSize(2*bunchSize);
 	
-	// Compute Ce
-	double CeSum = 0., CeSumSq = 0.;
-	logPrintf("Calculating Ce... "); logFlush();
-	int blockStart = (totalBlocks * (mpiUtil->iProcess())) / mpiUtil->nProcesses(); //MPI division
-	int blockStop = (totalBlocks * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
-	int nKptsMin = nKptsN1/totalBlocks;
-	double Omega = fabs(det(R));
+	double Omega = fabs(det(R)); //unit cell volume
 	const double Emax = 10*T; //max energy from Fermi level to consider
-	for(int block=blockStart; block<blockStop; block++)
-	{	Random::seed(block);
-		double CeBlock = 0.;;
-		double nKpts = 0.; int nBunches = 0;
-		while(nKpts < nKptsMin)
-		{	//Get a bunch of k-points with states near the Fermi level:
-			std::vector< vector3<> > kArr; kArr.reserve(bunchSize);
-			while(kArr.size() < bunchSize)
-			{	//Diagonalize Hamiltonians at a set of random k-points:
-				std::vector< vector3<> > kTmp(bunchSize);
-				for(vector3<>& k: kTmp)
-					for(int j=0; j<3; j++)
-						k[j] = Random::uniform();
-				std::vector<diagMatrix> Etmp = bs.getStates(kTmp, Emax);
-				//Add k-points with appropriate states:
-				int nFound = 0, nAdded = 0;
-				for(int ik=0; ik<bunchSize; ik++)
-				{	bool worthwhile = false;
-					for(int b=0; b<Etmp[ik].nRows(); b++)
-						if(fabs(Etmp[ik][b]) < Emax)
-						{	worthwhile = true;
-							break;
-						}
-					if(worthwhile)
-					{	nFound++;
-						if(kArr.size() < bunchSize)
-						{	kArr.push_back(kTmp[ik]);
-							nAdded++;
+	double deltaMu = mu;	
+	double CeSum = 0., CeSumSq = 0.;
+        double Nsum = 0., dNdmuSum = 0.;
+
+	logPrintf("Calculating Ce... "); logFlush();
+	while(deltaMu > 0.01*mu)
+	{	// Compute Ce
+		CeSum = 0.; CeSumSq = 0.;
+		Nsum = 0.; dNdmuSum = 0.;	
+		int blockStart = (totalBlocks * (mpiUtil->iProcess())) / mpiUtil->nProcesses(); //MPI division
+		int blockStop = (totalBlocks * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
+		int nKptsMin = nKptsN1/totalBlocks;
+		for(int block=blockStart; block<blockStop; block++)
+		{	Random::seed(block);
+			double CeBlock = 0., NBlock = 0., dNdmuBlock=0.;
+			double nKpts = 0.; int nBunches = 0;
+			while(nKpts < nKptsMin)
+			{	//Get a bunch of k-points with states near the Fermi level:
+				std::vector< vector3<> > kArr; kArr.reserve(bunchSize);
+				while(kArr.size() < bunchSize)
+				{	//Diagonalize Hamiltonians at a set of random k-points:
+					std::vector< vector3<> > kTmp(bunchSize);
+					for(vector3<>& k: kTmp)
+						for(int j=0; j<3; j++)
+							k[j] = Random::uniform();
+					std::vector<diagMatrix> Etmp = bs.getStates(kTmp, Emax);
+					//Add k-points with appropriate states:
+					int nFound = 0, nAdded = 0;
+					for(int ik=0; ik<bunchSize; ik++)
+					{	bool worthwhile = false;
+						for(int b=0; b<Etmp[ik].nRows(); b++)
+							if(fabs(Etmp[ik][b]) < Emax)
+							{	worthwhile = true;
+								break;
+							}
+						if(worthwhile)
+						{	nFound++;
+							if(kArr.size() < bunchSize)
+							{	kArr.push_back(kTmp[ik]);
+								nAdded++;
+							}
 						}
 					}
+					nKpts += bunchSize * (nFound ? nAdded * (1./nFound) : 1.); //number of k-points examined to get the relevant ones (needed for normalization)
 				}
-				nKpts += bunchSize * (nFound ? nAdded * (1./nFound) : 1.); //number of k-points examined to get the relevant ones (needed for normalization)
-			}
-			nBunches++;
-			
-			//Get energies for selected bunch:
-			std::vector<diagMatrix> Earr = bs.getStates(kArr, Emax);
-			
-			for(int ik1=0; ik1<bunchSize; ik1++)
-			{	//Calculate heat capacity for each k-point ik1i
-				for(int v=0; v<Earr[ik1].nRows(); v++) //for each band
-				{	//kb=1 in atomic units, E-mu already happened in bandstruct
-					double dfdT = (Earr[ik1][v] * std::pow(1/cosh(Earr[ik1][v]/(2*T)),2)) / (4*T*T);
-					CeBlock += dfdT * Earr[ik1][v];
+				nBunches++;
+				
+				//Get energies for selected bunch:
+				std::vector<diagMatrix> Earr = bs.getStates(kArr, Emax);
+				
+				for(int ik1=0; ik1<bunchSize; ik1++)
+				{	//Calculate heat capacity for each k-point ik1i
+					for(int v=0; v<Earr[ik1].nRows(); v++) //for each band
+					{	//kb=1 in atomic units, E-mu already happened in bandstruct
+						double dfdT = (Earr[ik1][v] * std::pow(1/cosh(Earr[ik1][v]/(2*T)),2)) / (4*T*T);
+						CeBlock += dfdT * Earr[ik1][v];
+					
+						double f = 1 / (exp(Earr[ik1][v]/T) + 1);
+						NBlock += f;
+						double dFdE = -1/(T*std::pow(2*cosh(Earr[ik1][v]/(2*T)),2));
+						dNdmuBlock += - dFdE;
+					}
 				}
 			}
+			CeSum += CeBlock/nKpts; CeSumSq += std::pow(CeBlock/nKpts,2);
+			Nsum += NBlock/nKpts;
+			dNdmuSum += dNdmuBlock/nKpts;
 		}
-		CeSum += CeBlock/nKpts; CeSumSq += std::pow(CeBlock/nKpts,2);
+		deltaMu = (Z - Nsum) / dNdmuSum;
+		mu += deltaMu;	
 	}
+	logPrintf('"mu(T) = %lg\n", mu);
 
 	mpiUtil->allReduce(CeSum, MPIUtil::ReduceSum);
 	mpiUtil->allReduce(CeSumSq, MPIUtil::ReduceSum);
