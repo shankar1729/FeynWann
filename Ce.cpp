@@ -46,7 +46,6 @@ int main(int argc, char** argv)
 	double Omega = fabs(det(R)); //unit cell volume
 	const double Emax = 10*T; //max energy from Fermi level to consider
 
-	logPrintf("Calculating Ce... "); logFlush();
 	double dmuT = 0.; //temperature dependent mu correction
 	while(true)
 	{	// Compute Ce
@@ -58,41 +57,16 @@ int main(int argc, char** argv)
 		for(int block=blockStart; block<blockStop; block++)
 		{	Random::seed(block);
 			double CeBlock = 0., NBlock = 0., dNdmuBlock=0.;
-			double nKpts = 0.; int nBunches = 0;
+			double nKpts = 0.;
 			while(nKpts < nKptsMin)
-			{	//Get a bunch of k-points with states near the Fermi level:
-				std::vector< vector3<> > kArr; kArr.reserve(bunchSize);
-				while(kArr.size() < bunchSize)
-				{	//Diagonalize Hamiltonians at a set of random k-points:
-					std::vector< vector3<> > kTmp(bunchSize);
-					for(vector3<>& k: kTmp)
-						for(int j=0; j<3; j++)
-							k[j] = Random::uniform();
-					std::vector<diagMatrix> Etmp = bs.getStates(kTmp, Emax);
-					//Add k-points with appropriate states:
-					int nFound = 0, nAdded = 0;
-					for(int ik=0; ik<bunchSize; ik++)
-					{	bool worthwhile = false;
-						for(int b=0; b<Etmp[ik].nRows(); b++)
-							if(fabs(Etmp[ik][b]) < Emax)
-							{	worthwhile = true;
-								break;
-							}
-						if(worthwhile)
-						{	nFound++;
-							if(kArr.size() < bunchSize)
-							{	kArr.push_back(kTmp[ik]);
-								nAdded++;
-							}
-						}
-					}
-					nKpts += bunchSize * (nFound ? nAdded * (1./nFound) : 1.); //number of k-points examined to get the relevant ones (needed for normalization)
-				}
-				nBunches++;
-				
+			{	//Get a bunch of k-points:
+				std::vector< vector3<> > kArr(bunchSize);
+				for(vector3<>& k: kArr)
+					for(int j=0; j<3; j++)
+						k[j] = Random::uniform();
+				nKpts += bunchSize;
 				//Get energies for selected bunch:
 				std::vector<diagMatrix> Earr = bs.getStates(kArr, Emax);
-				
 				for(int ik1=0; ik1<bunchSize; ik1++)
 				{	//Calculate heat capacity for each k-point ik1i
 					for(int v=0; v<Earr[ik1].nRows(); v++) //for each band
@@ -108,9 +82,10 @@ int main(int argc, char** argv)
 					}
 				}
 			}
-			CeSum += CeBlock/nKpts; CeSumSq += std::pow(CeBlock/nKpts,2);
-			Nsum += NBlock/nKpts; NsumSq += std::pow(NBlock/nKpts,2);
-			dNdmuSum += dNdmuBlock/nKpts;
+			double w = spinWeight / nKpts;
+			CeSum += w*CeBlock; CeSumSq += std::pow(w*CeBlock,2);
+			Nsum += w*NBlock; NsumSq += std::pow(w*NBlock,2);
+			dNdmuSum += w*dNdmuBlock;
 		}
 		//Results at current mu offset:
 		mpiUtil->allReduce(CeSum, MPIUtil::ReduceSum);
@@ -123,11 +98,12 @@ int main(int argc, char** argv)
 		double CeScale = 1./(Omega * Joule/(std::pow(meter,3)*Kelvin)); //per unit cell and switch to SI
 		double N = Nsum / totalBlocks;
 		double Nstd = sqrt(NsumSq/totalBlocks - N*N)/sqrt(totalBlocks);
-		logPrintf("dmuT=%+lf N=%lf:  Ce = %lg +/- %lg J/(m^3 K)\n", mu, N, Ce*CeScale, CeStd*CeScale);
+		double dNdmu = dNdmuSum / totalBlocks;
+		logPrintf("dmuT=%+lf  N=%lf+/-%lf:  Ce = %.1lf +/- %.1lf J/(m^3 K)\n", dmuT, N,Nstd, Ce*CeScale, CeStd*CeScale);
 		fflush(globalLog);
 		//Update mu offset:
 		if(fabs(N-Z) < Nstd) break; //can't converge more accurately than error in N
-		dmuT += (Z - Nsum) / dNdmuSum;
+		dmuT += (Z - N) / dNdmu;
 	}
 	
 	finalizeSystem();
