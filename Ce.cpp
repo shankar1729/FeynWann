@@ -47,6 +47,7 @@ int main(int argc, char** argv)
 	int blockStart = (totalBlocks * (mpiUtil->iProcess())) / mpiUtil->nProcesses(); //MPI division
 	int blockStop = (totalBlocks * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
 	int nKptsMin = nKptsN1/totalBlocks;
+	double Omega = fabs(det(R));
 	const double Emax = 10*T; //max energy from Fermi level to consider
 	for(int block=blockStart; block<blockStop; block++)
 	{	Random::seed(block);
@@ -102,7 +103,8 @@ int main(int argc, char** argv)
 	mpiUtil->allReduce(CeSumSq, MPIUtil::ReduceSum);
 	double Ce = CeSum / totalBlocks;
 	double CeStd = sqrt(CeSumSq/totalBlocks - Ce*Ce)/sqrt(totalBlocks);
-	logPrintf("Ce = %lg +/- %lg J/eV\n", Ce/(Joule/eV), CeStd/(Joule/eV));
+	Ce = Ce/Omega; CeStd = CeStd/Omega;
+	logPrintf("Ce = %lg +/- %lg J/m^3 eV\n", Ce/(Joule/(meter*meter*meter*eV)), CeStd/(Joule/(meter*meter*meter*eV)));
 	
 	finalizeSystem();
 }
