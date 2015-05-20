@@ -96,7 +96,7 @@ int main(int argc, char** argv)
 				}
 			}
 		}
-		CeSum += CeBlock; CeSumSq += std::pow(CeBlock,2);
+		CeSum += CeBlock/nKpts; CeSumSq += std::pow(CeBlock/nKpts,2);
 	}
 
 	mpiUtil->allReduce(CeSum, MPIUtil::ReduceSum);
@@ -104,7 +104,7 @@ int main(int argc, char** argv)
 	double Ce = CeSum / totalBlocks;
 	double CeStd = sqrt(CeSumSq/totalBlocks - Ce*Ce)/sqrt(totalBlocks);
 	Ce = Ce/Omega; CeStd = CeStd/Omega;
-	logPrintf("Ce = %lg +/- %lg J/m^3 eV\n", Ce/(Joule/(meter*meter*meter*eV)), CeStd/(Joule/(meter*meter*meter*eV)));
+	logPrintf("Ce = %lg +/- %lg J/(m^3 K)\n", Ce/(Joule/(meter*meter*meter*Kelvin)), CeStd/(Joule/(meter*meter*meter*Kelvin)));
 	
 	finalizeSystem();
 }
