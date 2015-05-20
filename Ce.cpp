@@ -116,7 +116,7 @@ int main(int argc, char** argv)
 		deltaMu = (Z - Nsum) / dNdmuSum;
 		mu += deltaMu;	
 	}
-	logPrintf('"mu(T) = %lg\n", mu);
+	logPrintf("mu(T) = %lg\n", mu);
 
 	mpiUtil->allReduce(CeSum, MPIUtil::ReduceSum);
 	mpiUtil->allReduce(CeSumSq, MPIUtil::ReduceSum);
