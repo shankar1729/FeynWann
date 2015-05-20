@@ -86,29 +86,29 @@ int main(int argc, char** argv)
 // 				for(int b=0; b<E.nRows(); b++)
 // 					m2inv[b].set_col(j, (1./(2*dkMag)) * (vp[b] - vm[b]));
 // 			}
-			std::vector< vector3<> > kArr(12, k);
-			for(int j=0; j<3; j++)
-			{	int j2 = (j+1)%3;
-				int j3 = (j+2)%3;
-				kArr[0+4*j] += dk[j];
-				kArr[1+4*j] -= dk[j];
-				kArr[2+4*j] += dk[j2] + dk[j3];
-				kArr[3+4*j] -= dk[j2] + dk[j3];
-			}
-			std::vector<diagMatrix> Earr = bs.getStates(kArr, Emax);
-			double denFac = 1./(dkMag*dkMag);
-			for(int j=0; j<3; j++)
-				for(int b=0; b<E.nRows(); b++)
-					m2inv[b](j,j) = denFac * (Earr[0+4*j][b] + Earr[1+4*j][b] - 2*E[b]);
-			for(int j=0; j<3; j++)
-			{	int j2 = (j+1)%3;
-				int j3 = (j+2)%3;
-				for(int b=0; b<E.nRows(); b++)
-				{	double offDiag = 0.5*(denFac*(Earr[2+4*j][b] + Earr[3+4*j][b] - 2*E[b]) - (m2inv[b](j2,j2)+ m2inv[b](j3,j3)));
-					m2inv[b](j2,j3) = offDiag;
-					m2inv[b](j3,j2) = offDiag;
-				}
-			}
+// 			std::vector< vector3<> > kArr(12, k);
+// 			for(int j=0; j<3; j++)
+// 			{	int j2 = (j+1)%3;
+// 				int j3 = (j+2)%3;
+// 				kArr[0+4*j] += dk[j];
+// 				kArr[1+4*j] -= dk[j];
+// 				kArr[2+4*j] += dk[j2] + dk[j3];
+// 				kArr[3+4*j] -= dk[j2] + dk[j3];
+// 			}
+// 			std::vector<diagMatrix> Earr = bs.getStates(kArr, Emax);
+// 			double denFac = 1./(dkMag*dkMag);
+// 			for(int j=0; j<3; j++)
+// 				for(int b=0; b<E.nRows(); b++)
+// 					m2inv[b](j,j) = denFac * (Earr[0+4*j][b] + Earr[1+4*j][b] - 2*E[b]);
+// 			for(int j=0; j<3; j++)
+// 			{	int j2 = (j+1)%3;
+// 				int j3 = (j+2)%3;
+// 				for(int b=0; b<E.nRows(); b++)
+// 				{	double offDiag = 0.5*(denFac*(Earr[2+4*j][b] + Earr[3+4*j][b] - 2*E[b]) - (m2inv[b](j2,j2)+ m2inv[b](j3,j3)));
+// 					m2inv[b](j2,j3) = offDiag;
+// 					m2inv[b](j3,j2) = offDiag;
+// 				}
+// 			}
 			
 			for(int b=0; b<E.nRows(); b++) if(fabs(E[b])<Emax)
 			{	double w = -1/(T*std::pow(2*cosh(E[b]/(2*T)),2));

@@ -45,15 +45,13 @@ int main(int argc, char** argv)
 	
 	double Omega = fabs(det(R)); //unit cell volume
 	const double Emax = 10*T; //max energy from Fermi level to consider
-	double deltaMu = mu;	
-	double CeSum = 0., CeSumSq = 0.;
-        double Nsum = 0., dNdmuSum = 0.;
 
 	logPrintf("Calculating Ce... "); logFlush();
-	while(deltaMu > 0.01*mu)
+	double dmuT = 0.; //temperature dependent mu correction
+	while(true)
 	{	// Compute Ce
-		CeSum = 0.; CeSumSq = 0.;
-		Nsum = 0.; dNdmuSum = 0.;	
+		double CeSum = 0., CeSumSq = 0.;
+		double Nsum = 0., NsumSq = 0., dNdmuSum = 0.;
 		int blockStart = (totalBlocks * (mpiUtil->iProcess())) / mpiUtil->nProcesses(); //MPI division
 		int blockStop = (totalBlocks * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
 		int nKptsMin = nKptsN1/totalBlocks;
@@ -99,31 +97,38 @@ int main(int argc, char** argv)
 				{	//Calculate heat capacity for each k-point ik1i
 					for(int v=0; v<Earr[ik1].nRows(); v++) //for each band
 					{	//kb=1 in atomic units, E-mu already happened in bandstruct
-						double dfdT = (Earr[ik1][v] * std::pow(1/cosh(Earr[ik1][v]/(2*T)),2)) / (4*T*T);
+						double x = (Earr[ik1][v] - dmuT) / T; 
+						double f = 1. / (1. + exp(x));
+						double dfdx = -1./std::pow(2*cosh(0.5*x), 2);
+						double dfdmu = dfdx * (-1./T);
+						double dfdT = dfdx * (-x/T); //chain rule
 						CeBlock += dfdT * Earr[ik1][v];
-					
-						double f = 1 / (exp(Earr[ik1][v]/T) + 1);
 						NBlock += f;
-						double dFdE = -1/(T*std::pow(2*cosh(Earr[ik1][v]/(2*T)),2));
-						dNdmuBlock += - dFdE;
+						dNdmuBlock += dfdmu;
 					}
 				}
 			}
 			CeSum += CeBlock/nKpts; CeSumSq += std::pow(CeBlock/nKpts,2);
-			Nsum += NBlock/nKpts;
+			Nsum += NBlock/nKpts; NsumSq += std::pow(NBlock/nKpts,2);
 			dNdmuSum += dNdmuBlock/nKpts;
 		}
-		deltaMu = (Z - Nsum) / dNdmuSum;
-		mu += deltaMu;	
+		//Results at current mu offset:
+		mpiUtil->allReduce(CeSum, MPIUtil::ReduceSum);
+		mpiUtil->allReduce(CeSumSq, MPIUtil::ReduceSum);
+		mpiUtil->allReduce(Nsum, MPIUtil::ReduceSum);
+		mpiUtil->allReduce(NsumSq, MPIUtil::ReduceSum);
+		mpiUtil->allReduce(dNdmuSum, MPIUtil::ReduceSum);
+		double Ce = CeSum / totalBlocks;
+		double CeStd = sqrt(CeSumSq/totalBlocks - Ce*Ce)/sqrt(totalBlocks);
+		double CeScale = 1./(Omega * Joule/(std::pow(meter,3)*Kelvin)); //per unit cell and switch to SI
+		double N = Nsum / totalBlocks;
+		double Nstd = sqrt(NsumSq/totalBlocks - N*N)/sqrt(totalBlocks);
+		logPrintf("dmuT=%+lf N=%lf:  Ce = %lg +/- %lg J/(m^3 K)\n", mu, N, Ce*CeScale, CeStd*CeScale);
+		fflush(globalLog);
+		//Update mu offset:
+		if(fabs(N-Z) < Nstd) break; //can't converge more accurately than error in N
+		dmuT += (Z - Nsum) / dNdmuSum;
 	}
-	logPrintf("mu(T) = %lg\n", mu);
-
-	mpiUtil->allReduce(CeSum, MPIUtil::ReduceSum);
-	mpiUtil->allReduce(CeSumSq, MPIUtil::ReduceSum);
-	double Ce = CeSum / totalBlocks;
-	double CeStd = sqrt(CeSumSq/totalBlocks - Ce*Ce)/sqrt(totalBlocks);
-	Ce = Ce/Omega; CeStd = CeStd/Omega;
-	logPrintf("Ce = %lg +/- %lg J/(m^3 K)\n", Ce/(Joule/(meter*meter*meter*Kelvin)), CeStd/(Joule/(meter*meter*meter*Kelvin)));
 	
 	finalizeSystem();
 }
