@@ -50,7 +50,7 @@ int main(int argc, char** argv)
 	//Jellium parameters:
 	double nJellium = Zjellium / fabs(det(R));
 	double omegaPsq = 4*M_PI * nJellium; logPrintf("Jellium plasma frequency: %lg eV\n", sqrt(omegaPsq)/eV);
-	double vF = std::pow(nJellium/(3*M_PI*M_PI), 1./3); //same as kF in atomic units
+	double vF = std::pow(3*M_PI*M_PI*nJellium, 1./3); //same as kF in atomic units
 	
 	//Initialize dielectric model:
 	Epsilon eps("Wannier/epsilon.dat");
