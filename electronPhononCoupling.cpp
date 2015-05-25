@@ -110,21 +110,10 @@ int main(int argc, char** argv)
 								double nPh = 1./(exp(omegaPh[alpha]/T) - 1.);
 								double weightPrefac = phononPrefac * ((F1[v]-F2[c]) * nPh - f2[c]*(1-f1[v]));
 								// Effective matrix elements
-								std::vector<complex> Meff(nExtrap, 0.); double weight = 0.;
-								for(int i=0; i<nBands; i++) // sum over the intermediate states
-								{	complex AdotP1iv = P1[0](i,v) - I*(eps.k/eps.modGammaMinus)*P1[1](i,v);
-									complex AdotP2ci = P2[0](c,i) - I*(eps.k/eps.modGammaMinus)*P2[1](c,i);
-									double MeffSqExtrap = 0.;
-									for(int z=0; z<nExtrap; z++)
-									{	complex iEta(0, (z+1)*eta);
-										Meff[z] += 
-											( AdotP2ci * gePh[alpha](i,v) / (E2[i]+iEta - (E2[c] - omega))
-											+ gePh[alpha](c,i) * AdotP1iv / (E1[i]+iEta - (E1[v] + omega)) );
-										MeffSqExtrap += extrapCoeff[z] * Meff[z].norm();
-									}
-									weight = weightPrefac * MeffSqExtrap;
-									convPhonon[i].addEvent(omega, weight); //estimate based on truncating to i bands
-								}
+								double Meff = 0.;
+								Meff = gePh[alpha](c,v)
+								weight = weightPrefac * std::pow(abs(Meff),2);
+								convPhonon[i].addEvent(omega, weight); //estimate based on truncating to i bands
 								//Results using all available bands:
 								EvPhonon.addEvent(E1[v], omega, weight);
 								EcPhonon.addEvent(E2[c], omega, weight);
