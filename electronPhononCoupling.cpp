@@ -17,7 +17,9 @@ int main(int argc, char** argv)
 	const int nKptsN1 = inputMap.get("nKptsN1");
 	const int totalBlocks = inputMap.get("totalBlocks"); assert(totalBlocks>0);
 	const double mu = inputMap.get("mu");
-	const double T = inputMap.get("T") * eV;
+	const double rT = inputMap.get("rT") * eV; //room temperature, used for energy conserving delta parameters
+	const double Te = inputMap.get("Te") * eV; //electron temperature
+	const double Tl = inputMap.get("Tl") * eV; //lattice temperature
 	const int spinWeight = round(inputMap.get("spinWeight"));
 	const matrix3<> R = matrix3<>(0,1,1, 1,0,1, 1,1,0) * (0.5*inputMap.get("aCubic")*Angstrom);
 
@@ -25,7 +27,9 @@ int main(int argc, char** argv)
 	logPrintf("nKptsN1 = %d\n", nKptsN1);
 	logPrintf("totalBlocks = %d\n", totalBlocks);
 	logPrintf("mu = %lg\n", mu);
-	logPrintf("T = %lg\n", T);
+	logPrintf("rT = %lg\n", rT);
+	logPrintf("Te = %lg\n", Te);
+	logPrintf("Tl = %lg\n", Tl);
 	logPrintf("spinWeight = %d\n", spinWeight);
 	logPrintf("R:\n");
 	R.print(globalLog, " %lg ");
@@ -48,8 +52,8 @@ int main(int argc, char** argv)
 	int blockStop = (totalBlocks * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
 	int nKptsMin = nKptsN1/totalBlocks;
 	double Omega = fabs(det(R));
-	const double Emax = 10*T; //max energy from Fermi level to consider
-	double EconserveExpFac = -0.5/(T*T), EconservePrefac = 1./(sqrt(2*M_PI)*T); //energy conserving Gaussian parameters
+	const double Emax = 10*rT; //max energy from Fermi level to consider
+	double EconserveExpFac = -0.5/(rT*rT), EconservePrefac = 1./(sqrt(2*M_PI)*rT); //energy conserving Gaussian parameters
 	for(int block=blockStart; block<blockStop; block++)
 	{	Random::seed(block);
 		double Gblock = 0.;
@@ -100,10 +104,10 @@ int main(int argc, char** argv)
 				{	for(int ik2=0; ik2<bunchSize; ik2++)
 						if(ik2 != ik1)
 							for(int c=0; c<Earr[ik2].nRows(); c++)
-							{	double fi = 1./(exp(Earr[ik1][v]/T)+1);
-								double fj = 1./(exp(Earr[ik2][c]/T)+1);
+							{	double fi = 1./(exp(Earr[ik1][v]/Te)+1);
+								double fj = 1./(exp(Earr[ik2][c]/Te)+1);
 								for(int alpha=0; alpha<omegaPh[ik2].nRows(); alpha++)
-								{	double nPh = 1./(exp(omegaPh[ik2][alpha]/T) - 1.);
+								{	double nPh = 1./(exp(omegaPh[ik2][alpha]/Tl) - 1.);
 									double gePhSq = gePh[ik2][alpha](c,v).norm();
 									double delta = EconservePrefac * exp(EconserveExpFac * std::pow(Earr[ik1][v]-Earr[ik2][c] + ae*omegaPh[ik2][alpha],2));
 									double occFactors = (fi-fj)*nPh  - fj*(1-fi);
