@@ -58,6 +58,7 @@ int main(int argc, char** argv)
 	{	Random::seed(block);
 		double Gblock = 0.;
 		double nKpts = 0.;
+		double nKpairs = 0.;
 		while(nKpts < nKptsMin)
 		{	//Get a bunch of -points:
 			std::vector< vector3<> > kArr(bunchSize);
@@ -65,7 +66,8 @@ int main(int argc, char** argv)
  				for(int j=0; j<3; j++)
  					k[j] = Random::uniform();
  			nKpts += bunchSize;
-	
+			nKpairs += bunchSize*(bunchSize-1);
+			
 			//Get energies for selected bunch:
 			std::vector<diagMatrix> Earr = bs.getStates(kArr, Emax);
 			
@@ -88,14 +90,15 @@ int main(int argc, char** argv)
 									double gePhSq = gePh[ik2][alpha](c,v).norm();
 									double delta = EconservePrefac * exp(EconserveExpFac * std::pow(Earr[ik1][v]-Earr[ik2][c] + omegaPh[ik2][alpha],2));
 									double occFactors = (fi-fj)*nPh  - fj*(1-fi);
-									Gblock += 2 * M_PI * spinWeight * occFactors * delta * gePhSq;
+									Gblock += 2 * M_PI * spinWeight * omegaPh[ik2][alpha] * gePhSq * occFactors * delta;
 									//logPrintf("Gblock = %lg, occFactors =  %lg, delta = %lg, gePhSq = %lg\n", Gblock,occFactors,delta,gePhSq);
 								}
 							}
 				}
 			}
 		}
-		Gsum += Gblock/nKpts; GsumSq += std::pow(Gblock/nKpts,2);
+		Gblock /= nKpairs;
+		Gsum += Gblock; GsumSq += std::pow(Gblock,2);
 	}
 
 	mpiUtil->allReduce(Gsum, MPIUtil::ReduceSum);
