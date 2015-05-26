@@ -57,7 +57,6 @@ int main(int argc, char** argv)
 	long nKpairs = nKpts * (bunchSize-1); //total number of sampled k-point pairs for phonon-assisted transitions
 	int nBands = bs.getStates(vector3<>()).nRows();
 	int nModes = bs.getPhononModes(vector3<>()).nRows();
-	complex I(0,1);
 	double prefac0 = 4*M_PI; //frequency independent part of prefactor.  SHOULD THIS ALSO HAVE spinWeight?
 
 	//Initalize sturctures to hold data
@@ -91,7 +90,7 @@ int main(int argc, char** argv)
 			//phonon matrix elements for ik1 with rest of bunch:
 			std::vector<matrix> gePhArr[bunchSize];
 			bs.setPhononMatElemArray(kArr[ik1], kArr, gePhArr);
-			//Loop over second k-point:
+			//Loop over second k-point
 			for(int ik2=0; ik2<bunchSize; ik2++) if(ik2!=ik1) //avoid gamma-point phonon singularity
 			{	const std::vector<matrix>& gePh = gePhArr[ik2];
 				diagMatrix omegaPh = bs.getPhononModes(kArr[ik1] - kArr[ik2]);
@@ -135,7 +134,7 @@ int main(int argc, char** argv)
 	mpiUtil->allReduce(Gsum, MPIUtil::ReduceSum);
         mpiUtil->allReduce(GsumSq, MPIUtil::ReduceSum);
 	double G = Gsum;// / totalBlocks;
-        double Gstd = sqrt(GsumSq - G*G);
+        double Gstd =sqrt(abs(GsumSq - G*G));
         logPrintf("G = %lg +/- %lg\n", G, Gstd);
 
 	finalizeSystem();
