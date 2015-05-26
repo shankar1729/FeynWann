@@ -51,44 +51,20 @@ int main(int argc, char** argv)
 	int blockStart = (totalBlocks * (mpiUtil->iProcess())) / mpiUtil->nProcesses(); //MPI division
 	int blockStop = (totalBlocks * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
 	int nKptsMin = nKptsN1/totalBlocks;
-	double Omega = fabs(det(R));
 	const double Emax = 10*rT; //max energy from Fermi level to consider
 	double EconserveExpFac = -0.5/(rT*rT), EconservePrefac = 1./(sqrt(2*M_PI)*rT); //energy conserving Gaussian parameters
 	for(int block=blockStart; block<blockStop; block++)
 	{	Random::seed(block);
 		double Gblock = 0.;
-		double nKpts = 0.; int nBunches = 0;
+		double nKpts = 0.;
 		while(nKpts < nKptsMin)
-		{	//Get a bunch of k-points with states near the Fermi level:
-			std::vector< vector3<> > kArr; kArr.reserve(bunchSize);
-			while(kArr.size() < bunchSize)
-			{	//Diagonalize Hamiltonians at a set of random k-points:
-				std::vector< vector3<> > kTmp(bunchSize);
-				for(vector3<>& k: kTmp)
-					for(int j=0; j<3; j++)
-						k[j] = Random::uniform();
-				std::vector<diagMatrix> Etmp = bs.getStates(kTmp, Emax);
-				//Add k-points with appropriate states:
-				int nFound = 0, nAdded = 0;
-				for(int ik=0; ik<bunchSize; ik++)
-				{	bool worthwhile = false;
-					for(int b=0; b<Etmp[ik].nRows(); b++)
-						if(fabs(Etmp[ik][b]) < Emax)
-						{	worthwhile = true;
-							break;
-						}
-					if(worthwhile)
-					{	nFound++;
-						if(kArr.size() < bunchSize)
-						{	kArr.push_back(kTmp[ik]);
-							nAdded++;
-						}
-					}
-				}
-				nKpts += bunchSize * (nFound ? nAdded * (1./nFound) : 1.); //number of k-points examined to get the relevant ones (needed for normalization)
-			}
-			nBunches++;
-			
+		{	//Get a bunch of -points:
+			std::vector< vector3<> > kArr(bunchSize);
+			for(vector3<>& k: kArr)
+ 				for(int j=0; j<3; j++)
+ 					k[j] = Random::uniform();
+ 			nKpts += bunchSize;
+	
 			//Get energies for selected bunch:
 			std::vector<diagMatrix> Earr = bs.getStates(kArr, Emax);
 			
@@ -109,7 +85,7 @@ int main(int argc, char** argv)
 								for(int alpha=0; alpha<omegaPh[ik2].nRows(); alpha++)
 								{	double nPh = 1./(exp(omegaPh[ik2][alpha]/Tl) - 1.);
 									double gePhSq = gePh[ik2][alpha](c,v).norm();
-									double delta = EconservePrefac * exp(EconserveExpFac * std::pow(Earr[ik1][v]-Earr[ik2][c] + ae*omegaPh[ik2][alpha],2));
+									double delta = EconservePrefac * exp(EconserveExpFac * std::pow(Earr[ik1][v]-Earr[ik2][c] + omegaPh[ik2][alpha],2));
 									double occFactors = (fi-fj)*nPh  - fj*(1-fi);
 									Gblock += 2* M_PI* spinWeight * occFactors * delta * gePhSq;
 								}
