@@ -51,6 +51,7 @@ int main(int argc, char** argv)
 	int blockStart = (totalBlocks * (mpiUtil->iProcess())) / mpiUtil->nProcesses(); //MPI division
 	int blockStop = (totalBlocks * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
 	int nKptsMin = nKptsN1/totalBlocks;
+	double Omega = fabs(det(R)); //unit cell volume
 	const double Emax = 10*rT; //max energy from Fermi level to consider
 	double EconserveExpFac = -0.5/(rT*rT), EconservePrefac = 1./(sqrt(2*M_PI)*rT); //energy conserving Gaussian parameters
 	for(int block=blockStart; block<blockStop; block++)
@@ -87,7 +88,8 @@ int main(int argc, char** argv)
 									double gePhSq = gePh[ik2][alpha](c,v).norm();
 									double delta = EconservePrefac * exp(EconserveExpFac * std::pow(Earr[ik1][v]-Earr[ik2][c] + omegaPh[ik2][alpha],2));
 									double occFactors = (fi-fj)*nPh  - fj*(1-fi);
-									Gblock += 2* M_PI* spinWeight * occFactors * delta * gePhSq;
+									Gblock += 2 * M_PI * spinWeight * occFactors * delta * gePhSq;
+									//logPrintf("Gblock = %lg, occFactors =  %lg, delta = %lg, gePhSq = %lg\n", Gblock,occFactors,delta,gePhSq);
 								}
 							}
 				}
@@ -100,7 +102,8 @@ int main(int argc, char** argv)
 	mpiUtil->allReduce(GsumSq, MPIUtil::ReduceSum);
 	double G = Gsum / totalBlocks;
 	double Gstd = sqrt(GsumSq/totalBlocks - G*G)/sqrt(totalBlocks);
-	logPrintf("G = %lg +/- %lg\n", G, Gstd);
+	double Gscale = 1./(Omega * Joule*invSeconds/(std::pow(meter,3)*Kelvin)); //per unit cell and switch to SI
+	logPrintf("G = %lg +/- %lg W/(m^3 K)\n", G*Gscale, Gstd*Gscale);
 	
 	finalizeSystem();
 }
