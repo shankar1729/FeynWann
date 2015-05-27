@@ -7,6 +7,8 @@
 #include "BandStruct.h"
 #include "InputMap.h"
 #include "Units.h"
+#include <fstream>      // std::ifstream
+#include <algorithm>    // std::lower_bound
 
 int main(int argc, char** argv)
 {	string inputFilename; bool dryRun, printDefaults;
@@ -16,10 +18,10 @@ int main(int argc, char** argv)
 	InputMap inputMap(inputFilename);
 	const int nKptsN1 = inputMap.get("nKptsN1");
 	const int totalBlocks = inputMap.get("totalBlocks"); assert(totalBlocks>0);
-	const double mu = inputMap.get("mu");
-	const double rT = inputMap.get("rT") * eV; //room temperature, used for energy conserving delta parameters
-	const double Te = inputMap.get("Te") * eV; //electron temperature
-	const double Tl = inputMap.get("Tl") * eV; //lattice temperature
+	double mu = inputMap.get("mu");
+	const double rT = inputMap.get("rT") * Kelvin; //room temperature, used for energy conserving delta parameters
+	double Te = inputMap.get("Te") * Kelvin; //electron temperature
+	const double Tl = inputMap.get("Tl") * Kelvin; //lattice temperature
 	const int spinWeight = round(inputMap.get("spinWeight"));
 	const matrix3<> R = matrix3<>(0,1,1, 1,0,1, 1,1,0) * (0.5*inputMap.get("aCubic")*Angstrom);
 
@@ -39,6 +41,24 @@ int main(int argc, char** argv)
 		return 0;
 	}
 	logPrintf("\n");
+
+	//Read in Te and mu from text file
+	std::ifstream ifs("CeTnew2.dat");
+	std::vector<double> TeArr, TeArr2, muArr;
+	double tt, cc, mumu;;
+	while(ifs >> tt >> cc >> mumu)
+	{	TeArr.push_back(tt * Kelvin);
+		TeArr2.push_back(fabs(tt * Kelvin -Te));
+		muArr.push_back(mumu * eV);
+	}
+	// Adjust mu to account for Te value
+	int TeIndex=0;
+	for (unsigned int i=0; i<TeArr.size(); i++)
+	{	if (TeArr2[i]<TeArr2[TeIndex])
+			TeIndex=i;
+	}
+	Te = TeArr[TeIndex]; mu = muArr[TeIndex];
+	logPrintf("Temp dependent adjusted values: Te = %lg, mu = %lg\n", Te, mu);//print values for debugging
 
 	//Initialize Wannier bandstructure:
 	const int bunchSize = 32;
@@ -97,7 +117,7 @@ int main(int argc, char** argv)
 				}
 			}
 		}
-		Gblock /= nKpairs;
+		Gblock /= (nKpairs * (Tl - Te));
 		Gsum += Gblock; GsumSq += std::pow(Gblock,2);
 	}
 
