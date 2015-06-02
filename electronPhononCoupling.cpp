@@ -9,6 +9,7 @@
 #include "Units.h"
 #include <fstream>      // std::ifstream
 #include <algorithm>    // std::lower_bound
+#include "Histogram.h"
 
 int main(int argc, char** argv)
 {	string inputFilename; bool dryRun, printDefaults;
@@ -22,6 +23,7 @@ int main(int argc, char** argv)
 	const double rT = inputMap.get("rT") * Kelvin; //room temperature, used for energy conserving delta parameters
 	double Te = inputMap.get("Te") * Kelvin; //electron temperature
 	const double Tl = inputMap.get("Tl") * Kelvin; //lattice temperature
+	const double EplasmonMax = inputMap.get("EplasmonMax") * eV;
 	const int spinWeight = round(inputMap.get("spinWeight"));
 	const matrix3<> R = matrix3<>(0,1,1, 1,0,1, 1,1,0) * (0.5*inputMap.get("aCubic")*Angstrom);
 
@@ -32,6 +34,7 @@ int main(int argc, char** argv)
 	logPrintf("rT = %lg\n", rT);
 	logPrintf("Te = %lg\n", Te);
 	logPrintf("Tl = %lg\n", Tl);
+	logPrintf("EplasmonMax = %lg\n", EplasmonMax);
 	logPrintf("spinWeight = %d\n", spinWeight);
 	logPrintf("R:\n");
 	R.print(globalLog, " %lg ");
@@ -65,7 +68,13 @@ int main(int argc, char** argv)
 	BandStruct bs("Wannier/wannier", mu, spinWeight, "Wannier/totalE");
 	bs.setCacheSize(2*bunchSize);
 	
-	// Compute T and Gamma
+	//Initialize histograms for matrix elements
+	double gaussMargin = 5*rT;
+        double fermiMargin = 10*rT;
+	Histogram Mepv(-EplasmonMax-gaussMargin, rT, fermiMargin);
+	Histogram Mepc(-fermiMargin, rT, EplasmonMax+gaussMargin);
+
+	// Compute G
 	double Gsum = 0., GsumSq = 0.;
 	logPrintf("Calculating G... "); logFlush();
 	int blockStart = (totalBlocks * (mpiUtil->iProcess())) / mpiUtil->nProcesses(); //MPI division
@@ -80,7 +89,7 @@ int main(int argc, char** argv)
 		double nKpts = 0.;
 		double nKpairs = 0.;
 		while(nKpts < nKptsMin)
-		{	//Get a bunch of -points:
+		{	//Get a bunch of k points:
 			std::vector< vector3<> > kArr(bunchSize);
 			for(vector3<>& k: kArr)
  				for(int j=0; j<3; j++)
@@ -111,7 +120,8 @@ int main(int argc, char** argv)
 									double delta = EconservePrefac * exp(EconserveExpFac * std::pow(Earr[ik1][v]-Earr[ik2][c] + omegaPh[ik2][alpha],2));
 									double occFactors = (fi-fj)*nPh  - fj*(1-fi);
 									Gblock += 2 * M_PI * spinWeight * omegaPh[ik2][alpha] * gePhSq * occFactors * delta;
-									//logPrintf("Gblock = %lg, occFactors =  %lg, delta = %lg, gePhSq = %lg\n", Gblock,occFactors,delta,gePhSq);
+									Mepv.addEvent(E1, gePhSq);
+									Mepc.addEvent(Earr[ik2], gePhSq);
 								}
 							}
 				}
@@ -128,5 +138,8 @@ int main(int argc, char** argv)
 	double Gscale = 1./(Omega * Joule*invSeconds/(std::pow(meter,3)*Kelvin)); //per unit cell and switch to SI
 	logPrintf("G = %lg +/- %lg W/(m^3 K)\n", G*Gscale, Gstd*Gscale);
 	
+	Mepv.allReduce(MPIUtil::ReduceSum); Mephv.print("hMep.dat", 1./eV, 1./eV, 1.);
+        Mepc.allReduce(MPIUtil::ReduceSum); Mephc.print("eMep.dat", 1./eV, 1./eV, 1.);	
+
 	finalizeSystem();
 }
