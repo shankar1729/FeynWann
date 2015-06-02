@@ -107,7 +107,7 @@ int main(int argc, char** argv)
 				bs.setPhononMatElemArray(kArr[ik1], kArr, gePh);
 				for(int ik2=0; ik2<bunchSize; ik2++)
 					omegaPh[ik2] = bs.getPhononModes(kArr[ik1] - kArr[ik2]);
-				
+	
 				for(int v=0; v<Earr[ik1].nRows(); v++)
 				{	for(int ik2=0; ik2<bunchSize; ik2++)
 						if(ik2 != ik1)
@@ -120,8 +120,8 @@ int main(int argc, char** argv)
 									double delta = EconservePrefac * exp(EconserveExpFac * std::pow(Earr[ik1][v]-Earr[ik2][c] + omegaPh[ik2][alpha],2));
 									double occFactors = (fi-fj)*nPh  - fj*(1-fi);
 									Gblock += 2 * M_PI * spinWeight * omegaPh[ik2][alpha] * gePhSq * occFactors * delta;
-									Mepv.addEvent(Earr[ik1], gePhSq);
-									Mepc.addEvent(Earr[ik2], gePhSq);
+									Mepv.addEvent(Earr[ik1][v], gePhSq);
+									Mepc.addEvent(Earr[ik2][c], gePhSq);
 								}
 							}
 				}
@@ -138,8 +138,8 @@ int main(int argc, char** argv)
 	double Gscale = 1./(Omega * Joule*invSeconds/(std::pow(meter,3)*Kelvin)); //per unit cell and switch to SI
 	logPrintf("G = %lg +/- %lg W/(m^3 K)\n", G*Gscale, Gstd*Gscale);
 	
-	Mepv.allReduce(MPIUtil::ReduceSum); Mephv.print("hMep.dat", 1./eV, 1.);
-        Mepc.allReduce(MPIUtil::ReduceSum); Mephc.print("eMep.dat", 1./eV, 1.);	
+	Mepv.allReduce(MPIUtil::ReduceSum); Mepv.print("hMep.dat", 1./eV, 1.);
+        Mepc.allReduce(MPIUtil::ReduceSum); Mepc.print("eMep.dat", 1./eV, 1.);	
 
 	finalizeSystem();
 }
