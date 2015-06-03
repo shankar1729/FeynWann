@@ -69,8 +69,10 @@ int main(int argc, char** argv)
 	bs.setCacheSize(2*bunchSize);
 	
 	//Initialize histograms for matrix elements
-	Histogram MepNum(-EplasmonMax, rT, EplasmonMax);
-	Histogram MepDen(-EplasmonMax, rT, EplasmonMax);
+	diagMatrix E0 = bs.getStates(vector3<>()); //Gamma point eigenvalues
+	double Emin = *std::min_element(E0.begin(), E0.end());
+	Histogram MepNum(Emin, rT, EplasmonMax);
+	Histogram MepDen(Emin, rT, EplasmonMax);
 
 	// Compute G
 	double Gsum = 0., GsumSq = 0.;
