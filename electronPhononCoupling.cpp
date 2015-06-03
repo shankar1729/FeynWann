@@ -69,10 +69,8 @@ int main(int argc, char** argv)
 	bs.setCacheSize(2*bunchSize);
 	
 	//Initialize histograms for matrix elements
-	double gaussMargin = 5*rT;
-        double fermiMargin = 10*rT;
-	Histogram Mepv(-EplasmonMax-gaussMargin, rT, fermiMargin);
-	Histogram Mepc(-fermiMargin, rT, EplasmonMax+gaussMargin);
+	Histogram MepNum(-EplasmonMax, rT, EplasmonMax);
+	Histogram MepDen(-EplasmonMax, rT, EplasmonMax);
 
 	// Compute G
 	double Gsum = 0., GsumSq = 0.;
@@ -120,8 +118,11 @@ int main(int argc, char** argv)
 									double delta = EconservePrefac * exp(EconserveExpFac * std::pow(Earr[ik1][v]-Earr[ik2][c] + omegaPh[ik2][alpha],2));
 									double occFactors = (fi-fj)*nPh  - fj*(1-fi);
 									Gblock += 2 * M_PI * spinWeight * omegaPh[ik2][alpha] * gePhSq * occFactors * delta;
-									Mepv.addEvent(Earr[ik1][v], gePhSq);
-									Mepc.addEvent(Earr[ik2][c], gePhSq);
+									//Matrix element squared (weighted by energy conservation)
+									MepNum.addEvent(Earr[ik1][v], delta * gePhSq);
+									MepNum.addEvent(Earr[ik2][c], delta * gePhSq);
+									MepDen.addEvent(Earr[ik1][v], delta);
+									MepDen.addEvent(Earr[ik2][c], delta);
 								}
 							}
 				}
@@ -138,8 +139,14 @@ int main(int argc, char** argv)
 	double Gscale = 1./(Omega * Joule*invSeconds/(std::pow(meter,3)*Kelvin)); //per unit cell and switch to SI
 	logPrintf("G = %lg +/- %lg W/(m^3 K)\n", G*Gscale, Gstd*Gscale);
 	
-	Mepv.allReduce(MPIUtil::ReduceSum); Mepv.print("hMep.dat", 1./eV, 1.);
-        Mepc.allReduce(MPIUtil::ReduceSum); Mepc.print("eMep.dat", 1./eV, 1.);	
+	MepNum.allReduce(MPIUtil::ReduceSum);
+	MepDen.allReduce(MPIUtil::ReduceSum);
+	if(mpiUtil->isHead())
+	{	ofstream ofs("Mep.dat");
+		for(size_t i=0; i<MepNum.out.size(); i++)
+			ofs << (MepNum.Emin + i*MepNum.dE)/eV << '\t' << MepNum.out[i]/MepDen.out[i] << '\n';
+	}
 
+	
 	finalizeSystem();
 }
