@@ -71,8 +71,9 @@ int main(int argc, char** argv)
 	//Initialize histograms for matrix elements
 	diagMatrix E0 = bs.getStates(vector3<>()); //Gamma point eigenvalues
 	double Emin = *std::min_element(E0.begin(), E0.end());
-	Histogram MepNum(Emin, rT, EplasmonMax);
-	Histogram MepDen(Emin, rT, EplasmonMax);
+	double Emax = *std::max_element(E0.begin(), E0.end());
+	Histogram MepNum(Emin, rT, Emax);
+	Histogram MepDen(Emin, rT, Emax);
 
 	// Compute G
 	double Gsum = 0., GsumSq = 0.;
@@ -81,7 +82,6 @@ int main(int argc, char** argv)
 	int blockStop = (totalBlocks * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
 	int nKptsMin = nKptsN1/totalBlocks;
 	double Omega = fabs(det(R)); //unit cell volume
-	const double Emax = 10*rT; //max energy from Fermi level to consider
 	double EconserveExpFac = -0.5/(rT*rT), EconservePrefac = 1./(sqrt(2*M_PI)*rT); //energy conserving Gaussian parameters
 	for(int block=blockStart; block<blockStop; block++)
 	{	Random::seed(block);
