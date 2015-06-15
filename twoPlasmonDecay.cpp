@@ -156,6 +156,7 @@ int main(int argc, char** argv)
 		//Phonon-assisted transitions:
 		for(int ik1=0; ik1<bunchSize; ik1++)
 		{	const diagMatrix& E1 = Earr[ik1];
+			const diagMatrix& ImE1 = ImEarr[ik1];
 			const diagMatrix& F1 = Farr[ik1];
 			const matrix& P1 = Parr[ik1][0];
 			//phonon matrix elements for ik1 with rest of bunch:
@@ -166,6 +167,7 @@ int main(int argc, char** argv)
 			{	const std::vector<matrix>& gePh = gePhArr[ik2];
 				diagMatrix omegaPh = bs.getPhononModes(kArr[ik1] - kArr[ik2]);
 				const diagMatrix& E2 = Earr[ik2];
+				const diagMatrix& ImE2 = ImEarr[ik2];
 				const diagMatrix& F2 = Farr[ik2];
 				const matrix& P2 = Parr[ik2][0];
 				//Loops over bands and phonon modes:
@@ -204,11 +206,13 @@ int main(int argc, char** argv)
 								{	std::vector<complex> Meff(nExtrap, 0.);
 									for(int a=0; a<nBands; a++) // sum over the first intermediate state
 									for(int b=0; b<nBands; b++) // sum over the second intermediate state
-									{	for(int z=0; z<nExtrap; z++)
+									{	complex imE1a = complex(0,ImE1[a]);
+										complex imE2b = complex(0,ImE2[b]);
+										for(int z=0; z<nExtrap; z++)
 										{	complex iEta(0, (z+1)*eta);
 											Meff[z] += 
 												( P2(c,b) * P2(b,a) * gePh[alpha](a,v) / ((E2[a]+iEta - (E2[c] - omegaTot)) * (E2[b]+iEta - (E2[c] - omega)))
-												+ P2(c,b) * gePh[alpha](b,a) * P1(a,v) / ((E1[a]+iEta - (E1[v] + omega)) * (E2[b]+iEta - (E2[c] - omega)))
+												+ P2(c,b) * gePh[alpha](b,a) * P1(a,v) / ((E1[a]+imE1a - (E1[v] + omega)) * (E2[b]+imE2b - (E2[c] - omega))) //use actual linewidths to not extrapolate
 												+ gePh[alpha](c,b) * P1(b,a) * P1(a,v) / ((E1[a]+iEta - (E1[v] + omega)) * (E1[b]+iEta - (E1[v] + omegaTot))) );
 										}
 									}
