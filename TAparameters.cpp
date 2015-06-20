@@ -169,7 +169,7 @@ int main(int argc, char** argv)
 	diagMatrix GePh(TeArr.size());
 	Histogram MepNum(Emin, dE, Emax);
 	Histogram MepDen(Emin, dE, Emax);
-	const double EconserveExpFac = -0.5/(dE*dE), EconservePrefac = 1./(sqrt(2.*M_PI)*dE); //energy conserving Gaussian parameters
+	const double EconserveScaleFac = 1./dE, EconservePrefac = 1./(M_PI*dE); //energy conserving Lorentzian parameters
 	logPrintf("\nePhCoupling and ImEps: "); logFlush();
 	for(int iBunch=0; iBunch<nBunchesMine; iBunch++)
 	{
@@ -205,22 +205,36 @@ int main(int argc, char** argv)
 			{	const diagMatrix& E2 = Earr[ik2];
 				const std::vector<diagMatrix>& F2 = Farr[ik2];
 				
-				for(int v=0; v<nBands; v++)
-				for(int c=0; c<nBands; c++)
 				for(int alpha=0; alpha<nModes; alpha++)
 				{	double nPh = 1./(exp(omegaPh[ik2][alpha]/Tl) - 1.);
-					double gePhSq = gePh[ik2][alpha](c,v).norm();
-					double delta = EconservePrefac * exp(EconserveExpFac * std::pow(E1[v]-E2[c] + omegaPh[ik2][alpha],2));
-								
-					//Matrix element squared (weighted by energy conservation)
-					MepNum.addEvent(Earr[ik1][v], delta * gePhSq);
-					MepNum.addEvent(Earr[ik2][c], delta * gePhSq);
-					MepDen.addEvent(Earr[ik1][v], delta);
-					MepDen.addEvent(Earr[ik2][c], delta);
-					
+					std::vector<double> nPhArr(TeArr.size()); //phonon occupation at electron temperature
 					for(size_t iT=0; iT<TeArr.size(); iT++)
-					{	double occFactors = (F1[iT][v]-F2[iT][c])*nPh  - F2[iT][c]*(1-F1[iT][v]);
-						GePh[iT] += GePhPrefac * omegaPh[ik2][alpha] * gePhSq * occFactors * delta;
+						nPhArr[iT] = 1./(exp(omegaPh[ik2][alpha]/TeArr[iT]) - 1.);
+					
+					for(int v=0; v<nBands; v++)
+					for(int c=0; c<nBands; c++)
+					{	double gePhSq = gePh[ik2][alpha](c,v).norm();
+						double delta = EconservePrefac/(1. + std::pow(EconserveScaleFac*(E1[v]-E2[c] + omegaPh[ik2][alpha]),2));
+						
+						//Matrix element squared (weighted by energy conservation)
+						MepNum.addEvent(Earr[ik1][v], delta * gePhSq);
+						MepNum.addEvent(Earr[ik2][c], delta * gePhSq);
+						MepDen.addEvent(Earr[ik1][v], delta);
+						MepDen.addEvent(Earr[ik2][c], delta);
+						
+						for(size_t iT=0; iT<TeArr.size(); iT++)
+						{	double f1 = F1[iT][v];
+							double f2 = F2[iT][c];
+							//Compute partner fillings that satisfy exact energy conservation with current phonon
+							double nPhTe = nPhArr[iT]; //use detailed balance with phonon occupation at Te
+							double f1_db = f2*(1+nPhTe)/((1-f2)*nPhTe + f2*(1+nPhTe));
+							double f2_db = f1*nPhTe/((1-f1)*(1+nPhTe) + f1*nPhTe);
+							//Calculate contributions only using combinations of f that satisfy detailed balance with nPhTe
+							double occFactors1 = (f1-f2_db)*nPh  - f2_db*(1-f1);
+							double occFactors2 = (f1_db-f2)*nPh  - f2*(1-f1_db);
+							double occFactors = 0.5*(occFactors1 + occFactors2);
+							GePh[iT] += GePhPrefac * omegaPh[ik2][alpha] * gePhSq * occFactors * delta;
+						}
 					}
 				}
 			}
