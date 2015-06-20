@@ -227,12 +227,10 @@ int main(int argc, char** argv)
 						MepDen.addEvent(Earr[ik2][c], delta);
 						
 						for(size_t iT=0; iT<TeArr.size(); iT++)
-						{	//Note occFactors = (f1-f2)*nPh - f2*(1-f1)
+						{	//Note occFactors = ((f1-f2)*nPh - f2*(1-f1)) / (Tl - Te)
 							//Equlibrium => f1*(1-f2)*nPhTe = (1-f1)*f2*(nPhTe+1), where nPhTe = phonon occupation at Te
 							//  => 0 = (f1-f2)*nPhTe - f2*(1-f1)
-							//  => occFactor = (f1-f2) * (nPh - nPhTe)
-							//We can then bring in the temperature denominator 1/(Tl-Te) as well,
-							//and replace with a derivative d(nPh)/dTl when Te -> Tl
+							//  => occFactors = (f1-f2) * (nPh - nPhTe)/(Tl - Te)
 							double occFactors = (F1[iT][v] - F2[iT][c]) * nPh_T[iT];
 							GePh[iT] += GePhPrefac * omegaPh[ik2][alpha] * gePhSq * occFactors * delta;
 						}
