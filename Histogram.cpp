@@ -9,17 +9,21 @@
 //------------- class Histogram --------------
 
 Histogram::Histogram(double Emin, double dE, double Emax)
-: Emin(Emin), dE(dE), normFac(1./(sqrt(2*M_PI)*dE)), out(int(ceil((Emax-Emin)/dE)), 0.)
+: Emin(Emin), dE(dE), dEinv(1./dE), nE(int(ceil((Emax-Emin)/dE))), out(nE, 0.)
 {
 }
 
 void Histogram::addEvent(double E, double weight)
-{	//Gauss smoothed Histogram (analagous to whist.oct)
-	double iCenter = (E-Emin)/dE;
-	int iStart = std::max(0, int(floor(iCenter-5)));
-	int iStop = std::min(int(out.size()), 1+int(ceil(iCenter+5)));
-	for(int i=iStart; i<iStop; i++)
-		out[i] += weight * normFac * exp(-0.5*std::pow(i-iCenter,2));
+{	//Linear splined histogram
+	//--- E coordinate:
+	double eCenter = (E-Emin)*dEinv;
+	int ie = floor(eCenter);
+	if(ie<0 || ie+1>=nE) return;
+	double te = eCenter - ie;
+	//--- accumulate normalized linear spline:
+	double prefac = dEinv * weight;
+	out[ ie ] += prefac * (1.-te);
+	out[ie+1] += prefac * te;
 }
 
 void Histogram::allReduce(MPIUtil::ReduceOp op, bool safeMode)
@@ -37,26 +41,31 @@ void Histogram::print(string fname, double Escale, double histScale) const
 //------------- class Histogram2D --------------
 
 Histogram2D::Histogram2D(double Emin, double dE, double Emax, double omegaMin, double domega, double omegaMax)
-: Emin(Emin), dE(dE), omegaMin(omegaMin), domega(domega), normFac(1./(2*M_PI*dE*domega)),
+: Emin(Emin), dE(dE), dEinv(1./dE), omegaMin(omegaMin), domega(domega), domegaInv(1./domega),
 nE(int(ceil((Emax-Emin)/dE))), nomega(int(ceil((omegaMax-omegaMin)/domega))), out(nE*nomega, 0.)
 {
 }
 
 void Histogram2D::addEvent(double E, double omega, double weight)
-{	//Gauss smoothed 2D Histogram
+{	//Linear splined 2D Histogram
 	//--- E coordinate:
-	double eCenter = (E-Emin)/dE;
-	int eStart = std::max(0, int(floor(eCenter-5)));
-	int eStop = std::min(nE, 1+int(ceil(eCenter+5)));
+	double eCenter = (E-Emin)*dEinv;
+	int ie = floor(eCenter);
+	if(ie<0 || ie+1>=nE) return;
+	double te = eCenter - ie;
 	//--- omega coordinate:
-	double oCenter = (omega-omegaMin)/domega;
-	int oStart = std::max(0, int(floor(oCenter-5)));
-	int oStop = std::min(nomega, 1+int(ceil(oCenter+5)));
-	//--- accumulate normalized Gaussian:
-	for(int o=oStart; o<oStop; o++)
-		for(int e=eStart; e<eStop; e++)
-			out[o*nE+e] += weight * normFac
-				* exp(-0.5 * (std::pow(e-eCenter,2) + std::pow(o-oCenter,2)));
+	double oCenter = (omega-omegaMin)*domegaInv;
+	int io = floor(oCenter);
+	if(io<0 || io+1>=nomega) return;
+	double to = oCenter - io;
+	//--- accumulate normalized linear spline:
+	double prefac = dEinv * domegaInv * weight;
+	double eContrib0 = prefac * (1.-te);
+	double eContrib1 = prefac * te;
+	out[( io )*nE+( ie )] += eContrib0 * (1.-to);
+	out[( io )*nE+(ie+1)] += eContrib1 * (1.-to);
+	out[(io+1)*nE+( ie )] += eContrib0 * to;
+	out[(io+1)*nE+(ie+1)] += eContrib1 * to;
 }
 
 void Histogram2D::allReduce(MPIUtil::ReduceOp op, bool safeMode)

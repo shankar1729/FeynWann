@@ -9,7 +9,8 @@
 
 struct Histogram
 {
-	double Emin, dE, normFac;
+	double Emin, dE, dEinv;
+	int nE;
 	std::vector<double> out;
 
 	Histogram(double Emin, double dE, double Emax);
@@ -20,7 +21,7 @@ struct Histogram
 
 struct Histogram2D
 {
-	double Emin, dE, omegaMin, domega, normFac;
+	double Emin, dE, dEinv, omegaMin, domega, domegaInv;
 	int nE, nomega;
 	std::vector<double> out; //nE by nomega with E inner dimension and omega outer
 
