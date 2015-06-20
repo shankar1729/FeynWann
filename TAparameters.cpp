@@ -89,10 +89,11 @@ int main(int argc, char** argv)
 	int nKpts = nBunchesMine * bunchSize; mpiUtil->allReduce(nKpts, MPIUtil::ReduceSum); //total number of sampled k-points
 	int nBands = Egamma.nRows();
 	int nModes = bs.getPhononModes(vector3<>()).nRows();
-	long nKpairs = nKpts * (bunchSize-1); //total number of sampled k-point pairs for phonon-assisted transitions
+	long nKpairs = nKpts * long(bunchSize-1); //total number of sampled k-point pairs for phonon-assisted transitions
 	double phononPrefac0 = 4 * std::pow(M_PI,2) * spinWeight / (nKpairs*fabs(det(R))); //frequency independent part of prefac
 	double directPrefac0 = 4 * std::pow(M_PI,2) * spinWeight / (nKpts*fabs(det(R))); //frequency independent part of prefac
-
+	double GePhPrefac = spinWeight * (2*M_PI) / nKpairs;
+	
 	//-------- Pass 1: collect density of states, calculate mu(Te) and Ce(Te) ---------
 	
 	logPrintf("\nCollecting DOS: "); logFlush();
@@ -164,15 +165,100 @@ int main(int argc, char** argv)
 	dmu.allReduce(MPIUtil::ReduceSum);
 	Ce.allReduce(MPIUtil::ReduceSum);
 	
+	//-------- Pass 2: electron-phonon coupling and dielectric response ---------
+	diagMatrix GePh(TeArr.size());
+	Histogram MepNum(Emin, dE, Emax);
+	Histogram MepDen(Emin, dE, Emax);
+	const double EconserveExpFac = -0.5/(dE*dE), EconservePrefac = 1./(sqrt(2.*M_PI)*dE); //energy conserving Gaussian parameters
+	logPrintf("\nePhCoupling and ImEps: "); logFlush();
+	for(int iBunch=0; iBunch<nBunchesMine; iBunch++)
+	{
+		//Retrieve k-point bunch:
+		const std::vector< vector3<> >& kArr = kArrArr[iBunch];
+		
+		//Calculate electronic states and matrix elements for bunch:
+		std::vector<diagMatrix> Earr = bs.getStates(kArr);
+		std::vector< std::vector<matrix> > Parr = bs.getDipoleMatElem(kArr);
+		std::vector< std::vector<diagMatrix> > Farr(bunchSize); //fillings by k-point, temperature and band
+		for(int ik=0; ik<bunchSize; ik++)
+		{	Farr[ik].resize(TeArr.size());
+			for(size_t iT=0; iT<TeArr.size(); iT++)
+			{	double invTe = 1./TeArr[iT];
+				Farr[ik][iT] = Earr[ik];
+				for(double& f: Farr[ik][iT]) //convert to fillings:
+					f = fermi(invTe*(f-dmu[iT]));
+			}
+		}
+
+		diagMatrix omegaPh[bunchSize];
+		std::vector<matrix> gePh[bunchSize];
+		for(int ik1=0; ik1<bunchSize; ik1++)
+		{	const diagMatrix& E1 = Earr[ik1];
+			const std::vector<diagMatrix>& F1 = Farr[ik1];
+			
+			//Calculate phonon stuff for each pair of k-points involving ik1
+			bs.setPhononMatElemArray(kArr[ik1], kArr, gePh);
+			for(int ik2=0; ik2<bunchSize; ik2++)
+				omegaPh[ik2] = bs.getPhononModes(kArr[ik1] - kArr[ik2]);
+
+			for(int ik2=0; ik2<bunchSize; ik2++) if(ik2 != ik1)
+			{	const diagMatrix& E2 = Earr[ik2];
+				const std::vector<diagMatrix>& F2 = Farr[ik2];
+				
+				for(int v=0; v<nBands; v++)
+				for(int c=0; c<nBands; c++)
+				for(int alpha=0; alpha<nModes; alpha++)
+				{	double nPh = 1./(exp(omegaPh[ik2][alpha]/Tl) - 1.);
+					double gePhSq = gePh[ik2][alpha](c,v).norm();
+					double delta = EconservePrefac * exp(EconserveExpFac * std::pow(E1[v]-E2[c] + omegaPh[ik2][alpha],2));
+								
+					//Matrix element squared (weighted by energy conservation)
+					MepNum.addEvent(Earr[ik1][v], delta * gePhSq);
+					MepNum.addEvent(Earr[ik2][c], delta * gePhSq);
+					MepDen.addEvent(Earr[ik1][v], delta);
+					MepDen.addEvent(Earr[ik2][c], delta);
+					
+					for(size_t iT=0; iT<TeArr.size(); iT++)
+					{	double occFactors = (F1[iT][v]-F2[iT][c])*nPh  - F2[iT][c]*(1-F1[iT][v]);
+						GePh[iT] += GePhPrefac * omegaPh[ik2][alpha] * gePhSq * occFactors * delta;
+					}
+				}
+			}
+		}
+		
+		//Print progress:
+		if((iBunch+1) % iBunchInterval == 0)
+		{	logPrintf("%d%% ", int(round((iBunch+1)*100./nBunchesMine)));
+			logFlush();
+		}
+	}
+	logPrintf("done.\n"); logFlush();
+
+	//Matrix element statistics:
+	MepNum.allReduce(MPIUtil::ReduceSum);
+	MepDen.allReduce(MPIUtil::ReduceSum);
+	if(mpiUtil->isHead())
+	{	ofstream ofs("Mep.dat");
+		for(size_t i=0; i<MepNum.out.size(); i++)
+			ofs << (MepNum.Emin + i*MepNum.dE)/eV << '\t' << MepNum.out[i]/MepDen.out[i] << '\n';
+	}
+
+	//e-ph coupling:
+	GePh.allReduce(MPIUtil::ReduceSum);
+	for(size_t iT=0; iT<TeArr.size(); iT++)
+		GePh[iT] *= 1./(Tl - TeArr[iT]);
+	
 	if(mpiUtil->isHead())
 	{	const double Omega = fabs(det(R));
 		const double CeSI = Joule/(Kelvin*pow(meter,3));
+		const double GePhSI = Joule*invSeconds/(Kelvin*pow(meter,3));
 		ofstream ofs("TAparameters.dat");
-		ofs << "#T[K] dmu[eV]\n";
+		ofs << "#T[K] dmu[eV] Ce[J/m^3K] GePh[W/m^3K]\n";
 		for(size_t iT=0; iT<TeArr.size(); iT++)
 			ofs << TeArr[iT]/Kelvin << '\t'
 				<< dmu[iT]/eV << '\t'
-				<< Ce[iT]/(Omega*CeSI) << '\n';
+				<< Ce[iT]/(Omega*CeSI) << '\t'
+				<< GePh[iT]/(Omega*GePhSI) << '\n';
 	}
 	
 	finalizeSystem();
