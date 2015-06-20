@@ -207,10 +207,14 @@ int main(int argc, char** argv)
 				
 				for(int alpha=0; alpha<nModes; alpha++)
 				{	double nPh = 1./(exp(omegaPh[ik2][alpha]/Tl) - 1.);
-					std::vector<double> nPhArr(TeArr.size()); //phonon occupation at electron temperature
+					std::vector<double> nPh_T(TeArr.size()); //phonon occupation finite difference ratio between Tl and Te's
 					for(size_t iT=0; iT<TeArr.size(); iT++)
-						nPhArr[iT] = 1./(exp(omegaPh[ik2][alpha]/TeArr[iT]) - 1.);
-					
+					{	const double& Te = TeArr[iT];
+						double nPhTe = 1./(exp(omegaPh[ik2][alpha]/TeArr[iT]) - 1.); //phonon occupation at Te
+						nPh_T[iT] = (fabs(Tl-Te) > 1e-3*Tl)
+							? (nPh - nPhTe) / (Tl - Te)
+							: nPh*(nPh+1)*omegaPh[ik2][alpha]/(Tl*Tl); //dnPh/dTl (limit Te->Tl of above)
+					}
 					for(int v=0; v<nBands; v++)
 					for(int c=0; c<nBands; c++)
 					{	double gePhSq = gePh[ik2][alpha](c,v).norm();
@@ -223,16 +227,13 @@ int main(int argc, char** argv)
 						MepDen.addEvent(Earr[ik2][c], delta);
 						
 						for(size_t iT=0; iT<TeArr.size(); iT++)
-						{	double f1 = F1[iT][v];
-							double f2 = F2[iT][c];
-							//Compute partner fillings that satisfy exact energy conservation with current phonon
-							double nPhTe = nPhArr[iT]; //use detailed balance with phonon occupation at Te
-							double f1_db = f2*(1+nPhTe)/((1-f2)*nPhTe + f2*(1+nPhTe));
-							double f2_db = f1*nPhTe/((1-f1)*(1+nPhTe) + f1*nPhTe);
-							//Calculate contributions only using combinations of f that satisfy detailed balance with nPhTe
-							double occFactors1 = (f1-f2_db)*nPh  - f2_db*(1-f1);
-							double occFactors2 = (f1_db-f2)*nPh  - f2*(1-f1_db);
-							double occFactors = 0.5*(occFactors1 + occFactors2);
+						{	//Note occFactors = (f1-f2)*nPh - f2*(1-f1)
+							//Equlibrium => f1*(1-f2)*nPhTe = (1-f1)*f2*(nPhTe+1), where nPhTe = phonon occupation at Te
+							//  => 0 = (f1-f2)*nPhTe - f2*(1-f1)
+							//  => occFactor = (f1-f2) * (nPh - nPhTe)
+							//We can then bring in the temperature denominator 1/(Tl-Te) as well,
+							//and replace with a derivative d(nPh)/dTl when Te -> Tl
+							double occFactors = (F1[iT][v] - F2[iT][c]) * nPh_T[iT];
 							GePh[iT] += GePhPrefac * omegaPh[ik2][alpha] * gePhSq * occFactors * delta;
 						}
 					}
@@ -259,8 +260,6 @@ int main(int argc, char** argv)
 
 	//e-ph coupling:
 	GePh.allReduce(MPIUtil::ReduceSum);
-	for(size_t iT=0; iT<TeArr.size(); iT++)
-		GePh[iT] *= 1./(Tl - TeArr[iT]);
 	
 	if(mpiUtil->isHead())
 	{	const double Omega = fabs(det(R));
