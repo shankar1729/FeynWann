@@ -8,9 +8,27 @@
 #include "InputMap.h"
 #include "Units.h"
 #include "Histogram.h"
+#include "Epsilon.h"
 
 inline double fermi(double x) { return x>30. ? exp(-x) : 1./(1.+exp(x)); } //avoid overflow issues
 inline double fermiPrime(double x) { return 0.25*(std::pow(tanh(0.5*x), 2) - 1.); } //avoid overflow issues
+
+inline void writeImEps(const char* fname, const std::vector<Histogram>& ImEps, const std::vector<double> TeArr)
+{	std::ofstream ofs(fname);
+	//Header:
+	ofs << "#omega";
+	for(const double& Te: TeArr)
+		ofs << " ImEps[T=" << Te/Kelvin << "K]";
+	ofs << '\n';
+	//Data:
+	for(size_t iomega=0; iomega<ImEps[0].out.size(); iomega++)
+	{	double omega = ImEps[0].dE * iomega;
+		ofs << omega/eV;
+		for(const Histogram& h: ImEps)
+			ofs << ' ' << h.out[iomega];
+		ofs << '\n';
+	}
+}
 
 int main(int argc, char** argv)
 {	string inputFilename; bool dryRun, printDefaults;
@@ -165,6 +183,19 @@ int main(int argc, char** argv)
 	dmu.allReduce(MPIUtil::ReduceSum);
 	Ce.allReduce(MPIUtil::ReduceSum);
 	
+	//Initialize frequency grid:
+	double omegaMax = 0.;
+	for(size_t iT=0; iT<TeArr.size(); iT++)
+	{	double hEmax = dmu[iT] - Emin; //max hole energy
+		double eEmax = Emax - dmu[iT]; //max electron energy
+		double Emax = std::max(hEmax, eEmax) + 10*TeArr[iT]; //with margin for partially occupied excitations
+		omegaMax = std::max(omegaMax, Emax);
+	}
+	std::vector<Histogram> ImEpsDirect(TeArr.size(), Histogram(0, dE, omegaMax));
+	std::vector<Histogram> ImEpsPhonon(TeArr.size(), Histogram(0, dE, omegaMax));
+	int nomega = ImEpsDirect[0].out.size();
+	logPrintf("Initialized energy grid: 0 to %lg eV with %d points.\n", (dE*(nomega-1))/eV, nomega);
+	
 	//-------- Pass 2: electron-phonon coupling and dielectric response ---------
 	diagMatrix GePh(TeArr.size());
 	Histogram MepNum(Emin, dE, Emax);
@@ -195,6 +226,18 @@ int main(int argc, char** argv)
 		for(int ik1=0; ik1<bunchSize; ik1++)
 		{	const diagMatrix& E1 = Earr[ik1];
 			const std::vector<diagMatrix>& F1 = Farr[ik1];
+			const matrix& P1 = Parr[ik1][0];
+			
+			//Direct transition contributions to ImEps:
+			for(int v=0; v<nBands; v++)
+			{	for(int c=0; c<nBands; c++)
+				{	double omega = E1[c] - E1[v]; //energy conservation
+					if(omega<=0 || omega>=omegaMax) continue; //irrelevant event
+					double weight = (directPrefac0/(omega*omega)) * P1(c,v).norm(); //upto Te-dependent electron occupation factors
+					for(size_t iT=0; iT<TeArr.size(); iT++)
+						ImEpsDirect[iT].addEvent(omega, weight * (F1[iT][v] - F1[iT][c]));
+				}
+			}
 			
 			//Calculate phonon stuff for each pair of k-points involving ik1
 			bs.setPhononMatElemArray(kArr[ik1], kArr, gePh);
@@ -204,7 +247,8 @@ int main(int argc, char** argv)
 			for(int ik2=0; ik2<bunchSize; ik2++) if(ik2 != ik1)
 			{	const diagMatrix& E2 = Earr[ik2];
 				const std::vector<diagMatrix>& F2 = Farr[ik2];
-				
+				const matrix& P2 = Parr[ik2][0];
+			
 				for(int alpha=0; alpha<nModes; alpha++)
 				{	double nPh = 1./(exp(omegaPh[ik2][alpha]/Tl) - 1.);
 					std::vector<double> nPh_T(TeArr.size()); //phonon occupation finite difference ratio between Tl and Te's
@@ -259,6 +303,10 @@ int main(int argc, char** argv)
 	//e-ph coupling:
 	GePh.allReduce(MPIUtil::ReduceSum);
 	
+	//ImEps:
+	for(Histogram& h: ImEpsDirect) h.allReduce(MPIUtil::ReduceSum);
+	for(Histogram& h: ImEpsPhonon) h.allReduce(MPIUtil::ReduceSum);
+	
 	if(mpiUtil->isHead())
 	{	const double Omega = fabs(det(R));
 		const double CeSI = Joule/(Kelvin*pow(meter,3));
@@ -270,6 +318,20 @@ int main(int argc, char** argv)
 				<< dmu[iT]/eV << '\t'
 				<< Ce[iT]/(Omega*CeSI) << '\t'
 				<< GePh[iT]/(Omega*GePhSI) << '\n';
+		
+		//Print calculated ImEps contributions:
+		writeImEps("ImEps-direct.dat", ImEpsDirect, TeArr);
+		writeImEps("ImEps-phonon.dat", ImEpsPhonon, TeArr);
+		
+		//Print experimental dielectric function (at room temperature):
+		ofstream ofsExpt("ImEps-expt.dat");
+		ofsExpt << "#omega[eV] ImEpsExpt\n";
+		Epsilon eps("Wannier/epsilon.dat");
+		for(size_t iomega=0; iomega<ImEpsDirect[0].out.size(); iomega++)
+		{	double omega = dE * iomega;
+			eps.setFrequency(omega, false);
+			ofsExpt << omega/eV << '\t' << imag(eps.epsilon) << '\n';
+		}
 	}
 	
 	finalizeSystem();
