@@ -112,6 +112,12 @@ int main(int argc, char** argv)
 	double directPrefac0 = 4 * std::pow(M_PI,2) * spinWeight / (nKpts*fabs(det(R))); //frequency independent part of prefac
 	double GePhPrefac = spinWeight * (2*M_PI) / nKpairs;
 	
+	//Singularity extrapolation parameters
+	double extrapCoeff[] = {-19./12, 13./3, -7./4 }; //account for constant, 1/eta and eta^2 dependence
+	//double extrapCoeff[] = { -1, 2.}; //account for constant and 1/eta dependence
+	const int nExtrap = sizeof(extrapCoeff)/sizeof(double);
+	const double eta = 0.1*eV;
+
 	//-------- Pass 1: collect density of states, calculate mu(Te) and Ce(Te) ---------
 	
 	logPrintf("\nCollecting DOS: "); logFlush();
@@ -221,8 +227,8 @@ int main(int argc, char** argv)
 			}
 		}
 
-		diagMatrix omegaPh[bunchSize];
-		std::vector<matrix> gePh[bunchSize];
+		diagMatrix omegaPhArr[bunchSize];
+		std::vector<matrix> gePhArr[bunchSize];
 		for(int ik1=0; ik1<bunchSize; ik1++)
 		{	const diagMatrix& E1 = Earr[ik1];
 			const std::vector<diagMatrix>& F1 = Farr[ik1];
@@ -240,9 +246,9 @@ int main(int argc, char** argv)
 			}
 			
 			//Calculate phonon stuff for each pair of k-points involving ik1
-			bs.setPhononMatElemArray(kArr[ik1], kArr, gePh);
+			bs.setPhononMatElemArray(kArr[ik1], kArr, gePhArr);
 			for(int ik2=0; ik2<bunchSize; ik2++)
-				omegaPh[ik2] = bs.getPhononModes(kArr[ik1] - kArr[ik2]);
+				omegaPhArr[ik2] = bs.getPhononModes(kArr[ik1] - kArr[ik2]);
 
 			for(int ik2=0; ik2<bunchSize; ik2++) if(ik2 != ik1)
 			{	const diagMatrix& E2 = Earr[ik2];
@@ -250,33 +256,62 @@ int main(int argc, char** argv)
 				const matrix& P2 = Parr[ik2][0];
 			
 				for(int alpha=0; alpha<nModes; alpha++)
-				{	double nPh = 1./(exp(omegaPh[ik2][alpha]/Tl) - 1.);
+				{	const matrix& gePh = gePhArr[ik2][alpha];
+					double omegaPh = omegaPhArr[ik2][alpha];
+					double nPh = 1./(exp(omegaPh/Tl) - 1.);
 					std::vector<double> nPh_T(TeArr.size()); //phonon occupation finite difference ratio between Tl and Te's
 					for(size_t iT=0; iT<TeArr.size(); iT++)
 					{	const double& Te = TeArr[iT];
-						double nPhTe = 1./(exp(omegaPh[ik2][alpha]/TeArr[iT]) - 1.); //phonon occupation at Te
+						double nPhTe = 1./(exp(omegaPh/TeArr[iT]) - 1.); //phonon occupation at Te
 						nPh_T[iT] = (fabs(Tl-Te) > 1e-3*Tl)
 							? (nPh - nPhTe) / (Tl - Te)
-							: nPh*(nPh+1)*omegaPh[ik2][alpha]/(Tl*Tl); //dnPh/dTl (limit Te->Tl of above)
+							: nPh*(nPh+1)*omegaPh/(Tl*Tl); //dnPh/dTl (limit Te->Tl of above)
 					}
 					for(int v=0; v<nBands; v++)
 					for(int c=0; c<nBands; c++)
-					{	double gePhSq = gePh[ik2][alpha](c,v).norm();
-						double delta = EconservePrefac/(1. + std::pow(EconserveScaleFac*(E1[v]-E2[c] + omegaPh[ik2][alpha]),2));
+					{	double gePhSq = gePh(c,v).norm();
+						double delta = EconservePrefac/(1. + std::pow(EconserveScaleFac*(E1[v]-E2[c] + omegaPh),2));
 						
 						//Matrix element squared (weighted by energy conservation)
-						MepNum.addEvent(Earr[ik1][v], delta * gePhSq);
-						MepNum.addEvent(Earr[ik2][c], delta * gePhSq);
-						MepDen.addEvent(Earr[ik1][v], delta);
-						MepDen.addEvent(Earr[ik2][c], delta);
+						MepNum.addEvent(E1[v], delta * gePhSq);
+						MepNum.addEvent(E2[c], delta * gePhSq);
+						MepDen.addEvent(E1[v], delta);
+						MepDen.addEvent(E2[c], delta);
 						
+						//Electron-phonon heat baths coupling GePh:
 						for(size_t iT=0; iT<TeArr.size(); iT++)
 						{	//Note occFactors = ((f1-f2)*nPh - f2*(1-f1)) / (Tl - Te)
 							//Equlibrium => f1*(1-f2)*nPhTe = (1-f1)*f2*(nPhTe+1), where nPhTe = phonon occupation at Te
 							//  => 0 = (f1-f2)*nPhTe - f2*(1-f1)
 							//  => occFactors = (f1-f2) * (nPh - nPhTe)/(Tl - Te)
 							double occFactors = (F1[iT][v] - F2[iT][c]) * nPh_T[iT];
-							GePh[iT] += GePhPrefac * omegaPh[ik2][alpha] * gePhSq * occFactors * delta;
+							GePh[iT] += GePhPrefac * omegaPh * gePhSq * occFactors * delta;
+						}
+						
+						//Phonon-assisted transition contribution to ImEps:
+						for(int ae=-1; ae<=+1; ae+=2) // +/- for phonon absorption or emmision
+						{	double omega = E2[c] - E1[v] - ae*omegaPh; //energy conservation
+							if(omega<=0 || omega>=omegaMax) continue; //irrelevant event
+							//Effective matrix elements
+							std::vector<complex> Meff(nExtrap, 0.);
+							for(int i=0; i<nBands; i++) // sum over the intermediate states
+							{	complex P1iv = P1(i,v);
+								complex P2ci = P2(c,i);
+								for(int z=0; z<nExtrap; z++)
+								{	complex iEta(0, (z+1)*eta);
+									Meff[z] += 
+										( P2ci * gePh(i,v) / (E2[i]+iEta - (E2[c] - omega))
+										+ gePh(c,i) * P1iv / (E1[i]+iEta - (E1[v] + omega)) );
+								}
+							}
+							//Singularity extrapolation:
+							double MeffSqExtrap = 0.;
+							for(int z=0; z<nExtrap; z++)
+								MeffSqExtrap += extrapCoeff[z] * Meff[z].norm();
+							double weight = (phononPrefac0/(omega*omega)) * (nPh + 0.5*(1.-ae)) * MeffSqExtrap;
+							//Include T dependent electron occupations:
+							for(size_t iT=0; iT<TeArr.size(); iT++)
+								ImEpsPhonon[iT].addEvent(omega, weight * (F1[iT][v] - F2[iT][c]));
 						}
 					}
 				}
