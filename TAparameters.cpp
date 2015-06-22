@@ -355,11 +355,11 @@ int main(int argc, char** argv)
 				<< GePh[iT]/(Omega*GePhSI) << '\n';
 		
 		//Print calculated ImEps contributions:
-		writeImEps("ImEps-direct.dat", ImEpsDirect, TeArr);
-		writeImEps("ImEps-phonon.dat", ImEpsPhonon, TeArr);
+		writeImEps("ImEps_direct.dat", ImEpsDirect, TeArr);
+		writeImEps("ImEps_phonon.dat", ImEpsPhonon, TeArr);
 		
 		//Print experimental dielectric function (at room temperature):
-		ofstream ofsExpt("ImEps-expt.dat");
+		ofstream ofsExpt("ImEps_expt.dat");
 		ofsExpt << "#omega[eV] ImEpsExpt\n";
 		Epsilon eps("Wannier/epsilon.dat");
 		for(size_t iomega=0; iomega<ImEpsDirect[0].out.size(); iomega++)
