@@ -361,11 +361,14 @@ int main(int argc, char** argv)
 		//Print experimental dielectric function (at room temperature):
 		ofstream ofsExpt("ImEps_expt.dat");
 		ofsExpt << "#omega[eV] ImEpsExpt\n";
+		ofstream ofsReExpt("ReEps_expt.dat");
+		ofsExpt << "#omega[eV] ReEpsExpt\n";
 		Epsilon eps("Wannier/epsilon.dat");
 		for(size_t iomega=0; iomega<ImEpsDirect[0].out.size(); iomega++)
 		{	double omega = dE * iomega;
 			eps.setFrequency(omega, false);
 			ofsExpt << omega/eV << '\t' << imag(eps.epsilon) << '\n';
+			ofsReExpt << omega/eV << '\t' << real(eps.epsilon) << '\n';
 		}
 	}
 	
