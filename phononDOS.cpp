@@ -23,6 +23,9 @@ int main(int argc, char** argv)
 	const int nKptsN1 = inputMap.get("nKptsN1");
 	double mu = inputMap.get("mu"); //initial guess only - will be calculated self-consistently in this executable
 	const double Z = inputMap.get("Z"); //number of electrons per unit cell
+	const double v = inputMap.get("v") * meter/second; //speed of sound
+	const double N = inputMap.get("N"); //number of accoustic phonon modes
+	const double v = inputMap.get("V"); //volume of specimin
 	const double dE = inputMap.get("dE") * eV; //energy resolution used for output and energy conservation
 	const double TlMin = inputMap.get("TeMin") * Kelvin; //electron temperature grid start
 	const double TlMax = inputMap.get("TeMax") * Kelvin; //electron temperature grid stop
@@ -34,6 +37,9 @@ int main(int argc, char** argv)
 	logPrintf("nKptsN1 = %d\n", nKptsN1);
 	logPrintf("mu = %lg\n", mu);
 	logPrintf("Z = %lg\n", Z);
+	logPrintf("v = %lg\n", v);
+	logPrintf("N = %lg\n", N);
+	logPrintf("V = %lg\n", V);
 	logPrintf("dE = %lg\n", dE);
 	logPrintf("TlMin = %lg\n", TeMin);
 	logPrintf("TlMax = %lg\n", TeMax);
@@ -99,7 +105,7 @@ int main(int argc, char** argv)
 	const int nExtrap = sizeof(extrapCoeff)/sizeof(double);
 	const double eta = 0.1*eV;
 
-	//-------- Pass 1: collect density of states, calculate Cl(Tl) ---------
+	//-------- Collect density of states, calculate Cl(Tl) ---------
 	
 	logPrintf("\nCollecting DOS: "); logFlush();
 	std::vector< std::vector< vector3<> > > kArrArr(nBunchesMine); //use exact same set of MC k-points in the two passes for consistency
@@ -140,17 +146,28 @@ int main(int argc, char** argv)
 	for(int iT=iTstart; iT<iTstop; iT++)
 	{	const double Tl = TlArr[iT], invTl = 1./Tl;
 		
-		//Calculate lattice specific heat:
-		double& ClCur = Cl[iT];
+		//Calculate lattice specific heat using debye approximation:
+		double& ClCurDebye = Cl_debye[iT];
+		ClCur = 0.;
+		double debyeFreq = std::pow(6 * pi * pi * std::pow(v,3) * N / V,1/3);
+		for(double Ei=0; Ei<debyeFreq; Ei+=dE)
+		{	double x = invTl * Ei;
+			double expFac = 1/std::pow(exp(x)-1,2);
+			double prefac = 3 * V / (2 * pi * pi * std::pow(v,3) * Tl * Tl);
+			ClCurDebye += prefac * dE * std::pow(Ei,4) * exp(x) * expFac;
+		}
+
+		//Calculate lattice specific heat using phonon DOS:
+		double& ClCur = Cl_full[iT];
 		ClCur = 0.;
 		for(size_t ie=0; ie<dos.out.size(); ie++)
 		{	double Ei = Emin + ie*dE;
-			double x = invTl*Ei;
+			double x = invTl * Ei;
 			double expFac = 1/std::pow(exp(x)-1,2);
-			CeCur += dE * Ei * expFac  * dos.out[ie];
+			ClCur += dE * Ei * expFac  * dos.out[ie];
 		}
 	}
-	Ce.allReduce(MPIUtil::ReduceSum);
+	Cl_full.allReduce(MPIUtil::ReduceSum);
 	
 
 	if(mpiUtil->isHead())
