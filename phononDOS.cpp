@@ -128,7 +128,7 @@ int main(int argc, char** argv)
 	dos.print("phononDOS.dat", 1./eV, eV);
 	
 	//Calculate Cl at each temperature:
-	diagMatrix Ce_full(TlArr.size(), 0.), Ce_debye(TlArr.size(), 0.);
+	diagMatrix Cl_full(TlArr.size(), 0.), Cl_debye(TlArr.size(), 0.);
 	//--- check enough bands to contain Z: REMOVED THE ELECTRON VERSION OF THIS, IS ANYTHING LIKE THIS NEEDED FOR PHONONS?
 	int iTstart, iTstop; TaskDivision(TlArr.size(), mpiUtil).myRange(iTstart, iTstop);
 	for(int iT=iTstart; iT<iTstop; iT++)
