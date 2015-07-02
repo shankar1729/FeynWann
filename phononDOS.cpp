@@ -23,13 +23,13 @@ int main(int argc, char** argv)
 	const int nKptsN1 = inputMap.get("nKptsN1");
 	double mu = inputMap.get("mu"); //initial guess only - will be calculated self-consistently in this executable
 	const double Z = inputMap.get("Z"); //number of electrons per unit cell
-	const double v = inputMap.get("v") * meter/second; //speed of sound
+	const double v = inputMap.get("v") * meter * invSeconds; //speed of sound
 	const double N = inputMap.get("N"); //number of accoustic phonon modes
-	const double v = inputMap.get("V"); //volume of specimin
+	const double V = inputMap.get("V"); //volume of specimen
 	const double dE = inputMap.get("dE") * eV; //energy resolution used for output and energy conservation
-	const double TlMin = inputMap.get("TeMin") * Kelvin; //electron temperature grid start
-	const double TlMax = inputMap.get("TeMax") * Kelvin; //electron temperature grid stop
-	const double TlStep = inputMap.get("TeStep") * Kelvin; //electron temperature grid spacing
+	const double TlMin = inputMap.get("TlMin") * Kelvin; //electron temperature grid start
+	const double TlMax = inputMap.get("TlMax") * Kelvin; //electron temperature grid stop
+	const double TlStep = inputMap.get("TlStep") * Kelvin; //electron temperature grid spacing
 	const int spinWeight = round(inputMap.get("spinWeight"));
 	const matrix3<> R = matrix3<>(0,1,1, 1,0,1, 1,1,0) * (0.5*inputMap.get("aCubic")*Angstrom);
 
@@ -41,9 +41,9 @@ int main(int argc, char** argv)
 	logPrintf("N = %lg\n", N);
 	logPrintf("V = %lg\n", V);
 	logPrintf("dE = %lg\n", dE);
-	logPrintf("TlMin = %lg\n", TeMin);
-	logPrintf("TlMax = %lg\n", TeMax);
-	logPrintf("TlStep = %lg\n", TeStep);
+	logPrintf("TlMin = %lg\n", TlMin);
+	logPrintf("TlMax = %lg\n", TlMax);
+	logPrintf("TlStep = %lg\n", TlStep);
 	logPrintf("spinWeight = %d\n", spinWeight);
 	logPrintf("R:\n");
 	R.print(globalLog, " %lg ");
@@ -96,19 +96,11 @@ int main(int argc, char** argv)
 	long nKpairs = nKpts * (bunchSize-1); //total number of sampled k-point pairs for phonon-assisted transitions
 	int nBands = Egamma.nRows();
 	int nModes = bs.getPhononModes(vector3<>()).nRows();
-	double phononPrefac0 = 4 * std::pow(M_PI,2) * spinWeight / (nKpairs*fabs(det(R))); //frequency independent part of prefac
-	double directPrefac0 = 4 * std::pow(M_PI,2) * spinWeight / (nKpts*fabs(det(R))); //frequency independent part of prefac
-	
-	//Singularity extrapolation parameters
-	double extrapCoeff[] = {-19./12, 13./3, -7./4 }; //account for constant, 1/eta and eta^2 dependence
-	//double extrapCoeff[] = { -1, 2.}; //account for constant and 1/eta dependence
-	const int nExtrap = sizeof(extrapCoeff)/sizeof(double);
-	const double eta = 0.1*eV;
 
 	//-------- Collect density of states, calculate Cl(Tl) ---------
 	
 	logPrintf("\nCollecting DOS: "); logFlush();
-	std::vector< std::vector< vector3<> > > kArrArr(nBunchesMine); //use exact same set of MC k-points in the two passes for consistency
+	std::vector< std::vector< vector3<> > > kArrArr(nBunchesMine);
 	const double dosWeight = spinWeight*(1./nKpts);
 	for(int iBunch=0; iBunch<nBunchesMine; iBunch++)
 	{
@@ -136,24 +128,20 @@ int main(int argc, char** argv)
 	dos.print("phononDOS.dat", 1./eV, eV);
 	
 	//Calculate Cl at each temperature:
-	//--- check enough bands to contain Z:
-	double Zmax = 0.;
-	for(const double& g: dos.out)
-		Zmax += dE * g;
-	if(Zmax < Z)
-		die("Current DOS can only support %lg electrons > %lg electrons specified.\n", Zmax, Z);
-	int iTstart, iTstop; TaskDivision(TeArr.size(), mpiUtil).myRange(iTstart, iTstop);
+	diagMatrix Ce_full(TlArr.size(), 0.), Ce_debye(TlArr.size(), 0.);
+	//--- check enough bands to contain Z: REMOVED THE ELECTRON VERSION OF THIS, IS ANYTHING LIKE THIS NEEDED FOR PHONONS?
+	int iTstart, iTstop; TaskDivision(TlArr.size(), mpiUtil).myRange(iTstart, iTstop);
 	for(int iT=iTstart; iT<iTstop; iT++)
 	{	const double Tl = TlArr[iT], invTl = 1./Tl;
 		
 		//Calculate lattice specific heat using debye approximation:
 		double& ClCurDebye = Cl_debye[iT];
-		ClCur = 0.;
-		double debyeFreq = std::pow(6 * pi * pi * std::pow(v,3) * N / V,1/3);
+		ClCurDebye = 0.;
+		double debyeFreq = std::pow(6 * M_PI * M_PI * std::pow(v,3) * N / V,1/3);
 		for(double Ei=0; Ei<debyeFreq; Ei+=dE)
 		{	double x = invTl * Ei;
 			double expFac = 1/std::pow(exp(x)-1,2);
-			double prefac = 3 * V / (2 * pi * pi * std::pow(v,3) * Tl * Tl);
+			double prefac = 3 * V / (2 * M_PI * M_PI * std::pow(v,3) * Tl * Tl);
 			ClCurDebye += prefac * dE * std::pow(Ei,4) * exp(x) * expFac;
 		}
 
@@ -167,6 +155,7 @@ int main(int argc, char** argv)
 			ClCur += dE * Ei * expFac  * dos.out[ie];
 		}
 	}
+	Cl_debye.allReduce(MPIUtil::ReduceSum);
 	Cl_full.allReduce(MPIUtil::ReduceSum);
 	
 
@@ -174,10 +163,11 @@ int main(int argc, char** argv)
 	{	const double Omega = fabs(det(R));
 		const double ClSI = Joule/(Kelvin*pow(meter,3));
 		ofstream ofs("phononCl.dat");
-		ofs << "#T[K] Cl[J/m^3K] \n";
+		ofs << "#T[K] Cl_debye[J/m^3K] Cl_full[J/m^3K]\n";
 		for(size_t iT=0; iT<TlArr.size(); iT++)
 			ofs << TlArr[iT]/Kelvin << '\t'
-				<< Cl[iT]/(Omega*ClSI) << '\n';
+				<< Cl_debye[iT]/(Omega*ClSI) << '\t'
+				<< Cl_full[iT]/(Omega*ClSI) << '\n';
 		
 	}
 	
