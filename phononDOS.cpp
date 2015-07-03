@@ -16,35 +16,27 @@ inline double fermiPrime(double x) { return 0.25*(std::pow(tanh(0.5*x), 2) - 1.)
 
 int main(int argc, char** argv)
 {	string inputFilename; bool dryRun, printDefaults;
-	initSystemCmdline(argc, argv, "Ab initio parameters for Transient Absorption analysis", inputFilename, dryRun, printDefaults);
+	initSystemCmdline(argc, argv, "Phonon DOS and heat capacity", inputFilename, dryRun, printDefaults);
 
 	//Get the system parameters (mu, T, lattice vectors etc.)
 	InputMap inputMap(inputFilename);
 	const int nKptsN1 = inputMap.get("nKptsN1");
-	double mu = inputMap.get("mu"); //initial guess only - will be calculated self-consistently in this executable
-	const double Z = inputMap.get("Z"); //number of electrons per unit cell
-	const double v = inputMap.get("v") * meter * invSeconds; //speed of sound
-	const double N = inputMap.get("N"); //number of accoustic phonon modes
-	const double V = inputMap.get("V"); //volume of specimen
-	const double dE = inputMap.get("dE") * eV; //energy resolution used for output and energy conservation
+	const double vL = inputMap.get("vL") * meter*invSeconds; //longitudinal speed of sound
+	const double vT = inputMap.get("vT") * meter*invSeconds; //transverse speed of sound (assumed x2)
+	const double domegaPh = inputMap.get("domegaPh") * eV; //phonon energy resolution (should be much smaller than TD)
 	const double TlMin = inputMap.get("TlMin") * Kelvin; //electron temperature grid start
 	const double TlMax = inputMap.get("TlMax") * Kelvin; //electron temperature grid stop
 	const double TlStep = inputMap.get("TlStep") * Kelvin; //electron temperature grid spacing
-	const int spinWeight = round(inputMap.get("spinWeight"));
 	const matrix3<> R = matrix3<>(0,1,1, 1,0,1, 1,1,0) * (0.5*inputMap.get("aCubic")*Angstrom);
 
 	logPrintf("\nInputs after conversion to atomic units:\n");
 	logPrintf("nKptsN1 = %d\n", nKptsN1);
-	logPrintf("mu = %lg\n", mu);
-	logPrintf("Z = %lg\n", Z);
-	logPrintf("v = %lg\n", v);
-	logPrintf("N = %lg\n", N);
-	logPrintf("V = %lg\n", V);
-	logPrintf("dE = %lg\n", dE);
+	logPrintf("vL = %lg\n", vL);
+	logPrintf("vT = %lg\n", vT);
+	logPrintf("domegaPh = %lg\n", domegaPh);
 	logPrintf("TlMin = %lg\n", TlMin);
 	logPrintf("TlMax = %lg\n", TlMax);
 	logPrintf("TlStep = %lg\n", TlStep);
-	logPrintf("spinWeight = %d\n", spinWeight);
 	logPrintf("R:\n");
 	R.print(globalLog, " %lg ");
 	if(dryRun)
@@ -55,11 +47,7 @@ int main(int argc, char** argv)
 	logPrintf("\n");
 	
 	//Initialize Wannier bandstructure:
-	std::vector< vector3<complex> > Ahat(1); //assume cubic symmetry and only calculate x-axis
-	Ahat[0] = vector3<complex>(1., 0., 0.);
-	BandStruct bs("Wannier/wannier", mu, spinWeight, "Wannier/totalE", Ahat);
-	const int bunchSize = 32;
-	bs.setCacheSize(2*bunchSize);
+	BandStruct bs("Wannier/wannier", 0., 2., "Wannier/totalE");
 
 	//Initialize temperature grid:
 	std::vector<double> TlArr(int(ceil((TlMax-TlMin)/TlStep)));
@@ -67,59 +55,51 @@ int main(int argc, char** argv)
 		TlArr[iT] = TlMin + TlStep*iT;
 	logPrintf("Initialized temperature grid: %lg to %lg K with %lu points.\n", TlArr.front()/Kelvin, TlArr.back()/Kelvin, TlArr.size());
 	
-	//Initialize energy grid:
-	diagMatrix Egamma = bs.getStates(vector3<>());
-	double Emin = Egamma.front(), Emax = Egamma.back(); //eigenvalues are sorted
-	for(int i=0; i<10; i++)
-	{	std::vector<vector3<> > kArr(bunchSize);
-		for(vector3<>& k: kArr)
-			for(int j=0; j<3; j++)
-				k[j] = Random::uniform();
-		std::vector<diagMatrix> Earr = bs.getStates(kArr);
-		for(const diagMatrix& E: Earr)
-		{	Emin = std::min(Emin, E.front());
-			Emax = std::max(Emax, E.back());
-		}
+	//Calculate Debye temperatures / energies (same in atomic units):
+	const double kD  = std::pow(6*M_PI*M_PI/fabs(det(R)), 1./3);
+	const double TdebyeL = vL * kD; logPrintf("Longitudinal Debye energy: %3.0lf K (%.1lf meV)\n", TdebyeL/Kelvin, TdebyeL/(1e-3*eV));
+	const double TdebyeT = vT * kD; logPrintf("Transverse Debye energy:   %3.0lf K (%.1lf meV)\n", TdebyeT/Kelvin, TdebyeT/(1e-3*eV));
+	
+	//Initialize phonon energy grid:
+	double omegaPhMax = std::max(TdebyeL, TdebyeT);
+	for(int i=0; i<100; i++)
+	{	vector3<> k;
+		for(int j=0; j<3; j++)
+			k[j] = Random::uniform();
+		omegaPhMax = std::max(omegaPhMax, bs.getPhononModes(k).back());
 	}
-	mpiUtil->allReduce(Emin, MPIUtil::ReduceMin);
-	mpiUtil->allReduce(Emax, MPIUtil::ReduceMax);
-	Emin -= 10*dE; //add some margin
-	Emax += 10*dE;
-	Histogram dos(Emin, dE, Emax); //density of states
-	logPrintf("Initialized energy grid: %lg to %lg eV with %lu points.\n", Emin/eV, (Emin+dE*(dos.out.size()-1))/eV, dos.out.size());
+	mpiUtil->allReduce(omegaPhMax, MPIUtil::ReduceMax);
+	omegaPhMax *= 1.25; //add some margin
+	Histogram dos(0, domegaPh, omegaPhMax); //phonon density of states
+	logPrintf("Initialized phonon energy grid: 0 to %lg eV with %lu points.\n", (domegaPh*(dos.out.size()-1))/eV, dos.out.size());
 	
 	//Initialize sampling parameters:
 	int ikStart, ikStop; TaskDivision(nKptsN1, mpiUtil).myRange(ikStart, ikStop);
-	int nBunchesMine = ceil((ikStop-ikStart)*1./bunchSize); //number of bunches on current process
-	int iBunchInterval = std::max(1, int(round(nBunchesMine/50.))); //interval for reporting progress
-	long nKpts = nBunchesMine * bunchSize; mpiUtil->allReduce(nKpts, MPIUtil::ReduceSum); //total number of sampled k-points
-	long nKpairs = nKpts * (bunchSize-1); //total number of sampled k-point pairs for phonon-assisted transitions
-	int nBands = Egamma.nRows();
+	int nkMine = (ikStop-ikStart); //number of k's on current process
+	int ikInterval = std::max(1, int(round(nkMine/50.))); //interval for reporting progress
+	int nKpts = nkMine; mpiUtil->allReduce(nKpts, MPIUtil::ReduceSum); //total number of sampled k-points
 	int nModes = bs.getPhononModes(vector3<>()).nRows();
-
+	if(nModes != 3) logPrintf("WARNING: the Debye estimates are only valid if nModes = 3.\n");
+	
 	//-------- Collect density of states, calculate Cl(Tl) ---------
 	
 	logPrintf("\nCollecting DOS: "); logFlush();
-	std::vector< std::vector< vector3<> > > kArrArr(nBunchesMine);
-	const double dosWeight = spinWeight*(1./nKpts);
-	for(int iBunch=0; iBunch<nBunchesMine; iBunch++)
+	const double dosWeight = (1./nKpts);
+	for(int ik=0; ik<nkMine; ik++)
 	{
-		//Generate a bunch of k-points:
-		std::vector< vector3<> >& kArr = kArrArr[iBunch];
-		kArr.resize(bunchSize);
-		for(vector3<>& k: kArr)
-			for(int j=0; j<3; j++)
-				k[j] = Random::uniform();
+		//Generate a random k-point:
+		vector3<> k;
+		for(int j=0; j<3; j++)
+			k[j] = Random::uniform();
 		
 		//Collect DOS:
-		std::vector<diagMatrix> Earr = bs.getStates(kArr);
-		for(const diagMatrix& E: Earr)
-			for(const double& Ei: E)
-				dos.addEvent(Ei, dosWeight);
+		const diagMatrix omegaPh = bs.getPhononModes(k);
+		for(const double& omega: omegaPh)
+			dos.addEvent(omega, dosWeight);
 		
 		//Print progress:
-		if((iBunch+1) % iBunchInterval == 0)
-		{	logPrintf("%d%% ", int(round((iBunch+1)*100./nBunchesMine)));
+		if((ik+1) % ikInterval == 0)
+		{	logPrintf("%d%% ", int(round((ik+1)*100./nkMine)));
 			logFlush();
 		}
 	}
@@ -128,47 +108,41 @@ int main(int argc, char** argv)
 	dos.print("phononDOS.dat", 1./eV, eV);
 	
 	//Calculate Cl at each temperature:
-	diagMatrix Cl_full(TlArr.size(), 0.), Cl_debye(TlArr.size(), 0.);
-	//--- check enough bands to contain Z: REMOVED THE ELECTRON VERSION OF THIS, IS ANYTHING LIKE THIS NEEDED FOR PHONONS?
+	diagMatrix Cl(TlArr.size(), 0.), ClDebye(TlArr.size(), 0.);
 	int iTstart, iTstop; TaskDivision(TlArr.size(), mpiUtil).myRange(iTstart, iTstop);
+	const double dosPrefacDebyeL = fabs(det(R)) / (2*M_PI*M_PI * std::pow(vL,3)); 
+	const double dosPrefacDebyeT = fabs(det(R)) / (2*M_PI*M_PI * std::pow(vT,3)); 
 	for(int iT=iTstart; iT<iTstop; iT++)
 	{	const double Tl = TlArr[iT], invTl = 1./Tl;
 		
-		//Calculate lattice specific heat using debye approximation:
-		double& ClCurDebye = Cl_debye[iT];
-		ClCurDebye = 0.;
-		double debyeFreq = std::pow(6 * M_PI * M_PI * std::pow(v,3) * N / V,1/3);
-		for(double Ei=0; Ei<debyeFreq; Ei+=dE)
-		{	double x = invTl * Ei;
-			double expFac = 1/std::pow(exp(x)-1,2);
-			double prefac = 3 * V / (2 * M_PI * M_PI * std::pow(v,3) * Tl * Tl);
-			ClCurDebye += prefac * dE * std::pow(Ei,4) * exp(x) * expFac;
-		}
-
-		//Calculate lattice specific heat using phonon DOS:
-		double& ClCur = Cl_full[iT];
-		ClCur = 0.;
-		for(size_t ie=0; ie<dos.out.size(); ie++)
-		{	double Ei = Emin + ie*dE;
-			double x = invTl * Ei;
-			double expFac = 1/std::pow(exp(x)-1,2);
-			ClCur += dE * Ei * expFac  * dos.out[ie];
+		//Calculate lattice specific heat using DOS:
+		double& ClCur = Cl[iT]; ClCur = 0.;
+		double& ClDebyeCur = ClDebye[iT]; ClDebyeCur = 0.;
+		for(size_t ie=1; ie<dos.out.size(); ie++) //omit zero energy phonons to avoid 0/0 error
+		{	double omegaPh = ie*domegaPh;
+			double x = invTl * omegaPh;
+			double g = 1./(exp(x)-1.);
+			double g_Tl = g*(g+1)*x/Tl; //dg/dTl
+			ClCur += domegaPh * omegaPh * g_Tl  * dos.out[ie];
+			//Debye approximation:
+			double dosDebyeL = dosPrefacDebyeL * (omegaPh<TdebyeL ? omegaPh*omegaPh : 0.);
+			double dosDebyeT = dosPrefacDebyeT * (omegaPh<TdebyeT ? omegaPh*omegaPh : 0.); //per mode
+			double dosDebye = dosDebyeL + 2*dosDebyeT; //2 transverse modes
+			ClDebyeCur += domegaPh * omegaPh * g_Tl  * dosDebye;
 		}
 	}
-	Cl_debye.allReduce(MPIUtil::ReduceSum);
-	Cl_full.allReduce(MPIUtil::ReduceSum);
-	
+	Cl.allReduce(MPIUtil::ReduceSum);
+	ClDebye.allReduce(MPIUtil::ReduceSum);
 
 	if(mpiUtil->isHead())
 	{	const double Omega = fabs(det(R));
 		const double ClSI = Joule/(Kelvin*pow(meter,3));
 		ofstream ofs("phononCl.dat");
-		ofs << "#T[K] Cl_debye[J/m^3K] Cl_full[J/m^3K]\n";
+		ofs << "#T[K] Cl[J/m^3K] ClDebye[J/m^3K]\n";
 		for(size_t iT=0; iT<TlArr.size(); iT++)
 			ofs << TlArr[iT]/Kelvin << '\t'
-				<< Cl_debye[iT]/(Omega*ClSI) << '\t'
-				<< Cl_full[iT]/(Omega*ClSI) << '\n';
-		
+				<< Cl[iT]/(Omega*ClSI) << '\t'
+				<< ClDebye[iT]/(Omega*ClSI) << '\n';
 	}
 	
 	finalizeSystem();
