@@ -42,7 +42,7 @@ imEps(find(imEps<0)) = 0; #remove unphysical negative parts
 #Smooth ImEps data at each temperature
 nEps = size(imEps,2);
 sWeight = repmat(omega.^3, 1,nEps);
-imEpsSmooth = smooth(imEps .* sWeight, nSmooth) ./ sWeight;
+imEpsSmooth = smoothColumns(imEps .* sWeight, nSmooth) ./ sWeight;
 
 #Check frequency grid:
 nOmega = length(omega)-1;
