@@ -17,11 +17,8 @@ int main(int argc, char** argv)
 
 	//Get the system parameters (mu, T, lattice vectors etc.)
 	InputMap inputMap(inputFilename);
-	const int nKptsN1 = inputMap.get("nKptsN1");
 	const double EplasmonMax = inputMap.get("EplasmonMax") * eV;
-	const double mu = inputMap.get("mu");
 	const double T = inputMap.get("T") * eV;
-	const int spinWeight = round(inputMap.get("spinWeight"));
 	const matrix3<> R = matrix3<>(0,1,1, 1,0,1, 1,1,0) * (0.5*inputMap.get("aCubic")*Angstrom);
 	const double Zjellium = inputMap.get("Zjellium");
 	const int tau = inputMap.get("tau")*fs;
@@ -29,11 +26,8 @@ int main(int argc, char** argv)
 	const double sigma_o = 1/rho;
 
 	logPrintf("\nInputs after conversion to atomic units:\n");
-	logPrintf("nKptsN1 = %d\n", nKptsN1);
 	logPrintf("EplasmonMax = %lg\n", EplasmonMax);
-	logPrintf("mu = %lg\n", mu);
 	logPrintf("T = %lg\n", T);
-	logPrintf("spinWeight = %d\n", spinWeight);
 	logPrintf("R:\n");
 	R.print(globalLog, " %lg ");
 	logPrintf("Zjellium = %lg\n", Zjellium);
