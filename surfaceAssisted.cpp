@@ -58,7 +58,7 @@ int main(int argc, char** argv)
 		vector3<> q;
 		while(true)
 		{	for(int j=0; j<3; j++) //draw from bounding box
-				q[j] = Random::normal(-kF,kF);
+				q[j] = Random::uniform(-kF,kF);
 			if(q.length() < kF) break; //done if inside sphere
 		}
 		//Generate random |qz'| < qMax
@@ -98,9 +98,10 @@ int main(int argc, char** argv)
 		{	double omega = GammaSurface.Emin + i*GammaSurface.dE;
 			eps.setFrequency(omega, false);
 			double GammaRef = 0.75*vF*eps.modGammaMinus; //Khurgin
-			double GammaCorrected = GammaRef * 2./(1.+std::pow(eps.modGammaMinus/eps.k, 2)); //our corrected expression
+			double GammaCorrected = GammaRef * 2./(1.+std::pow(eps.modGammaMinus/eps.k, 2)); //our corrected expression (simpler version)
 			double GammaCorrected2 = GammaCorrected
-				* (1.+0.25*std::pow(vF*(std::pow(eps.modGammaMinus,2)-std::pow(eps.k,2))/(omega*eps.k), 2));
+				* ( 1. - (1./4)*std::pow(omega/(0.5*kF*kF),2)*log(2*kF*kF/omega)
+					+ (1./6)*std::pow(eps.modGammaMinus/eps.k,2)/(1.+std::pow(omega/(vF*eps.modGammaMinus),2)) );
 			ofs << omega/eV
 				<< '\t' << GammaSurface.out[i]*fs
 				<< '\t' << GammaRef*fs
