@@ -54,9 +54,11 @@ int main(int argc, char** argv)
 	ofstream ofs1("drudeEpsilon.dat");
 	ofstream ofs2("drudeGamma.dat");
 
-	double gaussMargin = 5*T;
-	for(double omega = gaussMargin; omega <= EplasmonMax-gaussMargin; omega += T)
-	{	eps.setFrequency(omega, false);
+	double domega = T;
+	Histogram h(0, domega, EplasmonMax); //dummy histogram to match plasmonDceay grid exactly
+	for(size_t jomega=0; jomega<h.out.size(); jomega++)
+	{	double omega = jomega ? jomega*domega : 1e-3*domega; //avoid exact zero in calculation
+		eps.setFrequency(omega, false);
 		complex sigma = complex(sigma_o) / complex(1,-omega*tau);
 		epsilon = 1.+ 4*M_PI*complex(-imag(sigma),real(sigma)) / complex(omega);
 		double imEpsSurface = 0.75 * omegaPsq * eps.modGammaMinus * vF / std::pow(omega,3) //Khurgin's version
@@ -66,6 +68,7 @@ int main(int argc, char** argv)
 				+ (1./6)*std::pow(eps.modGammaMinus/eps.k,2)/(1.+std::pow(omega/(vF*eps.modGammaMinus),2)) //low-frequency correction
 			);
 		double prefac = eps.exptLinewidth()/eps.epsilon.imag(); //ratio between plasmon linewidth and imaginary part of epsilon
+		omega = jomega*domega; //output exact zero
 		ofs1 << omega/eV << '\t' << real(epsilon) << '\t' << imag(epsilon) << '\n'; //Output energies in eV units
 		ofs2 << omega/eV << '\t' << prefac*imag(epsilon)/eV << '\t' << prefac*imEpsSurface/eV << '\n'; //Output energies in eV units
 	}

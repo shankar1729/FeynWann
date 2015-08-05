@@ -200,7 +200,7 @@ int main(int argc, char** argv)
 	std::vector<Histogram> ImEpsDirect(TeArr.size(), Histogram(0, dE, omegaMax));
 	std::vector<Histogram> ImEpsPhonon(TeArr.size(), Histogram(0, dE, omegaMax));
 	int nomega = ImEpsDirect[0].out.size();
-	logPrintf("Initialized energy grid: 0 to %lg eV with %d points.\n", (dE*(nomega-1))/eV, nomega);
+	logPrintf("Initialized frequency grid: 0 to %lg eV with %d points.\n", (dE*(nomega-1))/eV, nomega);
 	
 	//-------- Pass 2: electron-phonon coupling and dielectric response ---------
 	diagMatrix GePh(TeArr.size());
