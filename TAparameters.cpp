@@ -10,6 +10,15 @@
 #include "Histogram.h"
 #include "Epsilon.h"
 
+//Lorentzian kernel for an odd function stored on postive frequencies alone:
+inline double lorentzianOdd(double omega, double omega0, double breadth)
+{       double breadthSq = std::pow(breadth,2);
+        return (breadth/M_PI) *
+                ( 1./(breadthSq + std::pow(omega-omega0, 2))
+                - 1./(breadthSq + std::pow(omega+omega0, 2)) );
+}
+
+
 inline double fermi(double x) { return x>30. ? exp(-x) : 1./(1.+exp(x)); } //avoid overflow issues
 inline double fermiPrime(double x) { return 0.25*(std::pow(tanh(0.5*x), 2) - 1.); } //avoid overflow issues
 
@@ -189,6 +198,10 @@ int main(int argc, char** argv)
 	dmu.allReduce(MPIUtil::ReduceSum);
 	Ce.allReduce(MPIUtil::ReduceSum);
 	
+	//Initalize line width of electronic states
+	LineWidth lineWidth("Wannier/wannier", bs);
+
+
 	//Initialize frequency grid:
 	double omegaMax = 0.;
 	for(size_t iT=0; iT<TeArr.size(); iT++)
@@ -197,8 +210,11 @@ int main(int argc, char** argv)
 		double Emax = std::max(hEmax, eEmax) + 10*TeArr[iT]; //with margin for partially occupied excitations
 		omegaMax = std::max(omegaMax, Emax);
 	}
-	std::vector<Histogram> ImEpsDirect(TeArr.size(), Histogram(0, dE, omegaMax));
-	std::vector<Histogram> ImEpsPhonon(TeArr.size(), Histogram(0, dE, omegaMax));
+	
+	//Initialize unbroadened histograms:
+	const double domega = T;
+	std::vector<Histogram> ImEpsDirect(TeArr.size(), Histogram(0, domega, omegaMax)), breadthDirect(TeArr.size(), Histogram(0, domega, omegaMax));
+	std::vector<Histogram> ImEpsPhonon(TeArr.size(), Histogram(0, domega, omegaMax)), breadthPhonon(TeArr.size(), Histogram(0, domega, omegaMax)),  weightPhonon(TeArr.size(), Histogram(0, domega, omegaMax));
 	int nomega = ImEpsDirect[0].out.size();
 	logPrintf("Initialized frequency grid: 0 to %lg eV with %d points.\n", (dE*(nomega-1))/eV, nomega);
 	
@@ -215,6 +231,7 @@ int main(int argc, char** argv)
 		
 		//Calculate electronic states and matrix elements for bunch:
 		std::vector<diagMatrix> Earr = bs.getStates(kArr);
+		std::vector<diagMatrix> ImEarr = lineWidth(kArr);
 		std::vector< std::vector<matrix> > Parr = bs.getDipoleMatElem(kArr);
 		std::vector< std::vector<diagMatrix> > Farr(bunchSize); //fillings by k-point, temperature and band
 		for(int ik=0; ik<bunchSize; ik++)
@@ -231,6 +248,7 @@ int main(int argc, char** argv)
 		std::vector<matrix> gePhArr[bunchSize];
 		for(int ik1=0; ik1<bunchSize; ik1++)
 		{	const diagMatrix& E1 = Earr[ik1];
+			const diagMatrix& ImE = ImEarr[ik];
 			const std::vector<diagMatrix>& F1 = Farr[ik1];
 			const matrix& P1 = Parr[ik1][0];
 			
@@ -238,10 +256,12 @@ int main(int argc, char** argv)
 			for(int v=0; v<nBands; v++)
 			{	for(int c=0; c<nBands; c++)
 				{	double omega = E1[c] - E1[v]; //energy conservation
-					if(omega<=0 || omega>=omegaMax) continue; //irrelevant event
+					if(omega<=domega || omega>=omegaMax) continue; //irrelevant event
 					double weight = (directPrefac0/(omega*omega)) * P1(c,v).norm(); //upto Te-dependent electron occupation factors
 					for(size_t iT=0; iT<TeArr.size(); iT++)
-						ImEpsDirect[iT].addEvent(omega, weight * (F1[iT][v] - F1[iT][c]));
+					{	ImEpsDirect[iT].addEvent(omega, weight * (F1[iT][v] - F1[iT][c]));
+						breadthDirect.addEvent(omega, weight * (F1[iT][v] - F1[iT][c]) * (ImE[c]+ImE[v]));
+					}	
 				}
 			}
 			
