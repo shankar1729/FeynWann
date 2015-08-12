@@ -216,7 +216,7 @@ int main(int argc, char** argv)
 	std::vector<Histogram> ImEpsDirect(TeArr.size(), Histogram(0, domega, omegaMax)), breadthDirect(TeArr.size(), Histogram(0, domega, omegaMax));
 	std::vector<Histogram> ImEpsPhonon(TeArr.size(), Histogram(0, domega, omegaMax)), breadthPhonon(TeArr.size(), Histogram(0, domega, omegaMax)),  weightPhonon(TeArr.size(), Histogram(0, domega, omegaMax));
 	int nomega = ImEpsDirect[0].out.size();
-	logPrintf("Initialized frequency grid: 0 to %lg eV with %d points.\n", (dE*(nomega-1))/eV, nomega);
+	logPrintf("Initialized frequency grid: 0 to %lg eV with %d points.\n", (domega*(nomega-1))/eV, nomega);
 	
 	//-------- Pass 2: electron-phonon coupling and dielectric response ---------
 	diagMatrix GePh(TeArr.size());
@@ -248,7 +248,7 @@ int main(int argc, char** argv)
 		std::vector<matrix> gePhArr[bunchSize];
 		for(int ik1=0; ik1<bunchSize; ik1++)
 		{	const diagMatrix& E1 = Earr[ik1];
-			const diagMatrix& ImE = ImEarr[ik];
+			const diagMatrix& ImE1 = ImEarr[ik1];
 			const std::vector<diagMatrix>& F1 = Farr[ik1];
 			const matrix& P1 = Parr[ik1][0];
 			
@@ -260,7 +260,7 @@ int main(int argc, char** argv)
 					double weight = (directPrefac0/(omega*omega)) * P1(c,v).norm(); //upto Te-dependent electron occupation factors
 					for(size_t iT=0; iT<TeArr.size(); iT++)
 					{	ImEpsDirect[iT].addEvent(omega, weight * (F1[iT][v] - F1[iT][c]));
-						breadthDirect.addEvent(omega, weight * (F1[iT][v] - F1[iT][c]) * (ImE[c]+ImE[v]));
+						breadthDirect[iT].addEvent(omega, weight * (F1[iT][v] - F1[iT][c]) * (ImE1[c]+ImE1[v]));
 					}	
 				}
 			}
@@ -272,6 +272,7 @@ int main(int argc, char** argv)
 
 			for(int ik2=0; ik2<bunchSize; ik2++) if(ik2 != ik1)
 			{	const diagMatrix& E2 = Earr[ik2];
+				const diagMatrix& ImE2 = ImEarr[ik2];
 				const std::vector<diagMatrix>& F2 = Farr[ik2];
 				const matrix& P2 = Parr[ik2][0];
 			
@@ -311,7 +312,7 @@ int main(int argc, char** argv)
 						//Phonon-assisted transition contribution to ImEps:
 						for(int ae=-1; ae<=+1; ae+=2) // +/- for phonon absorption or emmision
 						{	double omega = E2[c] - E1[v] - ae*omegaPh; //energy conservation
-							if(omega<=0 || omega>=omegaMax) continue; //irrelevant event
+							if(omega<=domega || omega>=omegaMax) continue; //irrelevant event
 							//Effective matrix elements
 							std::vector<complex> Meff(nExtrap, 0.);
 							for(int i=0; i<nBands; i++) // sum over the intermediate states
@@ -331,7 +332,10 @@ int main(int argc, char** argv)
 							double weight = (phononPrefac0/(omega*omega)) * (nPh + 0.5*(1.-ae)) * MeffSqExtrap;
 							//Include T dependent electron occupations:
 							for(size_t iT=0; iT<TeArr.size(); iT++)
-								ImEpsPhonon[iT].addEvent(omega, weight * (F1[iT][v] - F2[iT][c]));
+							{	ImEpsPhonon[iT].addEvent(omega, weight * (F1[iT][v] - F2[iT][c]));
+								breadthPhonon[iT].addEvent(omega, fabs(weight)*(ImE2[c]+ImE1[v]));
+								weightPhonon[iT].addEvent(omega, fabs(weight)); //different from ImEpsPhonon, since weight can be negative due to singularity extrapolation
+							}
 						}
 					}
 				}
@@ -361,7 +365,38 @@ int main(int argc, char** argv)
 	//ImEps:
 	for(Histogram& h: ImEpsDirect) h.allReduce(MPIUtil::ReduceSum);
 	for(Histogram& h: ImEpsPhonon) h.allReduce(MPIUtil::ReduceSum);
-	
+	for(Histogram& h: breadthDirect) h.allReduce(MPIUtil::ReduceSum);
+	for(Histogram& h: breadthPhonon) h.allReduce(MPIUtil::ReduceSum);
+	for(Histogram& h: weightPhonon) h.allReduce(MPIUtil::ReduceSum);
+
+	//Normalize the breadths
+	for(size_t iT=0; iT<TeArr.size(); iT++)
+	{	for(int iomega=0; iomega<nomega; iomega++)
+		{	breadthDirect[iT].out[iomega] = std::max(T, ImEpsDirect[iT].out[iomega] ? breadthDirect[iT].out[iomega]/ImEpsDirect[iT].out[iomega] : 0.);
+			breadthPhonon[iT].out[iomega] = std::max(T, weightPhonon[iT].out[iomega] ? breadthPhonon[iT].out[iomega]/weightPhonon[iT].out[iomega] : 0.);
+		}
+	}
+
+	//Apply Broadening
+	std::vector<Histogram> ImEpsDirectBroad(TeArr.size(), Histogram(0, domega, omegaMax));
+	std::vector<Histogram> ImEpsPhononBroad(TeArr.size(), Histogram(0, domega, omegaMax))
+	int iomegaStart, iomegaStop; TaskDivision(nomega, mpiUtil).myRange(iomegaStart, iomegaStop);
+	logPrintf("Applying broadening ... "); logFlush();
+	for(size_t iT=0; iT<TeArr.size(); iT++)
+	{	for(int iomega=iomegaStart; iomega<iomegaStop; iomega++) //input frequency grid split over MPI
+		{	double omegaCur = iomega*domega;
+			double bDirect = breadthDirect[iT].out[iomega];
+			double bPhonon = breadthPhonon[iT].out[iomega];
+			for(size_t jomega=0; jomega<ImEpsDirectBroad[iT].out.size(); jomega++) //output frequency grid
+			{	double omega = jomega*domega;
+				double kernelDirect = lorentzianOdd(omega, omegaCur, bDirect) * domega;
+				double kernelPhonon = lorentzianOdd(omega, omegaCur, bPhonon) * domega;
+				ImEpsDirectBroad[iT].out[jomega] += kernelDirect * ImEpsDirect[iT].out[iomega];
+				ImEpsPhononBroad[iT].out[jomega] += kernelPhonon * ImEpsPhonon[iT].out[iomega];
+			}
+		}
+	}
+
 	if(mpiUtil->isHead())
 	{	const double Omega = fabs(det(R));
 		const double CeSI = Joule/(Kelvin*pow(meter,3));
@@ -375,8 +410,8 @@ int main(int argc, char** argv)
 				<< GePh[iT]/(Omega*GePhSI) << '\n';
 		
 		//Print calculated ImEps contributions:
-		writeImEps("ImEps_direct.dat", ImEpsDirect, TeArr);
-		writeImEps("ImEps_phonon.dat", ImEpsPhonon, TeArr);
+		writeImEps("ImEps_direct.dat", ImEpsDirectBroad, TeArr);
+		writeImEps("ImEps_phonon.dat", ImEpsPhononBroad, TeArr);
 		
 		//Print experimental dielectric function (at room temperature):
 		ofstream ofsExpt("ImEps_expt.dat");
