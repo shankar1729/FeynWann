@@ -199,6 +199,9 @@ int main(int argc, char** argv)
 	dmu.allReduce(MPIUtil::ReduceSum);
 	Ce.allReduce(MPIUtil::ReduceSum);
 	
+
+
+	// -------------------------------------  Setup for Pass 2 --------------------------------------
 	//Initalize line width of electronic states
 	LineWidth lineWidth("Wannier/wannier", bs);
 
@@ -256,7 +259,7 @@ int main(int argc, char** argv)
 			for(int v=0; v<nBands; v++)
 			{	for(int c=0; c<nBands; c++)
 				{	double omega = E1[c] - E1[v]; //energy conservation
-					if(omega<=dE || omega>=omegaMax) continue; //irrelevant event
+					if(omega<dE || omega>=omegaMax) continue; //irrelevant event
 					double weight = (directPrefac0/(omega*omega)) * P1(c,v).norm(); //upto Te-dependent electron occupation factors
 					for(size_t iT=0; iT<TeArr.size(); iT++)
 					{	ImEpsDirect[iT].addEvent(omega, weight * (F1[iT][v] - F1[iT][c]));
@@ -312,7 +315,7 @@ int main(int argc, char** argv)
 						//Phonon-assisted transition contribution to ImEps:
 						for(int ae=-1; ae<=+1; ae+=2) // +/- for phonon absorption or emmision
 						{	double omega = E2[c] - E1[v] - ae*omegaPh; //energy conservation
-							if(omega<=dE || omega>=omegaMax) continue; //irrelevant event
+							if(omega<dE || omega>=omegaMax) continue; //irrelevant event
 							//Effective matrix elements
 							std::vector<complex> Meff(nExtrap, 0.);
 							for(int i=0; i<nBands; i++) // sum over the intermediate states
@@ -333,8 +336,8 @@ int main(int argc, char** argv)
 							//Include T dependent electron occupations:
 							for(size_t iT=0; iT<TeArr.size(); iT++)
 							{	ImEpsPhonon[iT].addEvent(omega, weight * (F1[iT][v] - F2[iT][c]));
-								breadthPhonon[iT].addEvent(omega, fabs(weight)*(ImE2[c]+ImE1[v]));
-								weightPhonon[iT].addEvent(omega, fabs(weight)); //different from ImEpsPhonon, since weight can be negative due to singularity extrapolation
+								breadthPhonon[iT].addEvent(omega, fabs(weight * (F1[iT][v] - F2[iT][c]))*(ImE2[c]+ImE1[v]));
+								weightPhonon[iT].addEvent(omega, fabs(weight * (F1[iT][v] - F2[iT][c]))); //different from ImEpsPhonon, since weight can be negative due to singularity extrapolation
 							}
 						}
 					}
