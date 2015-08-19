@@ -399,6 +399,9 @@ int main(int argc, char** argv)
 			}
 		}
 	}
+        
+        for(Histogram& h: ImEpsDirectBroad) h.allReduce(MPIUtil::ReduceSum);
+        for(Histogram& h: ImEpsPhononBroad) h.allReduce(MPIUtil::ReduceSum);
 
 	if(mpiUtil->isHead())
 	{	const double Omega = fabs(det(R));

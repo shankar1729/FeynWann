@@ -15,22 +15,29 @@ int main(int argc, char** argv)
         InputMap inputMap(inputFilename);
         const int nKptsN1 = inputMap.get("nKptsN1");
         const int totalBlocks = inputMap.get("totalBlocks"); assert(totalBlocks>0);
-        const double T = inputMap.get("T") * eV;
+	const double T = inputMap.get("T")*eV; // jellium fermi energy
 	const double Ef = inputMap.get("Ef"); // jellium fermi energy
 	const double epsilon_b = inputMap.get("epsilon_b"); // from vallee paper
 	const double beta = inputMap.get("beta"); // from vallee paper, q_s = beta * q_TF
+	const double Zjellium = inputMap.get("Zjellium");
+	const matrix3<> R = matrix3<>(0,1,1, 1,0,1, 1,1,0) * (0.5*inputMap.get("aCubic")*Angstrom);
 
         logPrintf("\nInputs after conversion to atomic units:\n");
         logPrintf("nKptsN1 = %d\n", nKptsN1);
         logPrintf("totalBlocks = %d\n", totalBlocks);
         logPrintf("T = %lg\n", T);
-        logPrintf("Ef = %lg\n", Ef);
+	logPrintf("Ef = %lg\n", Ef);
         logPrintf("epsilon_b = %lg\n", epsilon_b);
         logPrintf("beta = %lg\n", beta);
+	logPrintf("Zjellium = %lg\n", Zjellium);
+	logPrintf("R:\n");
+	R.print(globalLog, " %lg ");
         
 	const int bunchSize = 32;
 	
 	const double epsilon_o = 1/(4*M_PI);;
+	const double nJellium = Zjellium / fabs(det(R));
+	logPrintf("nJellium = %lg\n", nJellium);
 
 	// Compute qTF
 	double qSqSum = 0., qSqSumSq=0.;
@@ -43,22 +50,19 @@ int main(int argc, char** argv)
                 double nKpts = 0.; int nBunches = 0;
                 while(nKpts < nKptsMin)
                 {       //Get a bunch of k-points
-                        std::vector< vector3<> > kArr; kArr.reserve(bunchSize);
-                        while(kArr.size() < bunchSize)
-                        {	vector3<> k;
-                                for(int j=0; j<3; j++)
+                        std::vector< vector3<> > kArr(bunchSize);
+                        for(vector3<>& k: kArr)
+                       {	for(int j=0; j<3; j++)
 					k[j] = Random::uniform();
-				kArr.push_back(k);
-				nKpts += bunchSize;
+				nKpts += 1;
                         }
-                        nBunches++;
+			nBunches++;
 
 			//Get energies and q_TF squared sum for selected bunch
-                        for(int ik=0; ik<bunchSize; ik++)
+			for(int ik=0; ik<bunchSize; ik++)
 			{	double Ek = (kArr[ik][0]*kArr[ik][0]+kArr[ik][1]*kArr[ik][1]+kArr[ik][2]*kArr[ik][2])/2;
 				double dFdE = -1 / (2*T*cosh((Ef-Ek)/T) + 2*T);
 				qSqBlock += dFdE / (epsilon_o*epsilon_b);
-
 			}
 		}
 		qSqSum += qSqBlock/nKpts;
