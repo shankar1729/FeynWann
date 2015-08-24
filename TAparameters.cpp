@@ -22,8 +22,8 @@ inline double lorentzianOdd(double omega, double omega0, double breadth)
 
 inline double fermi(double x) { return x>30. ? exp(-x) : 1./(1.+exp(x)); } //avoid overflow issues
 inline double fermiPrime(double x) { return 0.25*(std::pow(tanh(0.5*x), 2) - 1.); } //avoid overflow issues
-inline double Ejellium(vector3<>& k) { return (k[0]*k[0]+k[1]*k[1]+k[2]*k[2])/2; } //avoid overflow issues
-inline double argLW(double E) { return sqrt(E)/(E+Es) + 1/sqrt(Es) * atan(sqrt(E/Es)); }
+inline double Ejellium(vector3<> k) { return (k[0]*k[0]+k[1]*k[1]+k[2]*k[2])/2; } //avoid overflow issues
+inline double argLW(double E,double Es) { return sqrt(E)/(E+Es) + 1/sqrt(Es) * atan(sqrt(E/Es)); }
 
 inline void writeImEps(const char* fname, const std::vector<Histogram>& ImEps, const std::vector<double> TeArr)
 {	std::ofstream ofs(fname);
@@ -59,6 +59,7 @@ int main(int argc, char** argv)
 	const int spinWeight = round(inputMap.get("spinWeight"));
 	const matrix3<> R = matrix3<>(0,1,1, 1,0,1, 1,1,0) * (0.5*inputMap.get("aCubic")*Angstrom);
 	const double Es = inputMap.get("Es"); // Es in hartrees, as defined in Vallee paper
+	const double epsB = inputMap.get("epsilonB"); // epsilon_b, as defined in Vallee paper
 
 	logPrintf("\nInputs after conversion to atomic units:\n");
 	logPrintf("nKptsN1 = %d\n", nKptsN1);
@@ -71,6 +72,8 @@ int main(int argc, char** argv)
 	logPrintf("Tl = %lg\n", Tl);
 	logPrintf("spinWeight = %d\n", spinWeight);
 	logPrintf("R:\n");
+	logPrintf("Es: = %lg\n", Es);
+	logPrintf("epsilon_b = %lg\n", epsB);
 	R.print(globalLog, " %lg ");
 	if(dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
@@ -218,12 +221,6 @@ int main(int argc, char** argv)
 		omegaMax = std::max(omegaMax, Emax);
 	}
 
-	//Calculate T_e contribution to lineWidth
-	logPrintf("\nCalculating T_e dependence of lineWidth "); logFlush();
-	std::vector< std::vector< double > > invTauTe(
-		
-
-	
 	//Initialize unbroadened histograms:
 	std::vector<Histogram> ImEpsDirect(TeArr.size(), Histogram(0, dE, omegaMax)), breadthDirect(TeArr.size(), Histogram(0, dE, omegaMax));
 	std::vector<Histogram> ImEpsPhonon(TeArr.size(), Histogram(0, dE, omegaMax)), breadthPhonon(TeArr.size(), Histogram(0, dE, omegaMax)),  weightPhonon(TeArr.size(), Histogram(0, dE, omegaMax));
@@ -258,20 +255,20 @@ int main(int argc, char** argv)
 					f = fermi(invTe*(f-dmu[iT]));
 				// Calcualte T_e contribution to lifetime
 				for(int ik1=0; ik1<bunchSize; ik1++)
-				{	for(int ik2=0; ik2<bunchsize; ik2++)
+				{	for(int ik2=0; ik2<bunchSize; ik2++)
 					{	double& dmuCur = dmu[iT];
 						double f = fermi(invTe*(Ejel - dmuCur));
-						double E1jel = Ejellium(karr[ik1]);
+						double E1jel = Ejellium(kArr[ik1]);
 						double f1 = fermi(invTe*(E1jel - dmuCur));
-						double E1jel = Ejellium(karr[ik2]);
+						double E2jel = Ejellium(kArr[ik2]);
 						double f2 = fermi(invTe*(E2jel - dmuCur));
-						double E3jel = E1jel + Ejellium(karr[ik1]) - Ejellium(karr[ik2]);
+						double E3jel = E1jel + Ejellium(kArr[ik1]) - Ejellium(kArr[ik2]);
 						double f3 = fermi(invTe*(E3jel - dmuCur));
 						double occFactor = f * f1 * (1-f2) * (1-f3);
 						double topLim = std::min(std::pow(sqrt(E1jel)+sqrt(E3jel),2),std::pow(sqrt(Ejel)+sqrt(E2jel),2));
 						double lowLim = std::max(std::pow(sqrt(E1jel)-sqrt(E3jel),2),std::pow(sqrt(Ejel)-sqrt(E2jel),2));
-						double arg = argLW(topLim) - argLW(lowLim);
-						invTauTe[ik][iT] += lPrefac*arg*occFactor;
+						double arg = argLW(topLim,Es) - argLW(lowLim,Es);
+						invTauTe[ik][iT] += lPrefac*arg*occFactor/(bunchSize*bunchSize);
 					}
 				}
 			}
@@ -293,7 +290,7 @@ int main(int argc, char** argv)
 					double weight = (directPrefac0/(omega*omega)) * P1(c,v).norm(); //upto Te-dependent electron occupation factors
 					for(size_t iT=0; iT<TeArr.size(); iT++)
 					{	ImEpsDirect[iT].addEvent(omega, weight * (F1[iT][v] - F1[iT][c]));
-						breadthDirect[iT].addEvent(omega, weight * (F1[iT][v] - F1[iT][c]) * (ImE1[c]+ImE1[v]i+invTauTe[ik1][iT]/2));
+						breadthDirect[iT].addEvent(omega, weight * (F1[iT][v] - F1[iT][c]) * (ImE1[c]+ImE1[v]+invTauTe[ik1][iT]/2));
 					}	
 				}
 			}
