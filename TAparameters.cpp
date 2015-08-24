@@ -22,6 +22,8 @@ inline double lorentzianOdd(double omega, double omega0, double breadth)
 
 inline double fermi(double x) { return x>30. ? exp(-x) : 1./(1.+exp(x)); } //avoid overflow issues
 inline double fermiPrime(double x) { return 0.25*(std::pow(tanh(0.5*x), 2) - 1.); } //avoid overflow issues
+inline double Ejellium(vector3<>& k) { return (k[0]*k[0]+k[1]*k[1]+k[2]*k[2])/2; } //avoid overflow issues
+inline double argLW(double E) { return sqrt(E)/(E+Es) + 1/sqrt(Es) * atan(sqrt(E/Es)); }
 
 inline void writeImEps(const char* fname, const std::vector<Histogram>& ImEps, const std::vector<double> TeArr)
 {	std::ofstream ofs(fname);
@@ -56,6 +58,7 @@ int main(int argc, char** argv)
 	const double Tl = inputMap.get("Tl") * Kelvin; //lattice temperature
 	const int spinWeight = round(inputMap.get("spinWeight"));
 	const matrix3<> R = matrix3<>(0,1,1, 1,0,1, 1,1,0) * (0.5*inputMap.get("aCubic")*Angstrom);
+	const double Es = inputMap.get("Es"); // Es in hartrees, as defined in Vallee paper
 
 	logPrintf("\nInputs after conversion to atomic units:\n");
 	logPrintf("nKptsN1 = %d\n", nKptsN1);
@@ -214,6 +217,12 @@ int main(int argc, char** argv)
 		double Emax = std::max(hEmax, eEmax) + 10*TeArr[iT]; //with margin for partially occupied excitations
 		omegaMax = std::max(omegaMax, Emax);
 	}
+
+	//Calculate T_e contribution to lineWidth
+	logPrintf("\nCalculating T_e dependence of lineWidth "); logFlush();
+	std::vector< std::vector< double > > invTauTe(
+		
+
 	
 	//Initialize unbroadened histograms:
 	std::vector<Histogram> ImEpsDirect(TeArr.size(), Histogram(0, dE, omegaMax)), breadthDirect(TeArr.size(), Histogram(0, dE, omegaMax));
@@ -232,18 +241,39 @@ int main(int argc, char** argv)
 		//Retrieve k-point bunch:
 		const std::vector< vector3<> >& kArr = kArrArr[iBunch];
 		
-		//Calculate electronic states and matrix elements for bunch:
+		//Calculate electronic states and matrix elements and T_e contribution to lifetime for bunch:
 		std::vector<diagMatrix> Earr = bs.getStates(kArr);
 		std::vector<diagMatrix> ImEarr = lineWidth(kArr);
 		std::vector< std::vector<matrix> > Parr = bs.getDipoleMatElem(kArr);
 		std::vector< std::vector<diagMatrix> > Farr(bunchSize); //fillings by k-point, temperature and band
+		std::vector< std::vector<double> > invTauTe(bunchSize);
 		for(int ik=0; ik<bunchSize; ik++)
 		{	Farr[ik].resize(TeArr.size());
+			double Ejel = Ejellium(kArr[ik]);
+                        double lPrefac = -1 / (32 * std::pow(M_PI,3) * std::pow(4*M_PI*epsB,2) * Es * sqrt(Ejel));
 			for(size_t iT=0; iT<TeArr.size(); iT++)
 			{	double invTe = 1./TeArr[iT];
 				Farr[ik][iT] = Earr[ik];
 				for(double& f: Farr[ik][iT]) //convert to fillings:
 					f = fermi(invTe*(f-dmu[iT]));
+				// Calcualte T_e contribution to lifetime
+				for(int ik1=0; ik1<bunchSize; ik1++)
+				{	for(int ik2=0; ik2<bunchsize; ik2++)
+					{	double& dmuCur = dmu[iT];
+						double f = fermi(invTe*(Ejel - dmuCur));
+						double E1jel = Ejellium(karr[ik1]);
+						double f1 = fermi(invTe*(E1jel - dmuCur));
+						double E1jel = Ejellium(karr[ik2]);
+						double f2 = fermi(invTe*(E2jel - dmuCur));
+						double E3jel = E1jel + Ejellium(karr[ik1]) - Ejellium(karr[ik2]);
+						double f3 = fermi(invTe*(E3jel - dmuCur));
+						double occFactor = f * f1 * (1-f2) * (1-f3);
+						double topLim = std::min(std::pow(sqrt(E1jel)+sqrt(E3jel),2),std::pow(sqrt(Ejel)+sqrt(E2jel),2));
+						double lowLim = std::max(std::pow(sqrt(E1jel)-sqrt(E3jel),2),std::pow(sqrt(Ejel)-sqrt(E2jel),2));
+						double arg = argLW(topLim) - argLW(lowLim);
+						invTauTe[ik][iT] += lPrefac*arg*occFactor;
+					}
+				}
 			}
 		}
 
@@ -263,7 +293,7 @@ int main(int argc, char** argv)
 					double weight = (directPrefac0/(omega*omega)) * P1(c,v).norm(); //upto Te-dependent electron occupation factors
 					for(size_t iT=0; iT<TeArr.size(); iT++)
 					{	ImEpsDirect[iT].addEvent(omega, weight * (F1[iT][v] - F1[iT][c]));
-						breadthDirect[iT].addEvent(omega, weight * (F1[iT][v] - F1[iT][c]) * (ImE1[c]+ImE1[v]));
+						breadthDirect[iT].addEvent(omega, weight * (F1[iT][v] - F1[iT][c]) * (ImE1[c]+ImE1[v]i+invTauTe[ik1][iT]/2));
 					}	
 				}
 			}

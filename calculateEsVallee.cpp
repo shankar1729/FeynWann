@@ -46,17 +46,16 @@ int main(int argc, char** argv)
 	int nKptsMin = nKptsN1/totalBlocks;
 	for(int block=blockStart; block<blockStop; block++)
 	{	Random::seed(block);
-                double qSqBlock = 0.;
-                double nKpts = 0.; int nBunches = 0;
+		double qSqBlock = 0.;
+		double nKpts = 0.;
                 while(nKpts < nKptsMin)
-                {       //Get a bunch of k-points
-                        std::vector< vector3<> > kArr(bunchSize);
-                        for(vector3<>& k: kArr)
-                       {	for(int j=0; j<3; j++)
+		{	//Get a bunch of k-points
+			std::vector< vector3<> > kArr(bunchSize);
+			for(vector3<>& k: kArr)
+			{	for(int j=0; j<3; j++)
 					k[j] = Random::uniform();
 				nKpts += 1;
-                        }
-			nBunches++;
+			}
 
 			//Get energies and q_TF squared sum for selected bunch
 			for(int ik=0; ik<bunchSize; ik++)
@@ -73,7 +72,7 @@ int main(int argc, char** argv)
 	mpiUtil->allReduce(qSqSumSq, MPIUtil::ReduceSum);
 	double qTFSq = qSqSum / totalBlocks;
 	double qTFSqstd = sqrt(fabs(qSqSumSq)/totalBlocks - fabs(qTFSq*qTFSq))/sqrt(totalBlocks);
-        logPrintf("qTF squared = %lg +/- %lg\n", qTFSq, qTFSqstd);
+	logPrintf("qTF squared = %lg +/- %lg\n", qTFSq, qTFSqstd);
 
 	double qTF = sqrt(fabs(qTFSq));
 	double qs = beta * qTF;
