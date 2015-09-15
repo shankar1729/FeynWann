@@ -57,7 +57,7 @@ int main(int argc, char** argv)
 		for(size_t iE1=0; iE1<EArr.size(); iE1++)
 		{	double E1 = EArr[iE1], f1 = fermi(invT*(E1 - Ef));
 			for(size_t iE2=0; iE2<EArr.size(); iE2++)
-			{	double E2 = EArr[iE1], f2 = fermi(invT*(E2 - Ef));
+			{	double E2 = EArr[iE2], f2 = fermi(invT*(E2 - Ef));
 				double E3 = E + E1 - E2, f3 = fermi(invT*(E3 - Ef));
 				double occFactor = f1*(1-f2)*(1-f3) + (1-f1)*f2*f3;
 				double EtildeMax = std::min(std::pow(sqrt(E1)+sqrt(E3),2),std::pow(sqrt(E)+sqrt(E2),2));
