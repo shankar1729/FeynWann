@@ -243,7 +243,6 @@ int main(int argc, char** argv)
 		std::vector<diagMatrix> ImEarr = lineWidth(kArr);
 		std::vector< std::vector<matrix> > Parr = bs.getDipoleMatElem(kArr);
 		std::vector< std::vector<diagMatrix> > Farr(bunchSize); //fillings by k-point, temperature and band
-		std::vector< std::vector<double> > invTauTe(bunchSize);
 		for(int ik=0; ik<bunchSize; ik++)
 		{	Farr[ik].resize(TeArr.size());
 			double Ejel = Ejellium(kArr[ik]);
@@ -253,24 +252,6 @@ int main(int argc, char** argv)
 				Farr[ik][iT] = Earr[ik];
 				for(double& f: Farr[ik][iT]) //convert to fillings:
 					f = fermi(invTe*(f-dmu[iT]));
-				// Calcualte T_e contribution to lifetime
-				for(int ik1=0; ik1<bunchSize; ik1++)
-				{	for(int ik2=0; ik2<bunchSize; ik2++)
-					{	double& dmuCur = dmu[iT];
-						double f = fermi(invTe*(Ejel - dmuCur));
-						double E1jel = Ejellium(kArr[ik1]);
-						double f1 = fermi(invTe*(E1jel - dmuCur));
-						double E2jel = Ejellium(kArr[ik2]);
-						double f2 = fermi(invTe*(E2jel - dmuCur));
-						double E3jel = E1jel + Ejellium(kArr[ik1]) - Ejellium(kArr[ik2]);
-						double f3 = fermi(invTe*(E3jel - dmuCur));
-						double occFactor = f * f1 * (1-f2) * (1-f3);
-						double topLim = std::min(std::pow(sqrt(E1jel)+sqrt(E3jel),2),std::pow(sqrt(Ejel)+sqrt(E2jel),2));
-						double lowLim = std::max(std::pow(sqrt(E1jel)-sqrt(E3jel),2),std::pow(sqrt(Ejel)-sqrt(E2jel),2));
-						double arg = argLW(topLim,Es) - argLW(lowLim,Es);
-						invTauTe[ik][iT] += lPrefac*arg*occFactor/(bunchSize*bunchSize);
-					}
-				}
 			}
 		}
 
