@@ -29,7 +29,6 @@ int main(int argc, char** argv)
 	const double Es = inputMap.get("Es"); // Es in hartrees, as defined in Vallee paper
 	const double epsB = inputMap.get("epsilonB"); // epsilon_b, as defined in Vallee paper
 	const double dE = inputMap.get("dE") * eV; //energy resolution used for output and energy conservation
-	double mu = inputMap.get("mu"); //initial guess only - will be calculated self-consistently in this executable
 
         logPrintf("\nInputs after conversion to atomic units:\n");
         logPrintf("nKptsN1 = %d\n", nKptsN1);
@@ -44,7 +43,6 @@ int main(int argc, char** argv)
 	logPrintf("TeStep = %lg\n", TeStep);
 	logPrintf("Tl = %lg\n", Tl);
  	logPrintf("dE = %lg\n", dE);
-	logPrintf("mu = %lg\n", mu);
 	logPrintf("epsilon_b = %lg\n", epsB);
 	logPrintf("Es: = %lg\n", Es);       
 
@@ -54,8 +52,8 @@ int main(int argc, char** argv)
 	const double nJellium = Zjellium / fabs(det(R));
 	logPrintf("nJellium = %lg per bohr^3, %lg per m^3\n", nJellium, nJellium*meter*meter*meter);
 	const double kF = std::pow(3 * M_PI * M_PI * nJellium,1./3);
-	const double EfJellium = 0.5 * kF * kF;
-	logPrintf("EfJellium = %lf hartrees, %lg eV, %lg Joules\n",EfJellium, EfJellium/eV, EfJellium/Joule);
+	const double Ef = 0.5 * kF * kF;
+	logPrintf("EfJellium = %lf hartrees, %lg eV, %lg Joules\n",Ef, Ef/eV, Ef/Joule);
 
 	// Compute qTF
 	double qSqSum = 0., qSqSumSq=0.;
@@ -78,7 +76,7 @@ int main(int argc, char** argv)
 			//Get energies and q_TF squared sum for selected bunch
 			for(int ik=0; ik<bunchSize; ik++)
 			{	double Ek = (kArr[ik][0]*kArr[ik][0]+kArr[ik][1]*kArr[ik][1]+kArr[ik][2]*kArr[ik][2])/2;
-				double dFdE = -1 / (2*T*cosh((EfJellium-Ek)/T) + 2*T);
+				double dFdE = -1 / (2*T*cosh((Ef-Ek)/T) + 2*T);
 				qSqBlock += dFdE / (epsilon_o*epsB);
 			}
 		}
@@ -109,7 +107,7 @@ int main(int argc, char** argv)
 	//Initialize energy grid:
 	std::vector<double> EArr(int(ceil((2*eV+10*TeArr[iT])/dE)));
 	for(size_t iE=0; iE<EArr.size(); iE++)
-		EArr[iE] = mu - 1*eV - 5*TeArr[iT] + dE*iE;
+		EArr[iE] = Ef - 1*eV - 5*TeArr[iT] + dE*iE;
 
 	std::vector<double> invTauTe(EArr.size());
 	//std::vector< std::vector<double> > invTauTe(EArr.size());
@@ -118,13 +116,11 @@ int main(int argc, char** argv)
 	{	double lPrefac = -1 / (32 * std::pow(M_PI,3) * std::pow(1/(4*M_PI)*epsB,2) * Es * sqrt(EArr[iE]));
 		for(size_t iE1=0; iE1<EArr.size(); iE1++)
 		{	for(size_t iE2=0; iE2<EArr.size(); iE2++)
-			{	//double& dmuCur = dmu[iT];
-				double dmuCur = mu;
-				double f = fermi(invTe*(EArr[iE] - dmuCur));
-				double f1 = fermi(invTe*(EArr[iE1] - dmuCur));
-				double f2 = fermi(invTe*(EArr[iE2] - dmuCur));
+			{	double f = fermi(invTe*(EArr[iE] - Ef));
+				double f1 = fermi(invTe*(EArr[iE1] - Ef));
+				double f2 = fermi(invTe*(EArr[iE2] - Ef));
 				double E3 = EArr[iE] + EArr[iE1] - EArr[iE2];
-				double f3 = fermi(invTe*(E3 - dmuCur));
+				double f3 = fermi(invTe*(E3 - Ef));
 				double occFactor = f * f1 * (1-f2) * (1-f3);
 				double topLim = std::min(std::pow(sqrt(EArr[iE1])+sqrt(E3),2),std::pow(sqrt(EArr[iE])+sqrt(EArr[iE2]),2));
 				double lowLim = std::max(std::pow(sqrt(EArr[iE1])-sqrt(E3),2),std::pow(sqrt(EArr[iE])-sqrt(EArr[iE2]),2));
