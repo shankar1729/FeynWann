@@ -16,7 +16,6 @@ int main(int argc, char** argv)
 
 	//Get the system parameters (mu, T, lattice vectors etc.)
 	InputMap inputMap(inputFilename);
-	const double T = inputMap.get("T")*eV;
 	const double Zjellium = inputMap.get("Zjellium");
 	const matrix3<> R = matrix3<>(0,1,1, 1,0,1, 1,1,0) * (0.5*inputMap.get("aCubic")*Angstrom);
 	const double beta = inputMap.get("beta"); // from vallee paper, q_s = beta * q_TF
@@ -27,7 +26,6 @@ int main(int argc, char** argv)
 	const double TeStep = inputMap.get("TeStep") * Kelvin; //electron temperature grid spacing
 
 	logPrintf("\nInputs after conversion to atomic units:\n");
-	logPrintf("T = %lg\n", T);
 	logPrintf("Zjellium = %lg\n", Zjellium);
 	logPrintf("R:\n");
 	R.print(globalLog, " %lg ");
@@ -56,29 +54,36 @@ int main(int argc, char** argv)
 	logPrintf("Initialized temperature grid: %lg to %lg K with %lu points.\n", TeArr.front()/Kelvin, TeArr.back()/Kelvin, TeArr.size());
 
 	//Initialize energy grid:
-	double TeMaxEnergy = 2000*Kelvin;
-	std::vector<double> EArr(int(ceil((2*eV+10*TeMaxEnergy)/dE)));
+	std::vector<double> EArr(int(ceil(2*eV/dE)));
 	for(size_t iE=0; iE<EArr.size(); iE++)
-		EArr[iE] = Ef - 1*eV - 5*TeMaxEnergy + dE*iE;
+		EArr[iE] = Ef - 1*eV + dE*iE;
 
 	std::vector< std::vector<double> > invTauTe(TeArr.size());
 	
 	for(size_t iT=0; iT<TeArr.size(); iT++)
 	{	std::vector<double> invTauTeE(EArr.size());
-		double invT = 1./TeArr[iT];
+		double T  = TeArr[iT];
+		double invT = 1./T;
+		double dE12 = 0.25*T;
+		double E12min = std::max(0.5*dE12, EArr.front() - 10*T); //no states below E=0
+		double E12max = EArr.back() + 10*T;
+		logPrintf("E12 in [ %lg , %lg ] for Te = %lg K\n", E12min, E12max, T);
 		for(size_t iE=0; iE<EArr.size(); iE++)
-		{	double E = EArr[iE], f = fermi(invT*(E - Ef));
+		{	double E = EArr[iE];
 			double lPrefac = 1. / (32 * std::pow(M_PI,3) * std::pow(epsB/(4*M_PI),2) * Es * sqrt(E));
-			for(size_t iE1=0; iE1<EArr.size(); iE1++)
-			{	double E1 = EArr[iE1], f1 = fermi(invT*(E1 - Ef));
-				for(size_t iE2=0; iE2<EArr.size(); iE2++)
-				{	double E2 = EArr[iE2], f2 = fermi(invT*(E2 - Ef));
-					double E3 = E + E1 - E2, f3 = fermi(invT*(E3 - Ef));
+			for(double E1=E12min; E1<E12max; E1+=dE12)
+			{	double f1 = fermi(invT*(E1 - Ef));
+				for(double E2=E12min; E2<E12max; E2+=dE12)
+				{	double f2 = fermi(invT*(E2 - Ef));
+					double E3 = E + E1 - E2;
+					if(E3 <= 0.) continue;
+					double f3 = fermi(invT*(E3 - Ef));
 					double occFactor = f1*(1-f2)*(1-f3) + (1-f1)*f2*f3;
+					if(occFactor < 1e-6) continue;
 					double EtildeMax = std::min(std::pow(sqrt(E1)+sqrt(E3),2),std::pow(sqrt(E)+sqrt(E2),2));
 					double EtildeMin = std::max(std::pow(sqrt(E1)-sqrt(E3),2),std::pow(sqrt(E)-sqrt(E2),2));
 					double arg = argLW(EtildeMax,Es) - argLW(EtildeMin,Es);
-					invTauTeE[iE] += lPrefac*arg*occFactor*dE*dE;
+					invTauTeE[iE] += lPrefac*arg*occFactor*dE12*dE12;
 				}
 			}
 			invTauTe[iT].push_back(invTauTeE[iE]);
