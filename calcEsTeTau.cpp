@@ -22,6 +22,9 @@ int main(int argc, char** argv)
 	const double beta = inputMap.get("beta"); // from vallee paper, q_s = beta * q_TF
 	const double epsB = inputMap.get("epsilonB"); // epsilon_b, as defined in Vallee paper
 	const double dE = inputMap.get("dE") * eV; //energy resolution used for output and energy conservation
+	const double TeMin = inputMap.get("TeMin") * Kelvin; //electron temperature grid start
+	const double TeMax = inputMap.get("TeMax") * Kelvin; //electron temperature grid stop
+	const double TeStep = inputMap.get("TeStep") * Kelvin; //electron temperature grid spacing
 
 	logPrintf("\nInputs after conversion to atomic units:\n");
 	logPrintf("T = %lg\n", T);
@@ -31,6 +34,9 @@ int main(int argc, char** argv)
 	logPrintf("beta = %lg\n", beta);
  	logPrintf("dE = %lg\n", dE);
 	logPrintf("epsilonB = %lg\n", epsB);
+	logPrintf("TeMin = %lg\n", TeMin);
+	logPrintf("TeMax = %lg\n", TeMax);
+	logPrintf("TeStep = %lg\n", TeStep);
 
 	const double nJellium = Zjellium / fabs(det(R));
 	logPrintf("nJellium = %lg per bohr^3, %lg per m^3\n", nJellium, nJellium*meter*meter*meter);
@@ -43,41 +49,61 @@ int main(int argc, char** argv)
 	double Es = qs*qs/2;
 	logPrintf("Es = %lg\n", Es);
 
-	//Initialize energy grid:
-	std::vector<double> EArr(int(ceil((2*eV+10*T)/dE)));
-	for(size_t iE=0; iE<EArr.size(); iE++)
-		EArr[iE] = Ef - 1*eV - 5*T + dE*iE;
+	//Initialize temperature grid:
+	std::vector<double> TeArr(int(ceil((TeMax-TeMin)/TeStep)));
+	for(size_t iT=0; iT<TeArr.size(); iT++)
+		TeArr[iT] = TeMin + TeStep*iT;
+	logPrintf("Initialized temperature grid: %lg to %lg K with %lu points.\n", TeArr.front()/Kelvin, TeArr.back()/Kelvin, TeArr.size());
 
-	std::vector<double> invTauTe(EArr.size());
-	//std::vector< std::vector<double> > invTauTe(EArr.size());
-	double invT = 1./T;
+	//Initialize energy grid:
+	double TeMaxEnergy = 2000*Kelvin;
+	std::vector<double> EArr(int(ceil((2*eV+10*TeMaxEnergy)/dE)));
 	for(size_t iE=0; iE<EArr.size(); iE++)
-	{	double E = EArr[iE], f = fermi(invT*(E - Ef));
-		double lPrefac = 1. / (32 * std::pow(M_PI,3) * std::pow(epsB/(4*M_PI),2) * Es * sqrt(E));
-		for(size_t iE1=0; iE1<EArr.size(); iE1++)
-		{	double E1 = EArr[iE1], f1 = fermi(invT*(E1 - Ef));
-			for(size_t iE2=0; iE2<EArr.size(); iE2++)
-			{	double E2 = EArr[iE2], f2 = fermi(invT*(E2 - Ef));
-				double E3 = E + E1 - E2, f3 = fermi(invT*(E3 - Ef));
-				double occFactor = f1*(1-f2)*(1-f3) + (1-f1)*f2*f3;
-				double EtildeMax = std::min(std::pow(sqrt(E1)+sqrt(E3),2),std::pow(sqrt(E)+sqrt(E2),2));
-				double EtildeMin = std::max(std::pow(sqrt(E1)-sqrt(E3),2),std::pow(sqrt(E)-sqrt(E2),2));
-				double arg = argLW(EtildeMax,Es) - argLW(EtildeMin,Es);
-				invTauTe[iE] += lPrefac*arg*occFactor*dE*dE;
-				//invTauTe[iE][iT] += lPrefac*arg*occFactor*dE*dE;
+		EArr[iE] = Ef - 1*eV - 5*TeMaxEnergy + dE*iE;
+
+	std::vector< std::vector<double> > invTauTe(TeArr.size());
+	
+	for(size_t iT=0; iT<TeArr.size(); iT++)
+	{	std::vector<double> invTauTeE(EArr.size());
+		double invT = 1./TeArr[iT];
+		for(size_t iE=0; iE<EArr.size(); iE++)
+		{	double E = EArr[iE], f = fermi(invT*(E - Ef));
+			double lPrefac = 1. / (32 * std::pow(M_PI,3) * std::pow(epsB/(4*M_PI),2) * Es * sqrt(E));
+			for(size_t iE1=0; iE1<EArr.size(); iE1++)
+			{	double E1 = EArr[iE1], f1 = fermi(invT*(E1 - Ef));
+				for(size_t iE2=0; iE2<EArr.size(); iE2++)
+				{	double E2 = EArr[iE2], f2 = fermi(invT*(E2 - Ef));
+					double E3 = E + E1 - E2, f3 = fermi(invT*(E3 - Ef));
+					double occFactor = f1*(1-f2)*(1-f3) + (1-f1)*f2*f3;
+					double EtildeMax = std::min(std::pow(sqrt(E1)+sqrt(E3),2),std::pow(sqrt(E)+sqrt(E2),2));
+					double EtildeMin = std::max(std::pow(sqrt(E1)-sqrt(E3),2),std::pow(sqrt(E)-sqrt(E2),2));
+					double arg = argLW(EtildeMax,Es) - argLW(EtildeMin,Es);
+					invTauTeE[iE] += lPrefac*arg*occFactor*dE*dE;
+				}
 			}
+			invTauTe[iT].push_back(invTauTeE[iE]);
 		}
 	}
+
+
 	ofstream ofs("invTauTe.dat");
-	ofs << "#E[eV] invTauTe[invSeconds]i\n";
+	ofs << 0;
+	for(size_t iE=0; iE<EArr.size(); iE++)
+		ofs << '\t' <<EArr[iE]/eV;;
+	ofs << '\n';
+	for(size_t iT=0; iT<TeArr.size(); iT++)
+	{	ofs << TeArr[iT]/Kelvin;
+		for(size_t iE=0; iE<EArr.size(); iE++)
+			ofs << '\t' << invTauTe[iT][iE]/invSeconds;
+		ofs << '\n';
+	}
+
+	ofstream of("invTauT0.dat");
 	for(size_t iE=0; iE<EArr.size(); iE++)
 	{	double E = EArr[iE];
 		double invTauT0 = std::pow(E-Ef, 2) / (64*std::pow(M_PI,3)*std::pow(epsB/(4*M_PI),2)*std::pow(Es,1.5)*sqrt(Ef))
 			* (2.*sqrt(Ef*Es)/(4*Ef+Es) + atan(sqrt(4*Ef/Es)));
-		ofs << E/eV
-			<< '\t' << invTauTe[iE]/invSeconds
-			<< '\t' << invTauT0/invSeconds
-			<< '\n';
+		of << E/eV << '\t' << invTauT0/invSeconds << '\n';
 	}
 
 	finalizeSystem();
