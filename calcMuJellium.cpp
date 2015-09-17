@@ -50,24 +50,19 @@ int main(int argc, char** argv)
 		TeArr[iT] = TeMin + TeStep*iT;
 	logPrintf("Initialized temperature grid: %lg to %lg K with %lu points.\n", TeArr.front()/Kelvin, TeArr.back()/Kelvin, TeArr.size());
 
-	const double nJellium = Z / fabs(det(R));
+	const double Omega = fabs(det(R)); //unit cell volume
+	const double nJellium = Z / Omega;
 	const double kF = std::pow(3 * M_PI * M_PI * nJellium,1./3);
 	const double Ef = 0.5 * kF * kF;
 
-        diagMatrix dmu(TeArr.size(), 0.);
-        int iTstart, iTstop; TaskDivision(TeArr.size(), mpiUtil).myRange(iTstart, iTstop);
-        for(int iT=iTstart; iT<iTstop; iT++)
+	diagMatrix dmu(TeArr.size(), 0.);
+	int iTstart, iTstop; TaskDivision(TeArr.size(), mpiUtil).myRange(iTstart, iTstop);
+	for(int iT=iTstart; iT<iTstop; iT++)
 	{	const double Te = TeArr[iT], invTe = 1./Te;
 		//Initialize energy grid:
-		std::vector<double> EArr(int(ceil((Ef + 5*Te)/dE)));
-		std::vector<double> dos(int(ceil((Ef + 5*Te)/dE)));
-		for(size_t iE=0; iE<EArr.size(); iE++)
-		{	EArr[iE] = dE*iE;
-			dos[iE] = sqrt(2*EArr[iE]) / (M_PI*M_PI);
-		}
 		double Emin = 0;
 		double Emax = Ef + 5*Te;
-
+		double dE = 0.25*Te; //different from dE for carruer energies used later
 		//Bisect for chemical potential:
 		double& dmuCur = dmu[iT];
 		double dmuMin = Emin - 10*Te;
@@ -77,10 +72,9 @@ int main(int argc, char** argv)
 		while(dmuMax-dmuMin > tol)
 		{	//calculate number of electrons at current Z:
 			double nElectrons = 0.;
-			for(size_t ie=0; ie<dos.size(); ie++)
-			{	double Ei = EArr[ie];
-				double fi = fermi(invTe*(Ei - dmuCur));
-				nElectrons += dE * dos[ie] * fi;
+			for(double E=Emin; E<Emax; E+=dE)
+			{	double f = fermi(invTe*(E - dmuCur));
+				nElectrons += dE * f * sqrt(2*E)*Omega/(M_PI*M_PI);
 			}
 			((nElectrons>Z) ? dmuMax : dmuMin) = dmuCur;
 			dmuCur = 0.5*(dmuMin + dmuMax);
