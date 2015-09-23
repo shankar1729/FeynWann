@@ -21,7 +21,7 @@ int main(int argc, char** argv)
 	const double beta = inputMap.get("beta"); // from vallee paper, q_s = beta * q_TF
 	const double epsB = inputMap.get("epsilonB"); // epsilon_b, as defined in Vallee paper
 	const double dE = inputMap.get("dE") * eV; //energy resolution used for output and energy conservation
-	const double Es = inputMap.get("Es"); //from fitting
+//	const double Es = inputMap.get("Es"); //from fitting
 	const double TeMin = inputMap.get("TeMin") * Kelvin; //electron temperature grid start
 	const double TeMax = inputMap.get("TeMax") * Kelvin; //electron temperature grid stop
 	const double TeStep = inputMap.get("TeStep") * Kelvin; //electron temperature grid spacing
@@ -46,7 +46,7 @@ int main(int argc, char** argv)
 
 	double qTF = (4*M_PI/epsB) * sqrt(kF/(M_PI*M_PI));
 	double qs = beta * qTF;
-	//double Es = qs*qs/2;
+	double Es = qs*qs/2;
 	logPrintf("Es = %lg\n", Es);
 
 	//Initialize temperature grid:

@@ -22,6 +22,7 @@ inline double lorentzianOdd(double omega, double omega0, double breadth)
 
 inline double fermi(double x) { return x>30. ? exp(-x) : 1./(1.+exp(x)); } //avoid overflow issues
 inline double fermiPrime(double x) { return 0.25*(std::pow(tanh(0.5*x), 2) - 1.); } //avoid overflow issues
+inline double ImSigmaTe(double x,double invTauTePrefac) { return 0.5*invTauTePrefac*std::pow(x, 2); }
 
 inline void writeImEps(const char* fname, const std::vector<Histogram>& ImEps, const std::vector<double> TeArr)
 {	std::ofstream ofs(fname);
@@ -58,6 +59,7 @@ int main(int argc, char** argv)
 	const matrix3<> R = matrix3<>(0,1,1, 1,0,1, 1,1,0) * (0.5*inputMap.get("aCubic")*Angstrom);
 	const double Es = inputMap.get("Es"); // Es in hartrees, as defined in Vallee paper
 	const double epsB = inputMap.get("epsilonB"); // epsilon_b, as defined in Vallee paper
+	const double invTauTePrefac = inputMap.get("invTauTePrefac"); // prefactor A as in invTau(Te)=A*T^2
 
 	logPrintf("\nInputs after conversion to atomic units:\n");
 	logPrintf("nKptsN1 = %d\n", nKptsN1);
@@ -72,6 +74,7 @@ int main(int argc, char** argv)
 	logPrintf("R:\n");
 	logPrintf("Es: = %lg\n", Es);
 	logPrintf("epsilon_b = %lg\n", epsB);
+	logPrintf("invTauTePrefac = %lg\n", invTauTePrefac);
 	R.print(globalLog, " %lg ");
 	if(dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
@@ -393,8 +396,8 @@ int main(int argc, char** argv)
 	for(size_t iT=0; iT<TeArr.size(); iT++)
 	{	for(int iomega=iomegaStart; iomega<iomegaStop; iomega++) //input frequency grid split over MPI
 		{	double omegaCur = iomega*dE;
-			double bDirect = breadthDirect[iT].out[iomega];
-			double bPhonon = breadthPhonon[iT].out[iomega];
+			double bDirect = breadthDirect[iT].out[iomega] + 2*ImSigmaTe(TeArr[iT],invTauTePrefac);//recal breadth and add Te dependence of lifetime
+			double bPhonon = breadthPhonon[iT].out[iomega] + 2*ImSigmaTe(TeArr[iT],invTauTePrefac);//recal breadth and add Te dependence of lifetime
 			for(size_t jomega=0; jomega<ImEpsDirectBroad[iT].out.size(); jomega++) //output frequency grid
 			{	double omega = jomega*dE;
 				double kernelDirect = lorentzianOdd(omega, omegaCur, bDirect) * dE;
