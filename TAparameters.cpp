@@ -57,8 +57,6 @@ int main(int argc, char** argv)
 	const double Tl = inputMap.get("Tl") * Kelvin; //lattice temperature
 	const int spinWeight = round(inputMap.get("spinWeight"));
 	const matrix3<> R = matrix3<>(0,1,1, 1,0,1, 1,1,0) * (0.5*inputMap.get("aCubic")*Angstrom);
-	const double Es = inputMap.get("Es"); // Es in hartrees, as defined in Vallee paper
-	const double epsB = inputMap.get("epsilonB"); // epsilon_b, as defined in Vallee paper
 	const double invTauTePrefac = inputMap.get("invTauTePrefac"); // prefactor A as in invTau(Te)=A*T^2
 
 	logPrintf("\nInputs after conversion to atomic units:\n");
@@ -72,8 +70,6 @@ int main(int argc, char** argv)
 	logPrintf("Tl = %lg\n", Tl);
 	logPrintf("spinWeight = %d\n", spinWeight);
 	logPrintf("R:\n");
-	logPrintf("Es: = %lg\n", Es);
-	logPrintf("epsilon_b = %lg\n", epsB);
 	logPrintf("invTauTePrefac = %lg\n", invTauTePrefac);
 	R.print(globalLog, " %lg ");
 	if(dryRun)
