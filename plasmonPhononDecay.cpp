@@ -157,7 +157,6 @@ int main(int argc, char** argv)
 					std::vector<matrix> Pk2 = bs.getDipoleMatElem(kpnt2);
 					const matrix& AdotPk2 = Pk2[0]; //pre-contracted
 					diagMatrix omegaPh = bs.getPhononModes(kpnt1-kpnt2);
-					std::vector<std::vector<matrix> > HPePh;
 					std::vector<matrix> gePh = bs.getPhononMatElem(kpnt1,kpnt2);
 					
 					for(int v=0; v<E1.nRows(); v++) if(E1[v]<10.*T)

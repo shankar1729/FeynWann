@@ -9,6 +9,10 @@
 #include "InputMap.h"
 #include "Units.h"
 
+inline vector3<complex> operator*(const vector3<complex>& v, complex s)
+{	return vector3<complex>(v[0]*s, v[1]*s, v[2]*s);
+}
+
 int main(int argc, char** argv)
 {   string inputFilename; bool dryRun, printDefaults;
 	initSystemCmdline(argc, argv, "Generate event list for transport modules", inputFilename, dryRun, printDefaults);
@@ -46,17 +50,20 @@ int main(int argc, char** argv)
 	std::vector< vector3<complex> > Ahat(3); //use Cartesian basis unlike other executables so that event lists can have the general uncontracted matrix element
 	for(int iDir=0; iDir<3; iDir++)
 		Ahat[iDir][iDir] = 1.;
-	BandStruct bs("Wannier/wannier", mu, spinWeight, string(), Ahat);
+	BandStruct bs("Wannier/wannier", mu, spinWeight, "Wannier/totalE", Ahat);
+	bs.setCacheSize(4);
 
 	//Prepare for event collection:
 	double eventPrefac = 1./(nKptsN1*fabs(det(R)));
+	complex iEta(0, 0.1*eV);
 	struct Event
 	{	double Ev, Ec;
 		vector3<> vv, vc;
 		vector3<complex> Pcv;
 	};
-	std::vector<Event> events;
+	std::vector<Event> events, eventsPh;
 	events.reserve(nKptsN1/10);
+	eventsPh.reserve(nKptsN1/10);
 
 	//Monte-Carlo loop over k-points:
 	const double weightCut = 1e-4;
@@ -66,31 +73,81 @@ int main(int argc, char** argv)
 	int ikInterval = std::max(1, int(round(nkMine/50.))); //interval for reporting progress
 	logPrintf("\nProgress: "); logFlush();
 	for(int ik=0; ik<nkMine; ik++)
-	{	//Generate random k-point:
-		vector3<> kpnt;
-		for(int j=0; j<3; j++)
-			kpnt[j] = Random::uniform();
-		//Filter k-point:
-		double mk = bs.get_mk(kpnt, omega, T);
+	{	//Generate a pair of random k-points:
+		std::vector< vector3<> > kArr(2);
+		for(vector3<>& k: kArr)
+			for(int j=0; j<3; j++)
+				k[j] = Random::uniform();
+		std::vector<diagMatrix> Earr = bs.getStates(kArr);
+		//Filter k1 for direct and (k1,k2) for phonon:
+		double mk = bs.get_mk(kArr[0], omega, T);
+		double mk12 = bs.get_mk1k2(kArr[0], kArr[1], omega, T);
 		double weightEconserveMax = EconservePrefac * exp(mhlfByTsq * mk);
-		//Loop over potential events:
-		if(weightEconserveMax > weightCut)
-		{	diagMatrix E = bs.getStates(kpnt);
-			std::vector<matrix> Pk = bs.getDipoleMatElem(kpnt);
-			std::vector<vector3<>> vk = bs.getVelocity(kpnt, R, Eplasmon);
-			for(int v=0; v<E.nRows(); v++) if(E[v]<10.*T)
-			{	for(int c=0; c<E.nRows(); c++) if(E[c]>-10.*T)
-				{	//Filter events by energy conservation:
-					double mk_cv = BandStruct::mk_sub(E[c], E[v], Eplasmon, T);
-					double weightEconserve = EconservePrefac * exp(mhlfByTsq * mk_cv);
-					if(weightEconserve < weightCut) continue;
-					//Collect momentum matrix element:
-					vector3<complex> Pk_cv;
-					for(int j=0; j<3; j++)
-						Pk_cv[j] = Pk[j](c,v);
-					//Add event:
-					Event event = { E[v], E[c], vk[v], vk[c], sqrt(eventPrefac * weightEconserve) * Pk_cv };
-					events.push_back(event);
+		double weightEconserveMax12 = EconservePrefac * exp(mhlfByTsq * mk12);
+		if((weightEconserveMax > weightCut) || (weightEconserveMax12 > weightCut))
+		{	std::vector<std::vector<matrix> > Parr = bs.getDipoleMatElem(kArr);
+			//Direct contributions:
+			if(weightEconserveMax > weightCut)
+			{	const diagMatrix& E = Earr[0];
+				const std::vector<matrix>& P = Parr[0];
+				for(int v=0; v<E.nRows(); v++) if(E[v]<10.*T)
+				{	for(int c=0; c<E.nRows(); c++) if(E[c]>-10.*T)
+					{	//Filter events by energy conservation:
+						double mk_cv = BandStruct::mk_sub(E[c], E[v], Eplasmon, T);
+						double weightEconserve = EconservePrefac * exp(mhlfByTsq * mk_cv);
+						if(weightEconserve < weightCut) continue;
+						//Collect momentum matrix element and velocities:
+						vector3<complex> P_cv; vector3<> vv, vc;
+						for(int j=0; j<3; j++)
+						{	P_cv[j] = P[j](c,v);
+							vv[j] = -P[j](v,v).imag(); //(P is calculated without an i to make things real when possible)
+							vc[j] = -P[j](c,c).imag();
+						}
+						//Add event:
+						Event event = { E[v], E[c], vv, vc, sqrt(eventPrefac * weightEconserve) * P_cv };
+						events.push_back(event);
+					}
+				}
+			}
+			//Phonon contributions:
+			if(weightEconserveMax12 > weightCut)
+			{	const diagMatrix& E1 = Earr[0];
+				const diagMatrix& E2 = Earr[1];
+				const std::vector<matrix>& P1 = Parr[0];
+				const std::vector<matrix>& P2 = Parr[1];
+				diagMatrix omegaPh = bs.getPhononModes(kArr[0]-kArr[1]);
+				std::vector<matrix> gePh = bs.getPhononMatElem(kArr[0], kArr[1]);
+				for(int v=0; v<E1.nRows(); v++) if(E1[v]<10.*T)
+				{	for(int c=0; c<E2.nRows(); c++) if(E2[c]>-10.*T)
+					{	vector3<> vv, vc;
+						for(int j=0; j<3; j++)
+						{	vv[j] = -P1[j](v,v).imag(); //(P is calculated without an i to make things real when possible)
+							vc[j] = -P2[j](c,c).imag();
+						}
+						for(int alpha=0; alpha<omegaPh.nRows(); alpha ++)
+						{	for(int ae=-1; ae<=+1; ae+=2) // +/- for phonon absorption or emmision
+							{	double mk_cv = BandStruct::mk_sub(E2[c], E1[v], Eplasmon + ae*omegaPh[alpha], T);
+								double nPh = 1./(exp(omegaPh[alpha]/T) - 1.);
+								double weightEconserve = EconservePrefac * exp(mhlfByTsq * mk_cv) * (nPh+0.5*(1.-ae)); //weight contribution (including phonon and electron occupation factors) due to energy conservation
+								if(weightEconserve < weightCut) continue;
+								// Effective matrix elements
+								vector3<complex> Pcv_eff;
+								for(int i=0; i<E1.nRows(); i++) // sum over the intermediate states
+								{	vector3<complex> P1_iv, P2_ci;
+									for(int j=0; j<3; j++)
+									{	P1_iv[j] = P1[j](i,v);
+										P2_ci[j] = P2[j](c,i);
+									}
+									Pcv_eff +=
+										( P1_iv * (gePh[alpha](c,i) / (E1[i]+iEta - (E1[v] + Eplasmon)))
+										+ P2_ci * (gePh[alpha](i,v) / (E2[i]+iEta - (E2[c] - Eplasmon))) );
+								}
+								//Add event:
+								Event event = { E1[v], E2[c], vv, vc, sqrt(eventPrefac * weightEconserve) * Pcv_eff };
+								eventsPh.push_back(event);
+							}
+						}
+					}
 				}
 			}
 		}
@@ -104,20 +161,31 @@ int main(int argc, char** argv)
 	logPrintf("done.\n"); logFlush();
 	
 	//Determine offsets for events from each process:
-	unsigned long nEventsPrev = 0; //number of events from previous processes
+	unsigned long nEventsPrev = 0, nEventsPhPrev = 0; //number of events from previous processes
 	for(int jProcess=0; jProcess<mpiUtil->nProcesses(); jProcess++)
-	{	unsigned long nEvents = events.size();
+	{	unsigned long nEvents = events.size(), nEventsPh = eventsPh.size();
 		mpiUtil->bcast(nEvents, jProcess); //nEvents is now the number of events on jProcess
-		if(jProcess < mpiUtil->iProcess()) nEventsPrev += nEvents;
+		mpiUtil->bcast(nEventsPh, jProcess); //nEventsPh is now the number of eventsPh on jProcess
+		if(jProcess < mpiUtil->iProcess())
+		{	nEventsPrev += nEvents;
+			nEventsPhPrev += nEventsPh;
+		}
 	}
 	
 	//Write events:
 	char fname[256];
-	sprintf(fname, "events-%.1lfeV.dat", Eplasmon/eV);
 	MPIUtil::File fpEvent;
+	//--- direct
+	sprintf(fname, "events-%.1lfeV.dat", Eplasmon/eV);
 	mpiUtil->fopenWrite(fpEvent, fname);
 	mpiUtil->fseek(fpEvent, nEventsPrev*sizeof(Event), SEEK_SET);
 	mpiUtil->fwrite(events.data(), sizeof(Event), events.size(), fpEvent);
+	mpiUtil->fclose(fpEvent);
+	//--- phonon
+	sprintf(fname, "eventsPh-%.1lfeV.dat", Eplasmon/eV);
+	mpiUtil->fopenWrite(fpEvent, fname);
+	mpiUtil->fseek(fpEvent, nEventsPhPrev*sizeof(Event), SEEK_SET);
+	mpiUtil->fwrite(eventsPh.data(), sizeof(Event), eventsPh.size(), fpEvent);
 	mpiUtil->fclose(fpEvent);
 	
 	finalizeSystem();
