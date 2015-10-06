@@ -256,7 +256,6 @@ int main(int argc, char** argv)
 			logFlush();
 		}
 	}
-	logPrintf("done.\n"); logFlush();
 	
 	chi1.allReduce(MPIUtil::ReduceSum);
 	chi3.allReduce(MPIUtil::ReduceSum);
