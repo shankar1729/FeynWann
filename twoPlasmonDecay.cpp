@@ -13,6 +13,7 @@
 //Lorentzian kernel for an odd function stored on postive frequencies alone:
 inline double lorentzianOdd(double omega, double omega0, double breadth)
 {	double breadthSq = std::pow(breadth,2);
+	if(omega0 < 0.01) return 0.;
 	return (breadth/M_PI) *
 		( 1./(breadthSq + std::pow(omega-omega0, 2))
 		- 1./(breadthSq + std::pow(omega+omega0, 2)) );
@@ -227,9 +228,11 @@ int main(int argc, char** argv)
 									for(int b=0; b<nBands; b++) // sum over the second intermediate state
 									{	for(int z=0; z<nExtrap; z++)
 										{	complex iEta(0, (z+1)*eta);
+											complex iImE1a = complex(0,ImE1[a]);
+											complex iImE2b = complex(0,ImE2[b]);
 											Meff[z] += 
 												( P2(c,b) * P2(b,a) * gePh[alpha](a,v) / ((E2[a]+iEta - (E2[c] - omegaTot)) * (E2[b]+iEta - (E2[c] - omega)))
-												+ P2(c,b) * gePh[alpha](b,a) * P1(a,v) / ((E1[a]+iEta - (E1[v] + omega)) * (E2[b]+iEta - (E2[c] - omega)))
+												+ P2(c,b) * gePh[alpha](b,a) * P1(a,v) / ((E1[a]+iImE1a - (E1[v] + omega)) * (E2[b]+iImE2b - (E2[c] - omega)))
 												+ gePh[alpha](c,b) * P1(b,a) * P1(a,v) / ((E1[a]+iEta - (E1[v] + omega)) * (E1[b]+iEta - (E1[v] + omegaTot))) );
 										}
 									}
@@ -310,8 +313,8 @@ int main(int argc, char** argv)
 			double kernel3ph = lorentzianOdd(omega, omegaCur, b3ph) * domega * invOmegaSq; //omega^4 instead of omega^2 in chi3
 			Chi1.out[jomega] += kernel1 * chi1.out[iomega];
 			Chi3.out[jomega] += kernel3 * chi3.out[iomega];
-			Chi1ph.out[jomega] += kernel1ph * std::max(0., chi1ph.out[iomega]);
-			Chi3ph.out[jomega] += kernel3ph * std::max(0., chi3ph.out[iomega]);
+			Chi1ph.out[jomega] += kernel1ph * chi1ph.out[iomega];
+			Chi3ph.out[jomega] += kernel3ph * chi3ph.out[iomega];
 			//Carrier distributions:
 			const int nE = Chi1_E.nE; assert(nE == chi1_E.nE);
 			for(int iE=0; iE<nE; iE++)
@@ -319,8 +322,8 @@ int main(int argc, char** argv)
 				int jOE = jomega*nE + iE;
 				Chi1_E.out[jOE] += kernel1 * chi1_E.out[iOE];
 				Chi3_E.out[jOE] += kernel3 * chi3_E.out[iOE];
-				Chi1ph_E.out[jOE] += kernel1ph * std::max(0., chi1ph_E.out[iOE]);
-				Chi3ph_E.out[jOE] += kernel3ph * std::max(0., chi3ph_E.out[iOE]);
+				Chi1ph_E.out[jOE] += kernel1ph * chi1ph_E.out[iOE];
+				Chi3ph_E.out[jOE] += kernel3ph * chi3ph_E.out[iOE];
 			}
 		}
 	}
