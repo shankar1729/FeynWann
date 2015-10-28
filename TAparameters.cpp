@@ -58,6 +58,7 @@ int main(int argc, char** argv)
 	const int spinWeight = round(inputMap.get("spinWeight"));
 	const matrix3<> R = matrix3<>(0,1,1, 1,0,1, 1,1,0) * (0.5*inputMap.get("aCubic")*Angstrom);
 	const double invTauTePrefac = inputMap.get("invTauTePrefac"); // prefactor A as in invTau(Te)=A*T^2
+	const double EfJellium = inputMap.get("EfJellium") * eV; // jellium fermi energy in eV, converted to hartrees
 
 	logPrintf("\nInputs after conversion to atomic units:\n");
 	logPrintf("nKptsN1 = %d\n", nKptsN1);
@@ -71,6 +72,7 @@ int main(int argc, char** argv)
 	logPrintf("spinWeight = %d\n", spinWeight);
 	logPrintf("R:\n");
 	logPrintf("invTauTePrefac = %lg\n", invTauTePrefac);
+	logPrintf("EfJellium = %lg\n", EfJellium);
 	R.print(globalLog, " %lg ");
 	if(dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
@@ -228,6 +230,7 @@ int main(int argc, char** argv)
 	diagMatrix GePh(TeArr.size());
 	Histogram MepNum(Emin, dE, Emax);
 	Histogram MepDen(Emin, dE, Emax);
+	Histogram MepAshcroft(Emin, dE, Emax);
 	const double EconserveScaleFac = 1./dE, EconservePrefac = 1./(M_PI*dE); //energy conserving Lorentzian parameters
 	logPrintf("\nePhCoupling and ImEps: "); logFlush();
 	for(int iBunch=0; iBunch<nBunchesMine; iBunch++)
@@ -306,6 +309,11 @@ int main(int argc, char** argv)
 						MepDen.addEvent(E1[v], delta);
 						MepDen.addEvent(E2[c], delta);
 						
+						//Approxiimate matrix element squared from Ashcroft & Mermin p.523
+						const double Omega = fabs(det(R));
+						double deltaKSquared = std::pow((kArr[ik1][0] - kArr[ik2][0]),2) + std::pow((kArr[ik1][1] - kArr[ik2][1]),2) + std::pow((kArr[ik1][2] - kArr[ik2][2]),2);
+						MepAshcroft.addEvent(E1[v], (E1[v]-E2[c]) *deltaKSquared * EfJellium / (3*Z*Omega));
+
 						//Electron-phonon heat baths coupling GePh:
 						for(size_t iT=0; iT<TeArr.size(); iT++)
 						{	//Note occFactors = ((f1-f2)*nPh - f2*(1-f1)) / (Tl - Te)
@@ -364,6 +372,14 @@ int main(int argc, char** argv)
 	{	ofstream ofs("Mep.dat");
 		for(size_t i=0; i<MepNum.out.size(); i++)
 			ofs << (MepNum.Emin + i*MepNum.dE)/eV << '\t' << MepNum.out[i]/MepDen.out[i] << '\n';
+	}
+
+	//Ashcroft Matrix element statistics:
+	MepAshcroft.allReduce(MPIUtil::ReduceSum);
+	if(mpiUtil->isHead())
+	{	ofstream ofss("MepAshcroft.dat");
+		for(size_t i=0; i<MepAshcroft.out.size(); i++)
+			ofss << (MepAshcroft.Emin + i*MepAshcroft.dE)/eV << '\t' << MepAshcroft.out[i] << '\n';
 	}
 
 	//e-ph coupling:

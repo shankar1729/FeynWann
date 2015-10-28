@@ -19,7 +19,7 @@ int main(int argc, char** argv)
 
 	//Initialize k-array
 	double M = 50;
-	std::vector<vector3<>> kPoints(M*5);
+	std::vector<vector3<>> kPoints(M*4);
 	vector3<> k;
 	for(int m=0; m<M; m++)
 	{	//Gamma to X: (0,0,0) to (0,0.5,0.5)
@@ -28,41 +28,62 @@ int main(int argc, char** argv)
 		k[2] = 0.5*m/M;
 		kPoints[m] = k;
 	}
+//	for(int m=0; m<M; m++)
+//	{	// X to W: (0,0.5,0.5) to (0.25,0.75,0.5)
+//		k[0] = 0.25*(m/M);
+//		k[1] = 0.5+0.25*m/M;
+//		k[2] = 0.5;
+//		kPoints[M+m] = k;
+//	}
+//	for(int m=0; m<M; m++)
+//	{	// W to L: (0.25,0.75,0.5) to (0.5,0.5,0.5)
+//		k[0] = 0.25+0.25*m/M;
+//		k[1] = 0.75-0.25*m/M;
+//		k[2] = 0.5;
+//		kPoints[2*M+m] = k;
+//	}
+//	for(int m=0; m<M; m++)
+//	{	// L to Gamma: (0.5, 0.5, 0.5) to (0,0,0)
+//		k[0] = 0.5-0.5*m/M;
+//		k[1] = 0.5-0.5*m/M;
+//		k[2] = 0.5-0.5*m/M;
+//		kPoints[3*M+m] = k;
+//	}
+//	for(int m=0; m<M; m++)
+//	{	//Gamma to K: (0,0,0) to (0.375, 0.75, 0.375)
+//		k[0] = 0.375 * m/M;
+//		k[1] = 0.75 * m/M;
+//		k[2] = 0.375*m/M;
+//		kPoints[4*M+m] = k;
+//	} 
 	for(int m=0; m<M; m++)
-	{	// X to W: (0,0.5,0.5) to (0.25,0.75,0.5)
-		k[0] = 0.25*(m/M);
-		k[1] = 0.5+0.25*m/M;
-		k[2] = 0.5;
+	{	//X to K: (0,0.5,0.5) to (0.375, 0.75, 0.375)
+		k[0] = 0.375 * m/M;
+		k[1] = 0.5 + 0.25 * m/M;
+		k[2] = 0.5 - 0.125 * m/M;
 		kPoints[M+m] = k;
 	}
 	for(int m=0; m<M; m++)
-	{	// W to L: (0.25,0.75,0.5) to (0.5,0.5,0.5)
-		k[0] = 0.25+0.25*m/M;
-		k[1] = 0.75-0.25*m/M;
-		k[2] = 0.5;
+	{	//K to Gamma: (0.375, 0.75, 0.375) to (0,0,0)
+		k[0] = 0.375 - 0.375 * m/M;
+		k[1] = 0.75 - 0.75 * m/M;
+		k[2] = 0.375 - 0.375 * m/M;
 		kPoints[2*M+m] = k;
 	}
 	for(int m=0; m<M; m++)
-	{	// L to Gamma: (0.5, 0.5, 0.5) to (0,0,0)
-		k[0] = 0.5-0.5*m/M;
-		k[1] = 0.5-0.5*m/M;
-		k[2] = 0.5-0.5*m/M;
+	{	//Gamma to L: (0,0,0) to (0.5, 0.5, 0.5)
+		k[0] = 0.5 * m/M;
+		k[1] = 0.5 * m/M;
+		k[2] = 0.5 * m/M;
 		kPoints[3*M+m] = k;
 	}
-	for(int m=0; m<M; m++)
-	{	//Gamma to K: (0,0,0) to (0.375, 0.75, 0.375)
-		k[0] = 0.375 * m/M;
-		k[1] = 0.75 * m/M;
-		k[2] = 0.375*m/M;
-		kPoints[4*M+m] = k;
-	} 
 
 	//calcualte phonon energy grid:
-	std::vector<double> phononEnergy1(M*5);
-	std::vector<double> phononEnergy3(M*5);
-	std::vector<double> phononEnergy2(M*5);
+	std::vector<double> phononEnergy1(M*4);
+	std::vector<double> phononEnergy3(M*4);
+	std::vector<double> phononEnergy2(M*4);
 	diagMatrix phononModes;
-	for(int i=0; i<(M*5); i++)
+	for(int i=0; i<(M*4); i++)
 	{	phononModes =  bs.getPhononModes(kPoints[i]);
 		phononEnergy1[i] = phononModes[0];
 		phononEnergy2[i] = phononModes[1];
@@ -70,9 +91,9 @@ int main(int argc, char** argv)
 	}
 
 	//write to file
-	ofstream ofs("phononEnergy.dat");
-	ofs << "#kx	ky	kz	phononEnergy\n";
-	for(int iT=0; iT<M*5; iT++)
+	ofstream ofs("phononEnergy2.dat");
+	ofs << "#kx	ky	kz	phononEnergy1 phononEnergy2 phononEnergy3\n";
+	for(int iT=0; iT<M*4; iT++)
 	{	k = kPoints[iT];
 		ofs << kPoints[iT][0] << '\t'
 		<< kPoints[iT][1] << '\t'
