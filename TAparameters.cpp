@@ -311,8 +311,9 @@ int main(int argc, char** argv)
 						
 						//Approxiimate matrix element squared from Ashcroft & Mermin p.523
 						const double Omega = fabs(det(R));
-						double deltaKSquared = std::pow((kArr[ik1][0] - kArr[ik2][0]),2) + std::pow((kArr[ik1][1] - kArr[ik2][1]),2) + std::pow((kArr[ik1][2] - kArr[ik2][2]),2);
-						MepAshcroft.addEvent(E1[v], (E1[v]-E2[c]) *deltaKSquared * EfJellium / (3*Z*Omega));
+						double deltaK = sqrt(std::pow((kArr[ik1][0] - kArr[ik2][0]),2) + std::pow((kArr[ik1][1] - kArr[ik2][1]),2) + std::pow((kArr[ik1][2] - kArr[ik2][2]),2));
+						MepAshcroft.addEvent(E1[v], omegaPh *deltaK * EfJellium / (3*Z*Omega));
+						MepAshcroft.addEvent(E2[c], omegaPh *deltaK * EfJellium / (3*Z*Omega));
 
 						//Electron-phonon heat baths coupling GePh:
 						for(size_t iT=0; iT<TeArr.size(); iT++)
