@@ -100,16 +100,33 @@ int main(int argc, char** argv)
 	int nModes = bs.getPhononModes(vector3<>()).nRows();
 
 
+        logPrintf("\nCollecting DOS: "); logFlush();
         std::vector< std::vector< vector3<> > > kArrArr(nBunchesMine); //use exact same set of MC k-points in the two passes for consistency
+        const double dosWeight = spinWeight*(1./nKpts);
         for(int iBunch=0; iBunch<nBunchesMine; iBunch++)
-        {	//Generate a bunch of k-points:
+        {
+                //Generate a bunch of k-points:
                 std::vector< vector3<> >& kArr = kArrArr[iBunch];
                 kArr.resize(bunchSize);
                 for(vector3<>& k: kArr)
                         for(int j=0; j<3; j++)
                                 k[j] = Random::uniform();
+
+                //Collect DOS:
+                std::vector<diagMatrix> Earr = bs.getStates(kArr);
+                for(const diagMatrix& E: Earr)
+                        for(const double& Ei: E)
+                                dos.addEvent(Ei, dosWeight);
+
+                //Print progress:
+                if((iBunch+1) % iBunchInterval == 0)
+                {       logPrintf("%d%% ", int(round((iBunch+1)*100./nBunchesMine)));
+                        logFlush();
+                }
         }
-	
+        logPrintf("done.\n"); logFlush();
+        dos.allReduce(MPIUtil::ReduceSum);
+        dos.print("dos.dat", 1./eV, eV);
 
 	//Calculate mu and Ce at each temperature:
         diagMatrix dmu(TeArr.size(), 0.), Ce(TeArr.size(), 0.);
