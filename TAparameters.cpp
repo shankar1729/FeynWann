@@ -311,8 +311,8 @@ int main(int argc, char** argv)
 						
 						//Approxiimate matrix element squared from Ashcroft & Mermin p.523
 						const double Omega = fabs(det(R));
-						MepAshcroft.addEvent(E1[v], omegaPh * EfJellium / (3*Z*Omega));
-						MepAshcroft.addEvent(E2[c], omegaPh * EfJellium / (3*Z*Omega));
+						MepAshcroft.addEvent(E1[v], omegaPh * EfJellium / (3*Z));
+						MepAshcroft.addEvent(E2[c], omegaPh * EfJellium / (3*Z));
 
 						//Electron-phonon heat baths coupling GePh:
 						for(size_t iT=0; iT<TeArr.size(); iT++)
