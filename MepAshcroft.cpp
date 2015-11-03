@@ -184,44 +184,18 @@ int main(int argc, char** argv)
 		diagMatrix omegaPhArr[bunchSize];
 		std::vector<matrix> gePhArr[bunchSize];
 		for(int ik1=0; ik1<bunchSize; ik1++)
-		{	const diagMatrix& E1 = Earr[ik1];
-			const diagMatrix& ImE1 = ImEarr[ik1];
-			const std::vector<diagMatrix>& F1 = Farr[ik1];
-			
-			//Calculate phonon stuff for each pair of k-points involving ik1
+		{	//Calculate phonon stuff for each pair of k-points involving ik1
 			bs.setPhononMatElemArray(kArr[ik1], kArr, gePhArr);
 			for(int ik2=0; ik2<bunchSize; ik2++)
 				omegaPhArr[ik2] = bs.getPhononModes(kArr[ik1] - kArr[ik2]);
 
 			for(int ik2=0; ik2<bunchSize; ik2++) if(ik2 != ik1)
-			{	const diagMatrix& E2 = Earr[ik2];
-				const diagMatrix& ImE2 = ImEarr[ik2];
-				const std::vector<diagMatrix>& F2 = Farr[ik2];
-			
-				for(int alpha=0; alpha<nModes; alpha++)
-				{	const matrix& gePh = gePhArr[ik2][alpha];
-					double omegaPh = omegaPhArr[ik2][alpha];
-					double nPh = 1./(exp(omegaPh/Tl) - 1.);
-					std::vector<double> nPh_T(TeArr.size()); //phonon occupation finite difference ratio between Tl and Te's
-					for(size_t iT=0; iT<TeArr.size(); iT++)
-					{	const double& Te = TeArr[iT];
-						double nPhTe = 1./(exp(omegaPh/TeArr[iT]) - 1.); //phonon occupation at Te
-						nPh_T[iT] = (fabs(Tl-Te) > 1e-3*Tl)
-							? (nPh - nPhTe) / (Tl - Te)
-							: nPh*(nPh+1)*omegaPh/(Tl*Tl); //dnPh/dTl (limit Te->Tl of above)
-					}
+			{	for(int alpha=0; alpha<nModes; alpha++)
+				{	double omegaPh = omegaPhArr[ik2][alpha];
+						
 					for(int v=0; v<nBands; v++)
-					for(int c=0; c<nBands; c++)
-					{	double gePhSq = gePh(c,v).norm();
-						double delta = EconservePrefac/(1. + std::pow(EconserveScaleFac*(E1[v]-E2[c] + omegaPh),2));
-						
-						//Matrix element squared (weighted by energy conservation)
-						MepNum.addEvent(E1[v], delta * gePhSq);
-						MepNum.addEvent(E2[c], delta * gePhSq);
-						MepDen.addEvent(E1[v], delta);
-						MepDen.addEvent(E2[c], delta);
-						
-						//Approxiimate matrix element squared from Ashcroft & Mermin p.523
+                                        for(int c=0; c<nBands; c++)
+					{	//Approxiimate matrix element squared from Ashcroft & Mermin p.523
 						const double Omega = fabs(det(R));
 						MepAshcroft.addEvent(E1[v], omegaPh * EfJellium / (3*Z));
 						MepAshcroft.addEvent(E2[c], omegaPh * EfJellium / (3*Z));
@@ -238,15 +212,6 @@ int main(int argc, char** argv)
 		}
 	}
 	logPrintf("done.\n"); logFlush();
-
-	//Matrix element statistics:
-	MepNum.allReduce(MPIUtil::ReduceSum);
-	MepDen.allReduce(MPIUtil::ReduceSum);
-	if(mpiUtil->isHead())
-	{	ofstream ofs("Mep.dat");
-		for(size_t i=0; i<MepNum.out.size(); i++)
-			ofs << (MepNum.Emin + i*MepNum.dE)/eV << '\t' << MepNum.out[i]/MepDen.out[i] << '\n';
-	}
 
 	//Ashcroft Matrix element statistics:
 	MepAshcroft.allReduce(MPIUtil::ReduceSum);
