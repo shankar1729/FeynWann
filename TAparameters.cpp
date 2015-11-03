@@ -230,7 +230,7 @@ int main(int argc, char** argv)
 	diagMatrix GePh(TeArr.size());
 	Histogram MepNum(Emin, dE, Emax);
 	Histogram MepDen(Emin, dE, Emax);
-	Histogram MepAshcroft(Emin, dE, Emax);
+	Histogram MepAshcroftNum(Emin, dE, Emax);
 	const double EconserveScaleFac = 1./dE, EconservePrefac = 1./(M_PI*dE); //energy conserving Lorentzian parameters
 	logPrintf("\nePhCoupling and ImEps: "); logFlush();
 	for(int iBunch=0; iBunch<nBunchesMine; iBunch++)
@@ -311,8 +311,8 @@ int main(int argc, char** argv)
 						
 						//Approxiimate matrix element squared from Ashcroft & Mermin p.523
 						const double Omega = fabs(det(R));
-						MepAshcroft.addEvent(E1[v], omegaPh * EfJellium / (3*Z));
-						MepAshcroft.addEvent(E2[c], omegaPh * EfJellium / (3*Z));
+						MepAshcroftNum.addEvent(E1[v], delta * omegaPh * EfJellium / (3*Z));
+						MepAshcroftNum.addEvent(E2[c], delta * omegaPh * EfJellium / (3*Z));
 
 						//Electron-phonon heat baths coupling GePh:
 						for(size_t iT=0; iT<TeArr.size(); iT++)
@@ -379,7 +379,7 @@ int main(int argc, char** argv)
 	if(mpiUtil->isHead())
 	{	ofstream ofss("MepAshcroft.dat");
 		for(size_t i=0; i<MepAshcroft.out.size(); i++)
-			ofss << (MepAshcroft.Emin + i*MepAshcroft.dE)/eV << '\t' << MepAshcroft.out[i] << '\n';
+			ofss << (MepAshcroft.Emin + i*MepAshcroft.dE)/eV << '\t' << MepAshcroft.out[i]/MepDen.out[i] << '\n';
 	}
 
 	//e-ph coupling:
