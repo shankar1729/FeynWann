@@ -161,7 +161,6 @@ int main(int argc, char** argv)
 	Histogram MepNum(Emin, dE, Emax);
 	Histogram MepDen(Emin, dE, Emax);
 	Histogram MepAshcroft(Emin, dE, Emax);
-	const double EconserveScaleFac = 1./dE, EconservePrefac = 1./(M_PI*dE); //energy conserving Lorentzian parameters
 	for(int iBunch=0; iBunch<nBunchesMine; iBunch++)
 	{
 		//Retrieve k-point bunch:
@@ -184,13 +183,15 @@ int main(int argc, char** argv)
 		diagMatrix omegaPhArr[bunchSize];
 		std::vector<matrix> gePhArr[bunchSize];
 		for(int ik1=0; ik1<bunchSize; ik1++)
-		{	//Calculate phonon stuff for each pair of k-points involving ik1
+		{	const diagMatrix& E1 = Earr[ik1];
+			//Calculate phonon stuff for each pair of k-points involving ik1
 			bs.setPhononMatElemArray(kArr[ik1], kArr, gePhArr);
 			for(int ik2=0; ik2<bunchSize; ik2++)
 				omegaPhArr[ik2] = bs.getPhononModes(kArr[ik1] - kArr[ik2]);
 
 			for(int ik2=0; ik2<bunchSize; ik2++) if(ik2 != ik1)
-			{	for(int alpha=0; alpha<nModes; alpha++)
+			{	const diagMatrix& E2 = Earr[ik2];
+				for(int alpha=0; alpha<nModes; alpha++)
 				{	double omegaPh = omegaPhArr[ik2][alpha];
 						
 					for(int v=0; v<nBands; v++)
