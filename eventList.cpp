@@ -57,16 +57,13 @@ int main(int argc, char** argv)
 	bs.setCacheSize(4);
 
 	//Prepare for event collection:
-	double eventPrefac = 4 * std::pow(M_PI,2) * spinWeight / (nKptsN1*fabs(det(R)) * omega*omega); //prefactor that yields Im(eps)
 	struct Event
 	{	double Ev, Ec;
 		vector3<> vv, vc;
 		matrix3<complex> PcvSq;
 	};
 	std::vector<Event> events, eventsPh;
-	events.reserve(nKptsN1/10);
-	eventsPh.reserve(nKptsN1/10);
-
+	
 	//Singularity extrapolation parameters
 	double extrapCoeff[] = {-19./12, 13./3, -7./4 }; //account for constant, 1/eta and eta^2 dependence
 	//double extrapCoeff[] = { -1, 2.}; //account for constant and 1/eta dependence
@@ -74,30 +71,37 @@ int main(int argc, char** argv)
 	const double eta = 0.1*eV;
 
 	//Monte-Carlo loop over k-points:
-	const double weightCut = 1e-4;
 	const double mhlfByTsq = -0.5/(T*T), EconservePrefac = (0.5*spinWeight)/(T*sqrt(2*M_PI));
-	int ikStart, ikStop; TaskDivision(nKptsN1, mpiUtil).myRange(ikStart, ikStop);
-	int nkMine = ikStop-ikStart;
-	int ikInterval = std::max(1, int(round(nkMine/50.))); //interval for reporting progress
+	const double weightCut = 1e-2 * EconservePrefac;
+	size_t ieStart, ieStop; TaskDivision(nKptsN1, mpiUtil).myRange(ieStart, ieStop);
+	size_t neMine = ieStop-ieStart;
+	size_t ieInterval = std::max(1, int(round(neMine/50.))); //interval for reporting progress
+	events.reserve(neMine);
+	eventsPh.reserve(neMine);
 	logPrintf("\nProgress: "); logFlush();
-	for(int ik=0; ik<nkMine; ik++)
-	{	//Generate a pair of random k-points:
+	size_t nkDirect = 0;
+	size_t nkPhonon = 0;
+	size_t neCur = 0, nePrev = 0;
+	for(int ik=0; neCur<neMine; ik++)
+	{	nkDirect += 2;
+		nkPhonon++;
+		//Generate a pair of random k-points:
 		std::vector< vector3<> > kArr(2);
 		for(vector3<>& k: kArr)
 			for(int j=0; j<3; j++)
 				k[j] = Random::uniform();
 		std::vector<diagMatrix> Earr = bs.getStates(kArr);
-		//Filter k1 for direct and (k1,k2) for phonon:
-		double mk = bs.get_mk(kArr[0], omega, T);
-		double mk12 = bs.get_mk1k2(kArr[0], kArr[1], omega, T);
-		double weightEconserveMax = EconservePrefac * exp(mhlfByTsq * mk);
-		double weightEconserveMax12 = EconservePrefac * exp(mhlfByTsq * mk12);
-		if((weightEconserveMax > weightCut) || (weightEconserveMax12 > weightCut))
+		//Filter k1,k2 for direct and (k1,k2) for phonon:
+		double weightEconserveMax[2];
+		for(int iPair=0; iPair<2; iPair++)
+			weightEconserveMax[iPair] = EconservePrefac * exp(mhlfByTsq * bs.get_mk(kArr[iPair], omega, T));
+		double weightEconserveMax12 = EconservePrefac * exp(mhlfByTsq * bs.get_mk1k2(kArr[0], kArr[1], omega, T));
+		if((weightEconserveMax[0] > weightCut) || (weightEconserveMax[1] > weightCut) || (weightEconserveMax12 > weightCut))
 		{	std::vector<std::vector<matrix> > Parr = bs.getDipoleMatElem(kArr);
 			//Direct contributions:
-			if(weightEconserveMax > weightCut)
-			{	const diagMatrix& E = Earr[0];
-				const std::vector<matrix>& P = Parr[0];
+			for(int iPair=0; iPair<2; iPair++) if(weightEconserveMax[iPair] > weightCut)
+			{	const diagMatrix& E = Earr[iPair];
+				const std::vector<matrix>& P = Parr[iPair];
 				for(int v=0; v<E.nRows(); v++) if(E[v]<10.*T)
 				{	for(int c=0; c<E.nRows(); c++) if(E[c]>-10.*T)
 					{	//Filter events by energy conservation:
@@ -112,7 +116,7 @@ int main(int argc, char** argv)
 							vc[j] = -P[j](c,c).imag();
 						}
 						//Add event:
-						Event event = { E[v], E[c], vv, vc, complex(eventPrefac * weightEconserve) * outer(P_cv, conj(P_cv)) };
+						Event event = { E[v], E[c], vv, vc, complex(weightEconserve) * outer(P_cv, conj(P_cv)) };
 						events.push_back(event);
 					}
 				}
@@ -159,7 +163,7 @@ int main(int argc, char** argv)
 								}
 								//Singularity extrapolation:
 								for(int z=0; z<nExtrap; z++)
-									e.PcvSq += complex(eventPrefac * weightEconserve * extrapCoeff[z]) * outer(Pcv_eff[z], conj(Pcv_eff[z]));
+									e.PcvSq += complex(weightEconserve * extrapCoeff[z]) * outer(Pcv_eff[z], conj(Pcv_eff[z]));
 							}
 						}
 						if(weightEconserveTot < weightCut) continue;
@@ -170,12 +174,22 @@ int main(int argc, char** argv)
 		}
 		
 		//Print progress:
-		if((ik+1) % ikInterval == 0)
-		{	logPrintf("%d%% ", int(round((ik+1)*100./nkMine)));
+		neCur = events.size() + eventsPh.size();
+		if(neCur - nePrev >= ieInterval)
+		{	logPrintf("%d%% ", int(round(neCur*100./neMine)));
 			logFlush();
+			nePrev = neCur;
 		}
 	}
 	logPrintf("done.\n"); logFlush();
+	
+	//Normalize events based on the total k-points explored:
+	mpiUtil->allReduce(nkDirect, MPIUtil::ReduceSum);
+	mpiUtil->allReduce(nkPhonon, MPIUtil::ReduceSum);
+	double directPrefac = 4 * std::pow(M_PI,2) * spinWeight / (nkDirect*fabs(det(R)) * omega*omega); //prefactor that yields Im(eps)
+	double phononPrefac = 4 * std::pow(M_PI,2) * spinWeight / (nkPhonon*fabs(det(R)) * omega*omega); //prefactor that yields Im(eps)
+	for(Event& e: events) e.PcvSq *= directPrefac;
+	for(Event& e: eventsPh) e.PcvSq *= phononPrefac;
 	
 	//Determine offsets for events from each process:
 	unsigned long nEventsPrev = 0, nEventsPhPrev = 0; //number of events from previous processes
