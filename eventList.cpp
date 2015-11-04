@@ -16,6 +16,38 @@ inline vector3<complex> conj(const vector3<complex>& v)
 {	return vector3<complex>(v[0].conj(), v[1].conj(), v[2].conj());
 }
 
+struct Event
+{	double Ev, Ec;
+	vector3<> vv, vc;
+	matrix3<complex> PcvSq;
+	
+	bool operator==(const Event& e) const
+	{	static const double Etol = 1e-4, vSqTol = 1e-8;
+		return
+			(fabs(Ev - e.Ev) < Etol) &&
+			(fabs(Ec - e.Ec) < Etol) &&
+			((vv - e.vv).length_squared() < vSqTol) &&
+			((vc - e.vc).length_squared() < vSqTol);
+	}
+};
+
+//Add events with coalescing
+inline void addEvents(std::vector<Event>& dest, const std::vector<Event>& src)
+{	std::vector<bool> srcDone(src.size(), false);
+	for(size_t iSrc=0; iSrc<src.size(); iSrc++)
+		if(!srcDone[iSrc])
+		{	Event e = src[iSrc];
+			srcDone[iSrc] = true;
+			//Check for additional events with same initial and final states:
+			for(size_t jSrc=iSrc+1; jSrc<src.size(); jSrc++)
+				if(e == src[jSrc])
+				{	e.PcvSq += src[jSrc].PcvSq;
+					srcDone[jSrc] = true;
+				}
+			dest.push_back(e);
+		}
+}
+
 int main(int argc, char** argv)
 {   string inputFilename; bool dryRun, printDefaults;
 	initSystemCmdline(argc, argv, "Generate event list for transport modules", inputFilename, dryRun, printDefaults);
@@ -56,14 +88,6 @@ int main(int argc, char** argv)
 	BandStruct bs("Wannier/wannier", mu, spinWeight, "Wannier/totalE", Ahat);
 	bs.setCacheSize(4);
 
-	//Prepare for event collection:
-	struct Event
-	{	double Ev, Ec;
-		vector3<> vv, vc;
-		matrix3<complex> PcvSq;
-	};
-	std::vector<Event> events, eventsPh;
-	
 	//Singularity extrapolation parameters
 	double extrapCoeff[] = {-19./12, 13./3, -7./4 }; //account for constant, 1/eta and eta^2 dependence
 	//double extrapCoeff[] = { -1, 2.}; //account for constant and 1/eta dependence
@@ -76,12 +100,13 @@ int main(int argc, char** argv)
 	size_t ieStart, ieStop; TaskDivision(nKptsN1, mpiUtil).myRange(ieStart, ieStop);
 	size_t neMine = ieStop-ieStart;
 	size_t ieInterval = std::max(1, int(round(neMine/50.))); //interval for reporting progress
-	events.reserve(neMine);
-	eventsPh.reserve(neMine);
 	logPrintf("\nProgress: "); logFlush();
 	size_t nkDirect = 0;
 	size_t nkPhonon = 0;
-	size_t neCur = 0, nePrev = 0;
+	size_t neCur = 0, nePrev = 0, neRaw = 0;
+	std::vector<Event> events, eventsPh, eBuffer;
+	events.reserve(neMine);
+	eventsPh.reserve(neMine);
 	for(int ik=0; neCur<neMine; ik++)
 	{	nkDirect += 2;
 		nkPhonon++;
@@ -117,9 +142,10 @@ int main(int argc, char** argv)
 						}
 						//Add event:
 						Event event = { E[v], E[c], vv, vc, complex(weightEconserve) * outer(P_cv, conj(P_cv)) };
-						events.push_back(event);
+						eBuffer.push_back(event);
 					}
 				}
+				addEvents(events, eBuffer); neRaw += eBuffer.size(); eBuffer.clear();
 			}
 			//Phonon contributions:
 			if(weightEconserveMax12 > weightCut)
@@ -167,9 +193,10 @@ int main(int argc, char** argv)
 							}
 						}
 						if(weightEconserveTot < weightCut) continue;
-						eventsPh.push_back(e);
+						eBuffer.push_back(e);
 					}
 				}
+				addEvents(eventsPh, eBuffer); neRaw += eBuffer.size(); eBuffer.clear();
 			}
 		}
 		
@@ -190,6 +217,15 @@ int main(int argc, char** argv)
 	double phononPrefac = 4 * std::pow(M_PI,2) * spinWeight / (nkPhonon*fabs(det(R)) * omega*omega); //prefactor that yields Im(eps)
 	for(Event& e: events) e.PcvSq *= directPrefac;
 	for(Event& e: eventsPh) e.PcvSq *= phononPrefac;
+
+	//Print collected event / k-point info:
+	unsigned long nEventsTot = events.size(), nEventsPhTot = eventsPh.size();
+	mpiUtil->allReduce(neRaw, MPIUtil::ReduceSum);
+	mpiUtil->allReduce(nEventsTot, MPIUtil::ReduceSum);
+	mpiUtil->allReduce(nEventsPhTot, MPIUtil::ReduceSum);
+	logPrintf("Obtained %lu direct events from %lu k-points.\n", nEventsTot, nkDirect);
+	logPrintf("Obtained %lu phonon events from %lu k-pairs.\n", nEventsPhTot, nkPhonon);
+	logPrintf("Event compression ratio: %lg (due to spinorial degeneracies, if any)\n", neRaw*1./(nEventsTot+nEventsPhTot));
 	
 	//Determine offsets for events from each process:
 	unsigned long nEventsPrev = 0, nEventsPhPrev = 0; //number of events from previous processes
