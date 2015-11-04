@@ -375,7 +375,7 @@ int main(int argc, char** argv)
 	}
 
 	//Ashcroft Matrix element statistics:
-	MepAshcroft.allReduce(MPIUtil::ReduceSum);
+	MepAshcroftNum.allReduce(MPIUtil::ReduceSum);
 	if(mpiUtil->isHead())
 	{	ofstream ofss("MepAshcroft.dat");
 		for(size_t i=0; i<MepAshcroft.out.size(); i++)
