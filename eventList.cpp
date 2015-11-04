@@ -57,7 +57,7 @@ int main(int argc, char** argv)
 	bs.setCacheSize(4);
 
 	//Prepare for event collection:
-	double eventPrefac = 1./(nKptsN1*fabs(det(R)));
+	double eventPrefac = 4 * std::pow(M_PI,2) * spinWeight / (nKptsN1*fabs(det(R)) * omega*omega); //prefactor that yields Im(eps)
 	struct Event
 	{	double Ev, Ec;
 		vector3<> vv, vc;
@@ -134,12 +134,14 @@ int main(int argc, char** argv)
 						{	e.vv[j] = -P1[j](v,v).imag(); //(P is calculated without an i to make things real when possible)
 							e.vc[j] = -P2[j](c,c).imag();
 						}
+						double weightEconserveTot = 0.;
 						for(int alpha=0; alpha<omegaPh.nRows(); alpha ++)
 						{	for(int ae=-1; ae<=+1; ae+=2) // +/- for phonon absorption or emmision
 							{	double mk_cv = BandStruct::mk_sub(E2[c], E1[v], Eplasmon + ae*omegaPh[alpha], T);
 								double nPh = 1./(exp(omegaPh[alpha]/T) - 1.);
 								double weightEconserve = EconservePrefac * exp(mhlfByTsq * mk_cv) * (nPh+0.5*(1.-ae)); //weight contribution (including phonon and electron occupation factors) due to energy conservation
 								if(weightEconserve < weightCut) continue;
+								weightEconserveTot += weightEconserve;
 								// Effective matrix elements
 								std::vector< vector3<complex> > Pcv_eff(nExtrap);
 								for(int i=0; i<E1.nRows(); i++) // sum over the intermediate states
@@ -160,6 +162,7 @@ int main(int argc, char** argv)
 									e.PcvSq += complex(eventPrefac * weightEconserve * extrapCoeff[z]) * outer(Pcv_eff[z], conj(Pcv_eff[z]));
 							}
 						}
+						if(weightEconserveTot < weightCut) continue;
 						eventsPh.push_back(e);
 					}
 				}
