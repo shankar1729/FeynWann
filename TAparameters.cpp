@@ -378,8 +378,8 @@ int main(int argc, char** argv)
 	MepAshcroftNum.allReduce(MPIUtil::ReduceSum);
 	if(mpiUtil->isHead())
 	{	ofstream ofss("MepAshcroft.dat");
-		for(size_t i=0; i<MepAshcroft.out.size(); i++)
-			ofss << (MepAshcroft.Emin + i*MepAshcroft.dE)/eV << '\t' << MepAshcroft.out[i]/MepDen.out[i] << '\n';
+		for(size_t i=0; i<MepAshcroftNum.out.size(); i++)
+			ofss << (MepAshcroftNum.Emin + i*MepAshcroftNum.dE)/eV << '\t' << MepAshcroftNum.out[i]/MepDen.out[i] << '\n';
 	}
 
 	//e-ph coupling:
