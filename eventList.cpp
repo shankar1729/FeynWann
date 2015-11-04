@@ -12,6 +12,9 @@
 inline vector3<complex> operator*(const vector3<complex>& v, complex s)
 {	return vector3<complex>(v[0]*s, v[1]*s, v[2]*s);
 }
+inline vector3<complex> conj(const vector3<complex>& v)
+{	return vector3<complex>(v[0].conj(), v[1].conj(), v[2].conj());
+}
 
 int main(int argc, char** argv)
 {   string inputFilename; bool dryRun, printDefaults;
@@ -55,15 +58,20 @@ int main(int argc, char** argv)
 
 	//Prepare for event collection:
 	double eventPrefac = 1./(nKptsN1*fabs(det(R)));
-	complex iEta(0, 0.1*eV);
 	struct Event
 	{	double Ev, Ec;
 		vector3<> vv, vc;
-		vector3<complex> Pcv;
+		matrix3<complex> PcvSq;
 	};
 	std::vector<Event> events, eventsPh;
 	events.reserve(nKptsN1/10);
 	eventsPh.reserve(nKptsN1/10);
+
+	//Singularity extrapolation parameters
+	double extrapCoeff[] = {-19./12, 13./3, -7./4 }; //account for constant, 1/eta and eta^2 dependence
+	//double extrapCoeff[] = { -1, 2.}; //account for constant and 1/eta dependence
+	const int nExtrap = sizeof(extrapCoeff)/sizeof(double);
+	const double eta = 0.1*eV;
 
 	//Monte-Carlo loop over k-points:
 	const double weightCut = 1e-4;
@@ -104,7 +112,7 @@ int main(int argc, char** argv)
 							vc[j] = -P[j](c,c).imag();
 						}
 						//Add event:
-						Event event = { E[v], E[c], vv, vc, sqrt(eventPrefac * weightEconserve) * P_cv };
+						Event event = { E[v], E[c], vv, vc, complex(eventPrefac * weightEconserve) * outer(P_cv, conj(P_cv)) };
 						events.push_back(event);
 					}
 				}
@@ -119,10 +127,12 @@ int main(int argc, char** argv)
 				std::vector<matrix> gePh = bs.getPhononMatElem(kArr[0], kArr[1]);
 				for(int v=0; v<E1.nRows(); v++) if(E1[v]<10.*T)
 				{	for(int c=0; c<E2.nRows(); c++) if(E2[c]>-10.*T)
-					{	vector3<> vv, vc;
+					{	Event e;
+						e.Ev = E1[v];
+						e.Ec = E2[c];
 						for(int j=0; j<3; j++)
-						{	vv[j] = -P1[j](v,v).imag(); //(P is calculated without an i to make things real when possible)
-							vc[j] = -P2[j](c,c).imag();
+						{	e.vv[j] = -P1[j](v,v).imag(); //(P is calculated without an i to make things real when possible)
+							e.vc[j] = -P2[j](c,c).imag();
 						}
 						for(int alpha=0; alpha<omegaPh.nRows(); alpha ++)
 						{	for(int ae=-1; ae<=+1; ae+=2) // +/- for phonon absorption or emmision
@@ -131,22 +141,26 @@ int main(int argc, char** argv)
 								double weightEconserve = EconservePrefac * exp(mhlfByTsq * mk_cv) * (nPh+0.5*(1.-ae)); //weight contribution (including phonon and electron occupation factors) due to energy conservation
 								if(weightEconserve < weightCut) continue;
 								// Effective matrix elements
-								vector3<complex> Pcv_eff;
+								std::vector< vector3<complex> > Pcv_eff(nExtrap);
 								for(int i=0; i<E1.nRows(); i++) // sum over the intermediate states
 								{	vector3<complex> P1_iv, P2_ci;
 									for(int j=0; j<3; j++)
 									{	P1_iv[j] = P1[j](i,v);
 										P2_ci[j] = P2[j](c,i);
 									}
-									Pcv_eff +=
-										( P1_iv * (gePh[alpha](c,i) / (E1[i]+iEta - (E1[v] + Eplasmon)))
-										+ P2_ci * (gePh[alpha](i,v) / (E2[i]+iEta - (E2[c] - Eplasmon))) );
+									for(int z=0; z<nExtrap; z++)
+									{	complex iEta(0, (z+1)*eta);
+										Pcv_eff[z] +=
+											( P1_iv * (gePh[alpha](c,i) / (E1[i]+iEta - (E1[v] + Eplasmon)))
+											+ P2_ci * (gePh[alpha](i,v) / (E2[i]+iEta - (E2[c] - Eplasmon))) );
+									}
 								}
-								//Add event:
-								Event event = { E1[v], E2[c], vv, vc, sqrt(eventPrefac * weightEconserve) * Pcv_eff };
-								eventsPh.push_back(event);
+								//Singularity extrapolation:
+								for(int z=0; z<nExtrap; z++)
+									e.PcvSq += complex(eventPrefac * weightEconserve * extrapCoeff[z]) * outer(Pcv_eff[z], conj(Pcv_eff[z]));
 							}
 						}
+						eventsPh.push_back(e);
 					}
 				}
 			}
