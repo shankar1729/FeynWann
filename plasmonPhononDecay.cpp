@@ -7,7 +7,6 @@
 #include "BandStruct.h"
 #include "Histogram.h"
 #include "Epsilon.h"
-#include "LineWidth.h"
 #include "InputMap.h"
 #include "Units.h"
 
@@ -61,11 +60,14 @@ int main(int argc, char** argv)
 	complex I(0.0,1.0);
 	std::vector< vector3<complex> > Ahat(1, kHat - I*(eps.k/eps.modGammaMinus)*zHat);
 	
+	//Singularity extrapolation parameters
+	double extrapCoeff[] = {-19./12, 13./3, -7./4 }; //account for constant, 1/eta and eta^2 dependence
+	//double extrapCoeff[] = { -1, 2.}; //account for constant and 1/eta dependence
+	const int nExtrap = sizeof(extrapCoeff)/sizeof(double);
+	const double eta = 0.1*eV;
+
 	//Initialize Wannier bandstructure:
 	BandStruct bs("Wannier/wannier", mu, spinWeight, "Wannier/totalE", Ahat);
-
-	//Initalize line width of intermediate electronic states
-	LineWidth lineWidth("Wannier/wannier", bs);
 
 	//Compute the normalization factor
 	int blockStart = (totalBlocks * (mpiUtil->iProcess())) / mpiUtil->nProcesses(); //MPI division
@@ -150,10 +152,10 @@ int main(int argc, char** argv)
 				if(equib)
 				{	ik++;
 					// Calculate transitions at current k-point:
-					diagMatrix E1 = bs.getStates(kpnt1), E1im = lineWidth(kpnt1);
+					diagMatrix E1 = bs.getStates(kpnt1);
 					std::vector<matrix> Pk1 = bs.getDipoleMatElem(kpnt1);
 					const matrix& AdotPk1 = Pk1[0]; //pre-contracted
-					diagMatrix E2 = bs.getStates(kpnt2), E2im = lineWidth(kpnt2);
+					diagMatrix E2 = bs.getStates(kpnt2);
 					std::vector<matrix> Pk2 = bs.getDipoleMatElem(kpnt2);
 					const matrix& AdotPk2 = Pk2[0]; //pre-contracted
 					diagMatrix omegaPh = bs.getPhononModes(kpnt1-kpnt2);
@@ -169,16 +171,20 @@ int main(int argc, char** argv)
 									double weightEconserve = exp(0.5*(mk1k2-mk_cv)/(T*T))/(T*sqrt(2*M_PI)) * (nPh+0.5*(1.-ae)); //weight contribution (including phonon and electron occupation factors) due to energy conservation
 									if(weightEconserve < weightCut) continue;
 									// Effective matrix elements
-									complex Meff = 0.; double weightSub = 0.;
+									std::vector<complex> Meff(nExtrap, 0.);
+									double weightSub = 0.;
 									for(int i=0; i<E1.nRows(); i++) // sum over the intermediate states
-									{	complex E1i(E1[i], E1im[i]);
-										complex E2i(E2[i], E2im[i]);
-										complex num1 = gePh[alpha](c,i) * AdotPk1(i,v);
+									{	complex num1 = gePh[alpha](c,i) * AdotPk1(i,v);
 										complex num2 = AdotPk2(c,i) * gePh[alpha](i,v);
-										complex den1 = one / (E1i - (E1[v] + Eplasmon));
-										complex den2 = one / (E2i - (E2[c] - Eplasmon));
-										Meff += num1*den1 + num2*den2;
-										weightSub =  weightEconserve * gammaPrefac * Meff.norm();  //norm = abs^2
+										double MeffSqExtrap = 0.;
+										for(int z=0; z<nExtrap; z++)
+										{	complex iEta(0, (z+1)*eta);
+											complex den1 = one / (E1[i]+iEta - (E1[v] + Eplasmon));
+											complex den2 = one / (E2[i]+iEta - (E2[c] - Eplasmon));
+											Meff[z] += num1*den1 + num2*den2;
+											MeffSqExtrap += extrapCoeff[z] * Meff[z].norm(); //norm = abs^2
+										}
+										weightSub =  weightEconserve * gammaPrefac * MeffSqExtrap;
 										GammaConv[i] += weightSub; //estimate based on truncating to i bands
 									}
 									weight += weightSub; //result using all available bands
