@@ -138,7 +138,7 @@ int main(int argc, char** argv)
 
 	if(mpiUtil->isHead())
         {        ofstream ofs("phononDOSDebye.dat");
-	        ofs << "#T[K] Cl[J/m^3K] ClDebye[J/m^3K]\n";
+	        ofs << "#omega[eV] phononDOSDebye[eV^-1]\n";
 		for(size_t ie=1; ie<dos.out.size(); ie++)
                         ofs << ie*domegaPh/eV << '\t'
                                 << dosDebyeArr[ie]*eV << '\n';
