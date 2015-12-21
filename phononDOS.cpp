@@ -112,6 +112,7 @@ int main(int argc, char** argv)
 	int iTstart, iTstop; TaskDivision(TlArr.size(), mpiUtil).myRange(iTstart, iTstop);
 	const double dosPrefacDebyeL = fabs(det(R)) / (2*M_PI*M_PI * std::pow(vL,3)); 
 	const double dosPrefacDebyeT = fabs(det(R)) / (2*M_PI*M_PI * std::pow(vT,3)); 
+	std::vector<double> dosDebyeArr(dos.out.size());
 	for(int iT=iTstart; iT<iTstop; iT++)
 	{	const double Tl = TlArr[iT], invTl = 1./Tl;
 		
@@ -128,11 +129,21 @@ int main(int argc, char** argv)
 			double dosDebyeL = dosPrefacDebyeL * (omegaPh<TdebyeL ? omegaPh*omegaPh : 0.);
 			double dosDebyeT = dosPrefacDebyeT * (omegaPh<TdebyeT ? omegaPh*omegaPh : 0.); //per mode
 			double dosDebye = dosDebyeL + 2*dosDebyeT; //2 transverse modes
+			dosDebyeArr[ie] = dosDebye;
 			ClDebyeCur += domegaPh * omegaPh * g_Tl  * dosDebye;
 		}
 	}
 	Cl.allReduce(MPIUtil::ReduceSum);
 	ClDebye.allReduce(MPIUtil::ReduceSum);
+
+	if(mpiUtil->isHead())
+        {        ofstream ofs("phononDOSDebye.dat");
+	        ofs << "#T[K] Cl[J/m^3K] ClDebye[J/m^3K]\n";
+		for(size_t ie=1; ie<dos.out.size(); ie++)
+                        ofs << ie*domegaPh/eV << '\t'
+                                << dosDebyeArr[ie]*eV << '\n';
+        }
+
 
 	if(mpiUtil->isHead())
 	{	const double Omega = fabs(det(R));
