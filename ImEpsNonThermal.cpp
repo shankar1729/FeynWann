@@ -24,6 +24,43 @@ inline double fermi(double x) { return x>30. ? exp(-x) : 1./(1.+exp(x)); } //avo
 inline double fermiPrime(double x) { return 0.25*(std::pow(tanh(0.5*x), 2) - 1.); } //avoid overflow issues
 inline double ImSigmaTe(double x,double invTauTePrefac) { return 0.5*invTauTePrefac*std::pow(x, 2); }
 
+inline int findNearestNeighbourIndex(double value,std::vector<double> &x)
+{	double dist = DBL_MAX;
+	int idx = -1;
+	for(size_t i=0; i<x.size(); ++i)
+	{	double newDist = value-x[i];
+		if(newDist>0 && newDist<dist)
+		{	dist = newDist;
+			idx=i;
+		}
+	}
+	return idx;
+}
+
+inline std::vector<double> interp(std::vector<double> &x, std::vector<double> &y, std::vector<double> &newX)
+{	std::vector<double> newY, dx, dy, slope, intercept;
+	for(size_t i=1; i<x.size(); i++)
+	{	if(i<x.size()-1)
+		{	dx.push_back(x[i+1]-x[i]);
+			dy.push_back(y[i+1]-y[i]);
+			slope.push_back(dy[i]/dx[i]);
+			intercept.push_back(y[i]-x[i]*slope[i]);
+		}
+		else
+		{	dx.push_back( dx[i-1]);
+			dy.push_back( dy[i-1]);
+			slope.push_back( slope[i-1]);
+			intercept.push_back(intercept[i-1]);
+		}
+	}
+
+	for(size_t i=1; i<newX.size(); i++)
+	{	int idx = findNearestNeighbourIndex(newX[i],x);
+		newY.push_back(slope[idx]*newX[i]+intercept[idx]);
+	}
+	return newY;
+}
+
 inline void writeImEps(const char* fname, const std::vector<Histogram>& ImEps, const std::vector<double> TeArr)
 {	std::ofstream ofs(fname);
 	//Header:
@@ -46,28 +83,24 @@ int main(int argc, char** argv)
 	initSystemCmdline(argc, argv, "Ab initio parameters for Transient Absorption analysis", inputFilename, dryRun, printDefaults);
 
 	//Get the system parameters (mu, T, lattice vectors etc.)
-	InputMap inputMap(inputFilename);
+	InputMap inputMap(inputFilename);	
 	const int nKptsN1 = inputMap.get("nKptsN1");
 	double mu = inputMap.get("mu"); //initial guess only - will be calculated self-consistently in this executable
 	const double Z = inputMap.get("Z"); //number of electrons per unit cell
 	const double dE = inputMap.get("dE") * eV; //energy resolution used for output and energy conservation
-	const double TeMin = inputMap.get("TeMin") * Kelvin; //electron temperature grid start
-	const double TeMax = inputMap.get("TeMax") * Kelvin; //electron temperature grid stop
-	const double TeStep = inputMap.get("TeStep") * Kelvin; //electron temperature grid spacing
 	const double Tl = inputMap.get("Tl") * Kelvin; //lattice temperature
 	const int spinWeight = round(inputMap.get("spinWeight"));
 	const matrix3<> R = matrix3<>(0,1,1, 1,0,1, 1,1,0) * (0.5*inputMap.get("aCubic")*Angstrom);
 	const double invTauTePrefac = inputMap.get("invTauTePrefac"); // prefactor A as in invTau(Te)=A*T^2
 	const double EfJellium = inputMap.get("EfJellium") * eV; // jellium fermi energy in eV, converted to hartrees
+	const int IF_Row = inputMap.get("eeRelaxNumRows");
+	const int IF_Col = inputMap.get("eeRelaxNumCols");
 
 	logPrintf("\nInputs after conversion to atomic units:\n");
 	logPrintf("nKptsN1 = %d\n", nKptsN1);
 	logPrintf("mu = %lg\n", mu);
 	logPrintf("Z = %lg\n", Z);
 	logPrintf("dE = %lg\n", dE);
-	logPrintf("TeMin = %lg\n", TeMin);
-	logPrintf("TeMax = %lg\n", TeMax);
-	logPrintf("TeStep = %lg\n", TeStep);
 	logPrintf("Tl = %lg\n", Tl);
 	logPrintf("spinWeight = %d\n", spinWeight);
 	logPrintf("R:\n");
@@ -80,7 +113,37 @@ int main(int argc, char** argv)
 		return 0;
 	}
 	logPrintf("\n");
-	
+
+	//Read in nonthermal electron distribution function from eeRleax code:
+	ifstream inFile1;
+	inFile1.open("invTau.dat");
+	std::vector<diagMatrix> distFunctArr;
+	double inputEnergySI;
+	std::vector<double> inputEnergy;
+	for (int a = 0; a < IF_Row; a++)
+	{	for (int b = 0; b < IF_Col; b++)
+		{	if (b==0)
+			{	inFile1 >> inputEnergySI;
+				inputEnergy.push_back(inputEnergySI*eV); // convert to atomic units
+			}
+			if (b>0) inFile1 >> distFunctArr[a][b-1];
+		}
+	}
+	//The rest of the code assumes that the matrix distFunctArr has the distribution function for each time in each column, first column is energy
+
+	//Read in electron linewidth correction from eeRleax dode:
+	ifstream inFile2;
+	inFile2.open("invTau.dat");
+	std::vector<diagMatrix> LWcorrection;
+	double trash;
+	for (int a = 0; a < IF_Row; a++)
+	{	for (int b = 0; b < IF_Col; b++)
+		{       if (b==0) inFile1 >> trash;
+			if (b>0) inFile1 >> LWcorrection[a][b-1];
+		}
+	}
+
+
 	//Initialize Wannier bandstructure:
 	std::vector< vector3<complex> > Ahat(1); //assume cubic symmetry and only calculate x-axis
 	Ahat[0] = vector3<complex>(1., 0., 0.);
@@ -88,11 +151,6 @@ int main(int argc, char** argv)
 	const int bunchSize = 32;
 	bs.setCacheSize(2*bunchSize);
 
-	//Initialize temperature grid:
-	std::vector<double> TeArr(int(ceil((TeMax-TeMin)/TeStep)));
-	for(size_t iT=0; iT<TeArr.size(); iT++)
-		TeArr[iT] = TeMin + TeStep*iT;
-	logPrintf("Initialized temperature grid: %lg to %lg K with %lu points.\n", TeArr.front()/Kelvin, TeArr.back()/Kelvin, TeArr.size());
 	
 	//Initialize energy grid:
 	diagMatrix Egamma = bs.getStates(vector3<>());
@@ -163,74 +221,21 @@ int main(int argc, char** argv)
 	dos.allReduce(MPIUtil::ReduceSum);
 	dos.print("dos.dat", 1./eV, eV);
 	
-	//Calculate mu and Ce at each temperature:
-	diagMatrix dmu(TeArr.size(), 0.), Ce(TeArr.size(), 0.);
-	//--- check enough bands to contain Z:
-	double Zmax = 0.;
-	for(const double& g: dos.out)
-		Zmax += dE * g;
-	if(Zmax < Z)
-		die("Current DOS can only support %lg electrons > %lg electrons specified.\n", Zmax, Z);
-	int iTstart, iTstop; TaskDivision(TeArr.size(), mpiUtil).myRange(iTstart, iTstop);
-	for(int iT=iTstart; iT<iTstop; iT++)
-	{	const double Te = TeArr[iT], invTe = 1./Te;
-		//Bisect for chemical potential:
-		double& dmuCur = dmu[iT];
-		double dmuMin = Emin - 10*Te;
-		double dmuMax = Emax + 10*Te;
-		dmuCur = 0.5*(dmuMin + dmuMax);
-		const double tol = 1e-9*Te;
-		while(dmuMax-dmuMin > tol)
-		{	//calculate number of electrons at current Z:
-			double nElectrons = 0.;
-			for(size_t ie=0; ie<dos.out.size(); ie++)
-			{	double Ei = Emin + ie*dE;
-				double fi = fermi(invTe*(Ei - dmuCur));
-				nElectrons += dE * dos.out[ie] * fi;
-			}
-			((nElectrons>Z) ? dmuMax : dmuMin) = dmuCur;
-			dmuCur = 0.5*(dmuMin + dmuMax);
-		}
-		//Calculate electronic specific heat:
-		double& CeCur = Ce[iT];
-		CeCur = 0.;
-		for(size_t ie=0; ie<dos.out.size(); ie++)
-		{	double Ei = Emin + ie*dE;
-			double x = invTe*(Ei-dmuCur);
-			double dfdT = fermiPrime(x) * (-x*invTe);
-			CeCur += dE * Ei * dos.out[ie] * dfdT;
-		}
-	}
-	dmu.allReduce(MPIUtil::ReduceSum);
-	Ce.allReduce(MPIUtil::ReduceSum);
-	
-
-
-	// -------------------------------------  Setup for Pass 2 --------------------------------------
+	// -------------------------------------  Setup --------------------------------------
 	//Initalize line width of electronic states
 	LineWidth lineWidth("Wannier/wannier", bs);
 
 
 	//Initialize frequency grid:
-	double omegaMax = 0.;
-	for(size_t iT=0; iT<TeArr.size(); iT++)
-	{	double hEmax = dmu[iT] - Emin; //max hole energy
-		double eEmax = Emax - dmu[iT]; //max electron energy
-		double Emax = std::max(hEmax, eEmax) + 10*TeArr[iT]; //with margin for partially occupied excitations
-		omegaMax = std::max(omegaMax, Emax);
-	}
+	double omegaMax = 77.210*eV;
 
 	//Initialize unbroadened histograms:
-	std::vector<Histogram> ImEpsDirect(TeArr.size(), Histogram(0, dE, omegaMax)), breadthDirect(TeArr.size(), Histogram(0, dE, omegaMax));
-	std::vector<Histogram> ImEpsPhonon(TeArr.size(), Histogram(0, dE, omegaMax)), breadthPhonon(TeArr.size(), Histogram(0, dE, omegaMax)),  weightPhonon(TeArr.size(), Histogram(0, dE, omegaMax));
+	std::vector<Histogram> ImEpsDirect(IF_Col, Histogram(0, dE, omegaMax)), breadthDirect(IF_Col, Histogram(0, dE, omegaMax));
+	std::vector<Histogram> ImEpsPhonon(IF_Col, Histogram(0, dE, omegaMax)), breadthPhonon(IF_Col, Histogram(0, dE, omegaMax)),  weightPhonon(IF_Col, Histogram(0, dE, omegaMax));
 	int nomega = ImEpsDirect[0].out.size();
 	logPrintf("Initialized frequency grid: 0 to %lg eV with %d points.\n", (dE*(nomega-1))/eV, nomega);
 	
-	//-------- Pass 2: electron-phonon coupling and dielectric response ---------
-	diagMatrix GePh(TeArr.size());
-	Histogram MepNum(Emin, dE, Emax);
-	Histogram MepDen(Emin, dE, Emax);
-	Histogram MepAshcroftNum(Emin, dE, Emax);
+	//-------- Pass 2: electro n-phonon coupling and dielectric response ---------
 	const double EconserveScaleFac = 1./dE, EconservePrefac = 1./(M_PI*dE); //energy conserving Lorentzian parameters
 	logPrintf("\nePhCoupling and ImEps: "); logFlush();
 	for(int iBunch=0; iBunch<nBunchesMine; iBunch++)
@@ -244,10 +249,9 @@ int main(int argc, char** argv)
 		std::vector< std::vector<matrix> > Parr = bs.getDipoleMatElem(kArr);
 		std::vector< std::vector<diagMatrix> > Farr(bunchSize); //fillings by k-point, temperature and band
 		for(int ik=0; ik<bunchSize; ik++)
-		{	Farr[ik].resize(TeArr.size());
-			for(size_t iT=0; iT<TeArr.size(); iT++)
-			{	double invTe = 1./TeArr[iT];
-				Farr[ik][iT] = Earr[ik];
+		{	Farr[ik].resize(IF_Col);
+			for(size_t iT=0; iT<IF_Col; iT++)
+			{	Farr[ik][iT] = Earr[ik];
 				for(double& f: Farr[ik][iT]) //convert to fillings:
 					f = fermi(invTe*(f-dmu[iT]));
 			}
@@ -267,7 +271,7 @@ int main(int argc, char** argv)
 				{	double omega = E1[c] - E1[v]; //energy conservation
 					if(omega<dE || omega>=omegaMax) continue; //irrelevant event
 					double weight = (directPrefac0/(omega*omega)) * P1(c,v).norm(); //upto Te-dependent electron occupation factors
-					for(size_t iT=0; iT<TeArr.size(); iT++)
+					for(size_t iT=0; iT<IF_Col; iT++)
 					{	ImEpsDirect[iT].addEvent(omega, weight * (F1[iT][v] - F1[iT][c]));
 						breadthDirect[iT].addEvent(omega, weight * (F1[iT][v] - F1[iT][c]) * (ImE1[c]+ImE1[v]));
 						//breadthDirect[iT].addEvent(omega, weight * (F1[iT][v] - F1[iT][c]) * (ImE1[c]+ImE1[v]+invTauTe[ik1][iT]/2));
@@ -290,8 +294,8 @@ int main(int argc, char** argv)
 				{	const matrix& gePh = gePhArr[ik2][alpha];
 					double omegaPh = omegaPhArr[ik2][alpha];
 					double nPh = 1./(exp(omegaPh/Tl) - 1.);
-					std::vector<double> nPh_T(TeArr.size()); //phonon occupation finite difference ratio between Tl and Te's
-					for(size_t iT=0; iT<TeArr.size(); iT++)
+					std::vector<double> nPh_T(IF_Col); //phonon occupation finite difference ratio between Tl and Te's
+					for(size_t iT=0; iT<IF_Col; iT++)
 					{	const double& Te = TeArr[iT];
 						double nPhTe = 1./(exp(omegaPh/TeArr[iT]) - 1.); //phonon occupation at Te
 						nPh_T[iT] = (fabs(Tl-Te) > 1e-3*Tl)
@@ -302,27 +306,6 @@ int main(int argc, char** argv)
 					for(int c=0; c<nBands; c++)
 					{	double gePhSq = gePh(c,v).norm();
 						double delta = EconservePrefac/(1. + std::pow(EconserveScaleFac*(E1[v]-E2[c] + omegaPh),2));
-						
-						//Matrix element squared (weighted by energy conservation)
-						MepNum.addEvent(E1[v], delta * gePhSq);
-						MepNum.addEvent(E2[c], delta * gePhSq);
-						MepDen.addEvent(E1[v], delta);
-						MepDen.addEvent(E2[c], delta);
-						
-						//Approxiimate matrix element squared from Ashcroft & Mermin p.523
-						const double Omega = fabs(det(R));
-						MepAshcroftNum.addEvent(E1[v], delta * omegaPh * EfJellium / (3*Z));
-						MepAshcroftNum.addEvent(E2[c], delta * omegaPh * EfJellium / (3*Z));
-
-						//Electron-phonon heat baths coupling GePh:
-						for(size_t iT=0; iT<TeArr.size(); iT++)
-						{	//Note occFactors = ((f1-f2)*nPh - f2*(1-f1)) / (Tl - Te)
-							//Equlibrium => f1*(1-f2)*nPhTe = (1-f1)*f2*(nPhTe+1), where nPhTe = phonon occupation at Te
-							//  => 0 = (f1-f2)*nPhTe - f2*(1-f1)
-							//  => occFactors = (f1-f2) * (nPh - nPhTe)/(Tl - Te)
-							double occFactors = (F1[iT][v] - F2[iT][c]) * nPh_T[iT];
-							GePh[iT] += GePhPrefac * omegaPh * gePhSq * occFactors * delta;
-						}
 						
 						//Phonon-assisted transition contribution to ImEps:
 						for(int ae=-1; ae<=+1; ae+=2) // +/- for phonon absorption or emmision
@@ -346,7 +329,7 @@ int main(int argc, char** argv)
 								MeffSqExtrap += extrapCoeff[z] * Meff[z].norm();
 							double weight = (phononPrefac0/(omega*omega)) * (nPh + 0.5*(1.-ae)) * MeffSqExtrap;
 							//Include T dependent electron occupations:
-							for(size_t iT=0; iT<TeArr.size(); iT++)
+							for(size_t iT=0; iT<IF_Col; iT++)
 							{	ImEpsPhonon[iT].addEvent(omega, weight * (F1[iT][v] - F2[iT][c]));
 								breadthPhonon[iT].addEvent(omega, fabs(weight * (F1[iT][v] - F2[iT][c]))*(ImE2[c]+ImE1[v]));
 								weightPhonon[iT].addEvent(omega, fabs(weight * (F1[iT][v] - F2[iT][c]))); //different from ImEpsPhonon, since weight can be negative due to singularity extrapolation
@@ -365,26 +348,6 @@ int main(int argc, char** argv)
 	}
 	logPrintf("done.\n"); logFlush();
 
-	//Matrix element statistics:
-	MepNum.allReduce(MPIUtil::ReduceSum);
-	MepDen.allReduce(MPIUtil::ReduceSum);
-	if(mpiUtil->isHead())
-	{	ofstream ofs("Mep.dat");
-		for(size_t i=0; i<MepNum.out.size(); i++)
-			ofs << (MepNum.Emin + i*MepNum.dE)/eV << '\t' << MepNum.out[i]/MepDen.out[i] << '\n';
-	}
-
-	//Ashcroft Matrix element statistics:
-	MepAshcroftNum.allReduce(MPIUtil::ReduceSum);
-	if(mpiUtil->isHead())
-	{	ofstream ofss("MepAshcroft.dat");
-		for(size_t i=0; i<MepAshcroftNum.out.size(); i++)
-			ofss << (MepAshcroftNum.Emin + i*MepAshcroftNum.dE)/eV << '\t' << MepAshcroftNum.out[i]/MepDen.out[i] << '\n';
-	}
-
-	//e-ph coupling:
-	GePh.allReduce(MPIUtil::ReduceSum);
-	
 	//ImEps:
 	for(Histogram& h: ImEpsDirect) h.allReduce(MPIUtil::ReduceSum);
 	for(Histogram& h: ImEpsPhonon) h.allReduce(MPIUtil::ReduceSum);
@@ -393,7 +356,7 @@ int main(int argc, char** argv)
 	for(Histogram& h: weightPhonon) h.allReduce(MPIUtil::ReduceSum);
 
 	//Normalize the breadths
-	for(size_t iT=0; iT<TeArr.size(); iT++)
+	for(size_t iT=0; iT<IF_Col; iT++)
 	{	for(int iomega=0; iomega<nomega; iomega++)
 		{	breadthDirect[iT].out[iomega] = std::max(dE, ImEpsDirect[iT].out[iomega] ? breadthDirect[iT].out[iomega]/ImEpsDirect[iT].out[iomega] : 0.);
 			breadthPhonon[iT].out[iomega] = std::max(dE, weightPhonon[iT].out[iomega] ? breadthPhonon[iT].out[iomega]/weightPhonon[iT].out[iomega] : 0.);
@@ -401,11 +364,11 @@ int main(int argc, char** argv)
 	}
 
 	//Apply Broadening
-	std::vector<Histogram> ImEpsDirectBroad(TeArr.size(), Histogram(0, dE, omegaMax));
-	std::vector<Histogram> ImEpsPhononBroad(TeArr.size(), Histogram(0, dE, omegaMax));
+	std::vector<Histogram> ImEpsDirectBroad(IF_Col, Histogram(0, dE, omegaMax));
+	std::vector<Histogram> ImEpsPhononBroad(IF_Col, Histogram(0, dE, omegaMax));
 	int iomegaStart, iomegaStop; TaskDivision(nomega, mpiUtil).myRange(iomegaStart, iomegaStop);
 	logPrintf("Applying broadening ... "); logFlush();
-	for(size_t iT=0; iT<TeArr.size(); iT++)
+	for(size_t iT=0; iT<IF_Col; iT++)
 	{	for(int iomega=iomegaStart; iomega<iomegaStop; iomega++) //input frequency grid split over MPI
 		{	double omegaCur = iomega*dE;
 			double bDirect = breadthDirect[iT].out[iomega] + 2*ImSigmaTe(TeArr[iT],invTauTePrefac);//recal breadth and add Te dependence of lifetime
@@ -425,15 +388,6 @@ int main(int argc, char** argv)
 
 	if(mpiUtil->isHead())
 	{	const double Omega = fabs(det(R));
-		const double CeSI = Joule/(Kelvin*pow(meter,3));
-		const double GePhSI = Joule*invSeconds/(Kelvin*pow(meter,3));
-		ofstream ofs("TAparameters.dat");
-		ofs << "#T[K] dmu[eV] Ce[J/m^3K] GePh[W/m^3K]\n";
-		for(size_t iT=0; iT<TeArr.size(); iT++)
-			ofs << TeArr[iT]/Kelvin << '\t'
-				<< dmu[iT]/eV << '\t'
-				<< Ce[iT]/(Omega*CeSI) << '\t'
-				<< GePh[iT]/(Omega*GePhSI) << '\n';
 		
 		//Print calculated ImEps contributions:
 		writeImEps("ImEps_direct.dat", ImEpsDirectBroad, TeArr);
