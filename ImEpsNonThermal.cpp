@@ -61,6 +61,18 @@ inline std::vector<double> interp(std::vector<double> &x, std::vector<double> &y
 	return newY;
 }
 
+
+inline double interp1(std::vector<double> &x, std::vector<double> &y, double newX)
+{	int idx = findNearestNeighbourIndex(newX,x);
+	double dx = x[idx+1]-x[idx];
+	double dy = y[idx+1]-y[idx];
+	double slope = dy/dx;
+	double intercept = y[idx]-x[idx]*slope;
+	double newY = slope * newX + intercept;
+	return newY;
+}
+
+
 inline void writeImEps(const char* fname, const std::vector<Histogram>& ImEps, const std::vector<double> TeArr)
 {	std::ofstream ofs(fname);
 	//Header:
@@ -93,8 +105,8 @@ int main(int argc, char** argv)
 	const matrix3<> R = matrix3<>(0,1,1, 1,0,1, 1,1,0) * (0.5*inputMap.get("aCubic")*Angstrom);
 	const double invTauTePrefac = inputMap.get("invTauTePrefac"); // prefactor A as in invTau(Te)=A*T^2
 	const double EfJellium = inputMap.get("EfJellium") * eV; // jellium fermi energy in eV, converted to hartrees
-	const int IF_Row = inputMap.get("eeRelaxNumRows");
-	const int IF_Col = inputMap.get("eeRelaxNumCols");
+	const int numEnergies = inputMap.get("eeRelaxNumRows");
+	const int numTimes = inputMap.get("eeRelaxNumCols");
 
 	logPrintf("\nInputs after conversion to atomic units:\n");
 	logPrintf("nKptsN1 = %d\n", nKptsN1);
@@ -120,13 +132,13 @@ int main(int argc, char** argv)
 	std::vector<diagMatrix> distFunctArr;
 	double inputEnergySI;
 	std::vector<double> inputEnergy;
-	for (int a = 0; a < IF_Row; a++)
-	{	for (int b = 0; b < IF_Col; b++)
-		{	if (b==0)
+	for (int a = 0; a < numEnergies; a++)
+	{	for (int iT = 0; iT < numTimes; iT++)
+		{	if (iT==0)
 			{	inFile1 >> inputEnergySI;
 				inputEnergy.push_back(inputEnergySI*eV); // convert to atomic units
 			}
-			if (b>0) inFile1 >> distFunctArr[a][b-1];
+			if (iT>0) inFile1 >> distFunctArr[iT-1][a];
 		}
 	}
 	//The rest of the code assumes that the matrix distFunctArr has the distribution function for each time in each column, first column is energy
@@ -136,8 +148,8 @@ int main(int argc, char** argv)
 	inFile2.open("invTau.dat");
 	std::vector<diagMatrix> LWcorrection;
 	double trash;
-	for (int a = 0; a < IF_Row; a++)
-	{	for (int b = 0; b < IF_Col; b++)
+	for (int a = 0; a < numEnergies; a++)
+	{	for (int b = 0; b < numTimes; b++)
 		{       if (b==0) inFile1 >> trash;
 			if (b>0) inFile1 >> LWcorrection[a][b-1];
 		}
@@ -170,8 +182,6 @@ int main(int argc, char** argv)
 	mpiUtil->allReduce(Emax, MPIUtil::ReduceMax);
 	Emin -= 10*dE; //add some margin
 	Emax += 10*dE;
-	Histogram dos(Emin, dE, Emax); //density of states
-	logPrintf("Initialized energy grid: %lg to %lg eV with %lu points.\n", Emin/eV, (Emin+dE*(dos.out.size()-1))/eV, dos.out.size());
 	
 	//Initialize sampling parameters:
 	int ikStart, ikStop; TaskDivision(nKptsN1, mpiUtil).myRange(ikStart, ikStop);
@@ -183,7 +193,6 @@ int main(int argc, char** argv)
 	int nModes = bs.getPhononModes(vector3<>()).nRows();
 	double phononPrefac0 = 4 * std::pow(M_PI,2) * spinWeight / (nKpairs*fabs(det(R))); //frequency independent part of prefac
 	double directPrefac0 = 4 * std::pow(M_PI,2) * spinWeight / (nKpts*fabs(det(R))); //frequency independent part of prefac
-	double GePhPrefac = spinWeight * (2*M_PI) / nKpairs;
 	
 	//Singularity extrapolation parameters
 	double extrapCoeff[] = {-19./12, 13./3, -7./4 }; //account for constant, 1/eta and eta^2 dependence
@@ -191,47 +200,28 @@ int main(int argc, char** argv)
 	const int nExtrap = sizeof(extrapCoeff)/sizeof(double);
 	const double eta = 0.1*eV;
 
-	//-------- Pass 1: collect density of states, calculate mu(Te) and Ce(Te) ---------
+	// -------------------------------------  Setup --------------------------------------
 	
-	logPrintf("\nCollecting DOS: "); logFlush();
 	std::vector< std::vector< vector3<> > > kArrArr(nBunchesMine); //use exact same set of MC k-points in the two passes for consistency
-	const double dosWeight = spinWeight*(1./nKpts);
 	for(int iBunch=0; iBunch<nBunchesMine; iBunch++)
-	{
-		//Generate a bunch of k-points:
+	{	//Generate a bunch of k-points:
 		std::vector< vector3<> >& kArr = kArrArr[iBunch];
 		kArr.resize(bunchSize);
 		for(vector3<>& k: kArr)
 			for(int j=0; j<3; j++)
 				k[j] = Random::uniform();
-		
-		//Collect DOS:
-		std::vector<diagMatrix> Earr = bs.getStates(kArr);
-		for(const diagMatrix& E: Earr)
-			for(const double& Ei: E)
-				dos.addEvent(Ei, dosWeight);
-		
-		//Print progress:
-		if((iBunch+1) % iBunchInterval == 0)
-		{	logPrintf("%d%% ", int(round((iBunch+1)*100./nBunchesMine)));
-			logFlush();
-		}
-	}
-	logPrintf("done.\n"); logFlush();
-	dos.allReduce(MPIUtil::ReduceSum);
-	dos.print("dos.dat", 1./eV, eV);
-	
-	// -------------------------------------  Setup --------------------------------------
+
+        }
+
 	//Initalize line width of electronic states
 	LineWidth lineWidth("Wannier/wannier", bs);
-
 
 	//Initialize frequency grid:
 	double omegaMax = 77.210*eV;
 
 	//Initialize unbroadened histograms:
-	std::vector<Histogram> ImEpsDirect(IF_Col, Histogram(0, dE, omegaMax)), breadthDirect(IF_Col, Histogram(0, dE, omegaMax));
-	std::vector<Histogram> ImEpsPhonon(IF_Col, Histogram(0, dE, omegaMax)), breadthPhonon(IF_Col, Histogram(0, dE, omegaMax)),  weightPhonon(IF_Col, Histogram(0, dE, omegaMax));
+	std::vector<Histogram> ImEpsDirect(numTimes, Histogram(0, dE, omegaMax)), breadthDirect(numTimes, Histogram(0, dE, omegaMax));
+	std::vector<Histogram> ImEpsPhonon(numTimes, Histogram(0, dE, omegaMax)), breadthPhonon(numTimes, Histogram(0, dE, omegaMax)),  weightPhonon(numTimes, Histogram(0, dE, omegaMax));
 	int nomega = ImEpsDirect[0].out.size();
 	logPrintf("Initialized frequency grid: 0 to %lg eV with %d points.\n", (dE*(nomega-1))/eV, nomega);
 	
@@ -249,11 +239,11 @@ int main(int argc, char** argv)
 		std::vector< std::vector<matrix> > Parr = bs.getDipoleMatElem(kArr);
 		std::vector< std::vector<diagMatrix> > Farr(bunchSize); //fillings by k-point, temperature and band
 		for(int ik=0; ik<bunchSize; ik++)
-		{	Farr[ik].resize(IF_Col);
-			for(size_t iT=0; iT<IF_Col; iT++)
+		{	Farr[ik].resize(numTimes);
+			for(int iT=0; iT<numTimes; iT++)
 			{	Farr[ik][iT] = Earr[ik];
 				for(double& f: Farr[ik][iT]) //convert to fillings:
-					f = fermi(invTe*(f-dmu[iT]));
+					f = interp1(inputEnergy,distFunctArr[iT],f);
 			}
 		}
 
@@ -271,7 +261,7 @@ int main(int argc, char** argv)
 				{	double omega = E1[c] - E1[v]; //energy conservation
 					if(omega<dE || omega>=omegaMax) continue; //irrelevant event
 					double weight = (directPrefac0/(omega*omega)) * P1(c,v).norm(); //upto Te-dependent electron occupation factors
-					for(size_t iT=0; iT<IF_Col; iT++)
+					for(int iT=0; iT<numTimes; iT++)
 					{	ImEpsDirect[iT].addEvent(omega, weight * (F1[iT][v] - F1[iT][c]));
 						breadthDirect[iT].addEvent(omega, weight * (F1[iT][v] - F1[iT][c]) * (ImE1[c]+ImE1[v]));
 						//breadthDirect[iT].addEvent(omega, weight * (F1[iT][v] - F1[iT][c]) * (ImE1[c]+ImE1[v]+invTauTe[ik1][iT]/2));
@@ -294,19 +284,9 @@ int main(int argc, char** argv)
 				{	const matrix& gePh = gePhArr[ik2][alpha];
 					double omegaPh = omegaPhArr[ik2][alpha];
 					double nPh = 1./(exp(omegaPh/Tl) - 1.);
-					std::vector<double> nPh_T(IF_Col); //phonon occupation finite difference ratio between Tl and Te's
-					for(size_t iT=0; iT<IF_Col; iT++)
-					{	const double& Te = TeArr[iT];
-						double nPhTe = 1./(exp(omegaPh/TeArr[iT]) - 1.); //phonon occupation at Te
-						nPh_T[iT] = (fabs(Tl-Te) > 1e-3*Tl)
-							? (nPh - nPhTe) / (Tl - Te)
-							: nPh*(nPh+1)*omegaPh/(Tl*Tl); //dnPh/dTl (limit Te->Tl of above)
-					}
 					for(int v=0; v<nBands; v++)
 					for(int c=0; c<nBands; c++)
-					{	double gePhSq = gePh(c,v).norm();
-						double delta = EconservePrefac/(1. + std::pow(EconserveScaleFac*(E1[v]-E2[c] + omegaPh),2));
-						
+					{	
 						//Phonon-assisted transition contribution to ImEps:
 						for(int ae=-1; ae<=+1; ae+=2) // +/- for phonon absorption or emmision
 						{	double omega = E2[c] - E1[v] - ae*omegaPh; //energy conservation
@@ -329,7 +309,7 @@ int main(int argc, char** argv)
 								MeffSqExtrap += extrapCoeff[z] * Meff[z].norm();
 							double weight = (phononPrefac0/(omega*omega)) * (nPh + 0.5*(1.-ae)) * MeffSqExtrap;
 							//Include T dependent electron occupations:
-							for(size_t iT=0; iT<IF_Col; iT++)
+							for(int iT=0; iT<numTimes; iT++)
 							{	ImEpsPhonon[iT].addEvent(omega, weight * (F1[iT][v] - F2[iT][c]));
 								breadthPhonon[iT].addEvent(omega, fabs(weight * (F1[iT][v] - F2[iT][c]))*(ImE2[c]+ImE1[v]));
 								weightPhonon[iT].addEvent(omega, fabs(weight * (F1[iT][v] - F2[iT][c]))); //different from ImEpsPhonon, since weight can be negative due to singularity extrapolation
@@ -356,7 +336,7 @@ int main(int argc, char** argv)
 	for(Histogram& h: weightPhonon) h.allReduce(MPIUtil::ReduceSum);
 
 	//Normalize the breadths
-	for(size_t iT=0; iT<IF_Col; iT++)
+	for(int iT=0; iT<numTimes; iT++)
 	{	for(int iomega=0; iomega<nomega; iomega++)
 		{	breadthDirect[iT].out[iomega] = std::max(dE, ImEpsDirect[iT].out[iomega] ? breadthDirect[iT].out[iomega]/ImEpsDirect[iT].out[iomega] : 0.);
 			breadthPhonon[iT].out[iomega] = std::max(dE, weightPhonon[iT].out[iomega] ? breadthPhonon[iT].out[iomega]/weightPhonon[iT].out[iomega] : 0.);
@@ -364,11 +344,11 @@ int main(int argc, char** argv)
 	}
 
 	//Apply Broadening
-	std::vector<Histogram> ImEpsDirectBroad(IF_Col, Histogram(0, dE, omegaMax));
-	std::vector<Histogram> ImEpsPhononBroad(IF_Col, Histogram(0, dE, omegaMax));
+	std::vector<Histogram> ImEpsDirectBroad(numTimes, Histogram(0, dE, omegaMax));
+	std::vector<Histogram> ImEpsPhononBroad(numTimes, Histogram(0, dE, omegaMax));
 	int iomegaStart, iomegaStop; TaskDivision(nomega, mpiUtil).myRange(iomegaStart, iomegaStop);
 	logPrintf("Applying broadening ... "); logFlush();
-	for(size_t iT=0; iT<IF_Col; iT++)
+	for(int iT=0; iT<numTimes; iT++)
 	{	for(int iomega=iomegaStart; iomega<iomegaStop; iomega++) //input frequency grid split over MPI
 		{	double omegaCur = iomega*dE;
 			double bDirect = breadthDirect[iT].out[iomega] + 2*ImSigmaTe(TeArr[iT],invTauTePrefac);//recal breadth and add Te dependence of lifetime
@@ -387,9 +367,7 @@ int main(int argc, char** argv)
         for(Histogram& h: ImEpsPhononBroad) h.allReduce(MPIUtil::ReduceSum);
 
 	if(mpiUtil->isHead())
-	{	const double Omega = fabs(det(R));
-		
-		//Print calculated ImEps contributions:
+	{	//Print calculated ImEps contributions:
 		writeImEps("ImEps_direct.dat", ImEpsDirectBroad, TeArr);
 		writeImEps("ImEps_phonon.dat", ImEpsPhononBroad, TeArr);
 		
