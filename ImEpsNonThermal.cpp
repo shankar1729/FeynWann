@@ -189,7 +189,8 @@ int main(int argc, char** argv)
 	LineWidth lineWidth("Wannier/wannier", bs);
 
 	//Initialize frequency grid:
-	double omegaMax = 77.210*eV;
+	//double omegaMax = 77.210*eV;
+	double omegaMax = 10*eV;
 
 	//Initialize unbroadened histograms:
 	std::vector<Histogram> ImEpsDirect(numTimes, Histogram(0, dE, omegaMax)), breadthDirect(numTimes, Histogram(0, dE, omegaMax));
@@ -321,8 +322,8 @@ int main(int argc, char** argv)
 	for(int iT=0; iT<numTimes; iT++)
 	{	for(int iomega=iomegaStart; iomega<iomegaStop; iomega++) //input frequency grid split over MPI
 		{	double omegaCur = iomega*dE;
-			double bDirect = breadthDirect[iT].out[iomega] + LWcorrection[iT][iomega];//recal breadth and add Te dependence of lifetime
-			double bPhonon = breadthPhonon[iT].out[iomega] + LWcorrection[iT][iomega];//recal breadth and add Te dependence of lifetime
+			double bDirect = breadthDirect[iT].out[iomega] + interp1(inputEnergy,LWcorrection[iT],omegaCur);//recal breadth and add Te dependence of lifetime
+			double bPhonon = breadthPhonon[iT].out[iomega] + interp1(inputEnergy,LWcorrection[iT],omegaCur);//recal breadth and add Te dependence of lifetime
 			for(size_t jomega=0; jomega<ImEpsDirectBroad[iT].out.size(); jomega++) //output frequency grid
 			{	double omega = jomega*dE;
 				double kernelDirect = lorentzianOdd(omega, omegaCur, bDirect) * dE;
@@ -338,8 +339,8 @@ int main(int argc, char** argv)
 
 	if(mpiUtil->isHead())
 	{	//Print calculated ImEps contributions:
-		writeImEps("ImEps_direct.dat", ImEpsDirectBroad);
-		writeImEps("ImEps_phonon.dat", ImEpsPhononBroad);
+		writeImEps("ImEps_directNontherm.dat", ImEpsDirectBroad);
+		writeImEps("ImEps_phononNontherm.dat", ImEpsPhononBroad);
 		
 		//Print experimental dielectric function (at room temperature):
 		ofstream ofsExpt("ImEps_expt.dat");
