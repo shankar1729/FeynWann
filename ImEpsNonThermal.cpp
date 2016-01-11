@@ -19,11 +19,6 @@ inline double lorentzianOdd(double omega, double omega0, double breadth)
                 - 1./(breadthSq + std::pow(omega+omega0, 2)) );
 }
 
-
-inline double fermi(double x) { return x>30. ? exp(-x) : 1./(1.+exp(x)); } //avoid overflow issues
-inline double fermiPrime(double x) { return 0.25*(std::pow(tanh(0.5*x), 2) - 1.); } //avoid overflow issues
-inline double ImSigmaTe(double x,double invTauTePrefac) { return 0.5*invTauTePrefac*std::pow(x, 2); }
-
 inline int findNearestNeighbourIndex(double value,std::vector<double> &x)
 {	double dist = DBL_MAX;
 	int idx = -1;
@@ -35,30 +30,6 @@ inline int findNearestNeighbourIndex(double value,std::vector<double> &x)
 		}
 	}
 	return idx;
-}
-
-inline std::vector<double> interp(std::vector<double> &x, std::vector<double> &y, std::vector<double> &newX)
-{	std::vector<double> newY, dx, dy, slope, intercept;
-	for(size_t i=1; i<x.size(); i++)
-	{	if(i<x.size()-1)
-		{	dx.push_back(x[i+1]-x[i]);
-			dy.push_back(y[i+1]-y[i]);
-			slope.push_back(dy[i]/dx[i]);
-			intercept.push_back(y[i]-x[i]*slope[i]);
-		}
-		else
-		{	dx.push_back( dx[i-1]);
-			dy.push_back( dy[i-1]);
-			slope.push_back( slope[i-1]);
-			intercept.push_back(intercept[i-1]);
-		}
-	}
-
-	for(size_t i=1; i<newX.size(); i++)
-	{	int idx = findNearestNeighbourIndex(newX[i],x);
-		newY.push_back(slope[idx]*newX[i]+intercept[idx]);
-	}
-	return newY;
 }
 
 
@@ -73,13 +44,8 @@ inline double interp1(std::vector<double> &x, std::vector<double> &y, double new
 }
 
 
-inline void writeImEps(const char* fname, const std::vector<Histogram>& ImEps, const std::vector<double> TeArr)
+inline void writeImEps(const char* fname, const std::vector<Histogram>& ImEps)
 {	std::ofstream ofs(fname);
-	//Header:
-	ofs << "#omega";
-	for(const double& Te: TeArr)
-		ofs << " ImEps[T=" << Te/Kelvin << "K]";
-	ofs << '\n';
 	//Data:
 	for(size_t iomega=0; iomega<ImEps[0].out.size(); iomega++)
 	{	double omega = ImEps[0].dE * iomega;
@@ -129,16 +95,19 @@ int main(int argc, char** argv)
 	//Read in nonthermal electron distribution function from eeRleax code:
 	ifstream inFile1;
 	inFile1.open("invTau.dat");
-	std::vector<diagMatrix> distFunctArr;
-	double inputEnergySI;
-	std::vector<double> inputEnergy;
+	std::vector<diagMatrix> distFunctArr(numTimes);
+	double inputEnergySI, distF;
+	std::vector<double> inputEnergy(numEnergies);
 	for (int a = 0; a < numEnergies; a++)
-	{	for (int iT = 0; iT < numTimes; iT++)
+	{	for (int iT = 0; iT < (numTimes+1); iT++)
 		{	if (iT==0)
 			{	inFile1 >> inputEnergySI;
 				inputEnergy.push_back(inputEnergySI*eV); // convert to atomic units
 			}
-			if (iT>0) inFile1 >> distFunctArr[iT-1][a];
+			if (iT>0) 
+			{	inFile1 >> distF;
+				distFunctArr[iT-1].push_back(distF);
+			}
 		}
 	}
 	//The rest of the code assumes that the matrix distFunctArr has the distribution function for each time in each column, first column is energy
@@ -146,12 +115,15 @@ int main(int argc, char** argv)
 	//Read in electron linewidth correction from eeRleax dode:
 	ifstream inFile2;
 	inFile2.open("invTau.dat");
-	std::vector<diagMatrix> LWcorrection;
-	double trash;
+	std::vector<diagMatrix> LWcorrection(numTimes);
+	double trash, LWcorr;
 	for (int a = 0; a < numEnergies; a++)
-	{	for (int b = 0; b < numTimes; b++)
-		{       if (b==0) inFile1 >> trash;
-			if (b>0) inFile1 >> LWcorrection[a][b-1];
+	{	for (int iT = 0; iT < (numTimes+1); iT++)
+		{       if (iT==0) inFile1 >> trash;
+			if (iT>0)
+			{	inFile1 >> LWcorr;
+				LWcorrection[iT-1].push_back(LWcorr);
+			}
 		}
 	}
 
@@ -226,7 +198,6 @@ int main(int argc, char** argv)
 	logPrintf("Initialized frequency grid: 0 to %lg eV with %d points.\n", (dE*(nomega-1))/eV, nomega);
 	
 	//-------- Pass 2: electro n-phonon coupling and dielectric response ---------
-	const double EconserveScaleFac = 1./dE, EconservePrefac = 1./(M_PI*dE); //energy conserving Lorentzian parameters
 	logPrintf("\nePhCoupling and ImEps: "); logFlush();
 	for(int iBunch=0; iBunch<nBunchesMine; iBunch++)
 	{
@@ -264,7 +235,6 @@ int main(int argc, char** argv)
 					for(int iT=0; iT<numTimes; iT++)
 					{	ImEpsDirect[iT].addEvent(omega, weight * (F1[iT][v] - F1[iT][c]));
 						breadthDirect[iT].addEvent(omega, weight * (F1[iT][v] - F1[iT][c]) * (ImE1[c]+ImE1[v]));
-						//breadthDirect[iT].addEvent(omega, weight * (F1[iT][v] - F1[iT][c]) * (ImE1[c]+ImE1[v]+invTauTe[ik1][iT]/2));
 					}	
 				}
 			}
@@ -351,8 +321,8 @@ int main(int argc, char** argv)
 	for(int iT=0; iT<numTimes; iT++)
 	{	for(int iomega=iomegaStart; iomega<iomegaStop; iomega++) //input frequency grid split over MPI
 		{	double omegaCur = iomega*dE;
-			double bDirect = breadthDirect[iT].out[iomega] + 2*ImSigmaTe(TeArr[iT],invTauTePrefac);//recal breadth and add Te dependence of lifetime
-			double bPhonon = breadthPhonon[iT].out[iomega] + 2*ImSigmaTe(TeArr[iT],invTauTePrefac);//recal breadth and add Te dependence of lifetime
+			double bDirect = breadthDirect[iT].out[iomega] + LWcorrection[iT][iomega];//recal breadth and add Te dependence of lifetime
+			double bPhonon = breadthPhonon[iT].out[iomega] + LWcorrection[iT][iomega];//recal breadth and add Te dependence of lifetime
 			for(size_t jomega=0; jomega<ImEpsDirectBroad[iT].out.size(); jomega++) //output frequency grid
 			{	double omega = jomega*dE;
 				double kernelDirect = lorentzianOdd(omega, omegaCur, bDirect) * dE;
@@ -368,8 +338,8 @@ int main(int argc, char** argv)
 
 	if(mpiUtil->isHead())
 	{	//Print calculated ImEps contributions:
-		writeImEps("ImEps_direct.dat", ImEpsDirectBroad, TeArr);
-		writeImEps("ImEps_phonon.dat", ImEpsPhononBroad, TeArr);
+		writeImEps("ImEps_direct.dat", ImEpsDirectBroad);
+		writeImEps("ImEps_phonon.dat", ImEpsPhononBroad);
 		
 		//Print experimental dielectric function (at room temperature):
 		ofstream ofsExpt("ImEps_expt.dat");
