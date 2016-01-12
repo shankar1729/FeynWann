@@ -161,6 +161,8 @@ int main(int argc, char** argv)
 	mpiUtil->allReduce(Emax, MPIUtil::ReduceMax);
 	Emin -= 10*dE; //add some margin
 	Emax += 10*dE;
+	int steps = (Emax-Emin)/dE;
+	logPrintf("Initialized energy grid: %lg to %lg eV with %d points.\n", Emin/eV, (Emin+dE*(steps))/eV, steps);
 	
 	//Initialize sampling parameters:
 	int ikStart, ikStop; TaskDivision(nKptsN1, mpiUtil).myRange(ikStart, ikStop);
@@ -221,9 +223,9 @@ int main(int argc, char** argv)
 			for(int iT=0; iT<numTimes; iT++)
 			{	Farr[ik][iT] = Earr[ik];
 				for(double& f: Farr[ik][iT]) //convert to fillings:
-				{	logPrintf("energyRequest = %lg\n", f/eV);
+				{	//logPrintf("energyRequest = %lg\n", f/eV);
 					f = fInterp(iT,f);
-					logPrintf("f = %lg\n", f);
+					//logPrintf("f = %lg\n", f);
 					if (f>1 || f<0) exit(1);
 				}
 			}
