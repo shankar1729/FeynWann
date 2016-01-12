@@ -141,7 +141,7 @@ int main(int argc, char** argv)
 	StopWatch watchSolve("Solve"); watchSolve.start();
 	gsl_odeiv2_system odeSystem = {fdot_wrapper, NULL, size_t(ee.nE), &ee };
 	gsl_odeiv2_driver* odeDriver = gsl_odeiv2_driver_alloc_y_new(&odeSystem, gsl_odeiv2_step_msadams, 1e-6, 1e-6, 0.0);
-	double tMax = 5000.*fs, dt = 10.*fs;
+	double tMax = 10000.*fs, dt = 50.*fs;
 	double t = 0.;
 	diagMatrix f = ee.fPert;
 	std::vector<diagMatrix> fArr;
@@ -177,6 +177,7 @@ int main(int argc, char** argv)
 	if(mpiUtil->isHead())
 	{	//Pulse shape and effective T:
 		std::ofstream ofs((ee.runName+".pulseShape").c_str());
+		ofs.precision(10);
 		ofs << "#t[fs] pulseShape[fs^-1] Teff[K]\n";
 		for(size_t it=0; it<Teff.size(); it++)
 			ofs << (it*dt)/fs << '\t' << pulseShape[it]*fs << '\t' << Teff[it]/Kelvin << '\n';
@@ -184,6 +185,7 @@ int main(int argc, char** argv)
 		
 		//Distributions [dimensionless]
 		ofs.open((ee.runName+".f").c_str());
+		ofs.precision(10);
 		//--- Header
 		ofs << "#E[ev]\\t[fs]";
 		for(size_t it=0; it<Teff.size(); it++)
@@ -200,6 +202,7 @@ int main(int argc, char** argv)
 		
 		//Linewidth corrections [eV]
 		ofs.open((ee.runName+".lwDelta").c_str());
+		ofs.precision(10);
 		//--- Header
 		ofs << "#E[ev]\\t[fs]";
 		for(size_t it=0; it<Teff.size(); it++)
