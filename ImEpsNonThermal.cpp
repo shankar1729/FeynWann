@@ -29,6 +29,7 @@ inline int findNearestNeighbourIndex(double value,std::vector<double> &x)
 			idx=i;
 		}
 	}
+	logPrintf("nearestX = %lg\n", x[idx]/eV);
 	return idx;
 }
 
@@ -36,7 +37,9 @@ inline int findNearestNeighbourIndex(double value,std::vector<double> &x)
 inline double interp1(std::vector<double> &x, std::vector<double> &y, double newX)
 {	int idx = findNearestNeighbourIndex(newX,x);
 	double dx = x[idx+1]-x[idx];
+	logPrintf("dx = %lg x1 = %lg, x2 = %lg\n", dx/eV, x[idx]/eV, x[idx+1]/eV);
 	double dy = y[idx+1]-y[idx];
+	logPrintf("dy = %lg y1 = %lg, y2 = %lg\n", dy, y[idx], y[idx+1]);
 	double slope = dy/dx;
 	double intercept = y[idx]-x[idx]*slope;
 	double newY = slope * newX + intercept;
@@ -71,8 +74,8 @@ int main(int argc, char** argv)
 	const matrix3<> R = matrix3<>(0,1,1, 1,0,1, 1,1,0) * (0.5*inputMap.get("aCubic")*Angstrom);
 	const double invTauTePrefac = inputMap.get("invTauTePrefac"); // prefactor A as in invTau(Te)=A*T^2
 	const double EfJellium = inputMap.get("EfJellium") * eV; // jellium fermi energy in eV, converted to hartrees
-	const int numEnergies = inputMap.get("eeRelaxNumRows");
-	const int numTimes = inputMap.get("eeRelaxNumCols");
+	const int numEnergies = inputMap.get("eeRelaxNumEnergies");
+	const int numTimes = inputMap.get("eeRelaxNumTimes");
 
 	logPrintf("\nInputs after conversion to atomic units:\n");
 	logPrintf("nKptsN1 = %d\n", nKptsN1);
@@ -93,19 +96,24 @@ int main(int argc, char** argv)
 	logPrintf("\n");
 
 	//Read in nonthermal electron distribution function from eeRleax code:
-	ifstream inFile1;
-	inFile1.open("invTau.dat");
+	std::ifstream inFile1("fermiDists.dat",std::ios::in);
 	std::vector<diagMatrix> distFunctArr(numTimes);
 	double inputEnergySI, distF;
 	std::vector<double> inputEnergy(numEnergies);
+	if (!inFile1.is_open())
+	{	std::cerr << "There was a problem opening the distribution input file!\n";
+ 		exit(1);//exit or do additional error checking
+	}
 	for (int a = 0; a < numEnergies; a++)
 	{	for (int iT = 0; iT < (numTimes+1); iT++)
 		{	if (iT==0)
 			{	inFile1 >> inputEnergySI;
 				inputEnergy.push_back(inputEnergySI*eV); // convert to atomic units
+				logPrintf("inputEnergySI = %lg\n", inputEnergySI);
 			}
 			if (iT>0) 
 			{	inFile1 >> distF;
+				logPrintf("distF = %lg\n", distF);
 				distFunctArr[iT-1].push_back(distF);
 			}
 		}
@@ -113,15 +121,22 @@ int main(int argc, char** argv)
 	//The rest of the code assumes that the matrix distFunctArr has the distribution function for each time in each column, first column is energy
 
 	//Read in electron linewidth correction from eeRleax dode:
-	ifstream inFile2;
-	inFile2.open("invTau.dat");
+	std::ifstream inFile2("invTau.dat",std::ios::in);
 	std::vector<diagMatrix> LWcorrection(numTimes);
 	double trash, LWcorr;
+	if (!inFile2.is_open())
+	{	std::cerr << "There was a problem opening the linewidth correction input file!\n";
+ 		exit(1);//exit or do additional error checking
+	}
 	for (int a = 0; a < numEnergies; a++)
 	{	for (int iT = 0; iT < (numTimes+1); iT++)
-		{       if (iT==0) inFile1 >> trash;
+		{       if (iT==0)
+			{	inFile2 >> trash;
+				//logPrintf("inputEnergySI = %lg\n", trash);
+			}
 			if (iT>0)
-			{	inFile1 >> LWcorr;
+			{	inFile2 >> LWcorr;
+				//logPrintf("LWcorr = %lg\n", LWcorr);
 				LWcorrection[iT-1].push_back(LWcorr);
 			}
 		}
@@ -189,8 +204,7 @@ int main(int argc, char** argv)
 	LineWidth lineWidth("Wannier/wannier", bs);
 
 	//Initialize frequency grid:
-	//double omegaMax = 77.210*eV;
-	double omegaMax = 10*eV;
+	double omegaMax = 77.210*eV;
 
 	//Initialize unbroadened histograms:
 	std::vector<Histogram> ImEpsDirect(numTimes, Histogram(0, dE, omegaMax)), breadthDirect(numTimes, Histogram(0, dE, omegaMax));
@@ -198,7 +212,7 @@ int main(int argc, char** argv)
 	int nomega = ImEpsDirect[0].out.size();
 	logPrintf("Initialized frequency grid: 0 to %lg eV with %d points.\n", (dE*(nomega-1))/eV, nomega);
 	
-	//-------- Pass 2: electro n-phonon coupling and dielectric response ---------
+	//-------- Calculate dielectric response ------------------------------------------------
 	logPrintf("\nePhCoupling and ImEps: "); logFlush();
 	for(int iBunch=0; iBunch<nBunchesMine; iBunch++)
 	{
@@ -215,7 +229,11 @@ int main(int argc, char** argv)
 			for(int iT=0; iT<numTimes; iT++)
 			{	Farr[ik][iT] = Earr[ik];
 				for(double& f: Farr[ik][iT]) //convert to fillings:
+				{	logPrintf("energyRequest = %lg\n", f/eV);
 					f = interp1(inputEnergy,distFunctArr[iT],f);
+					logPrintf("f = %lg\n", f);
+					if (f>1 || f<0) exit(1);
+				}
 			}
 		}
 
@@ -323,7 +341,9 @@ int main(int argc, char** argv)
 	{	for(int iomega=iomegaStart; iomega<iomegaStop; iomega++) //input frequency grid split over MPI
 		{	double omegaCur = iomega*dE;
 			double bDirect = breadthDirect[iT].out[iomega] + interp1(inputEnergy,LWcorrection[iT],omegaCur);//recal breadth and add Te dependence of lifetime
+			//logPrintf("bDirect = %lg\n", bDirect);
 			double bPhonon = breadthPhonon[iT].out[iomega] + interp1(inputEnergy,LWcorrection[iT],omegaCur);//recal breadth and add Te dependence of lifetime
+			//logPrintf("bPhonon = %lg\n", bPhonon);
 			for(size_t jomega=0; jomega<ImEpsDirectBroad[iT].out.size(); jomega++) //output frequency grid
 			{	double omega = jomega*dE;
 				double kernelDirect = lorentzianOdd(omega, omegaCur, bDirect) * dE;
