@@ -19,36 +19,14 @@ inline double lorentzianOdd(double omega, double omega0, double breadth)
                 - 1./(breadthSq + std::pow(omega+omega0, 2)) );
 }
 
-inline int findNearestNeighbourIndex(double value,std::vector<double> &x)
-{	double dist = DBL_MAX;
-	int idx = -1;
-	for(size_t i=0; i<x.size(); ++i)
-	{	double newDist = value-x[i];
-		if(newDist>0 && newDist<dist)
-		{	dist = newDist;
-			idx=i;
-		}
-	}
-	logPrintf("nearestX = %lg\n", x[idx]/eV);
-	return idx;
-}
 
-
-inline double interp1(std::vector<double> &x, std::vector<double> &y, double newX)
-{	int idx = findNearestNeighbourIndex(newX,x);
-	double dx = x[idx+1]-x[idx];
-	logPrintf("dx = %lg x1 = %lg, x2 = %lg\n", dx/eV, x[idx]/eV, x[idx+1]/eV);
-	double dy = y[idx+1]-y[idx];
-	logPrintf("dy = %lg y1 = %lg, y2 = %lg\n", dy, y[idx], y[idx+1]);
-	double slope = dy/dx;
-	double intercept = y[idx]-x[idx]*slope;
-	double newY = slope * newX + intercept;
-	return newY;
-}
-
-
-inline void writeImEps(const char* fname, const std::vector<Histogram>& ImEps)
+inline void writeImEps(const char* fname, const std::vector<Histogram>& ImEps, const std::vector<double>& headerVals)
 {	std::ofstream ofs(fname);
+	//Header:
+	ofs << "#omega[eV]";
+	for(const double& headerVal: headerVals)
+		ofs << ' ' << headerVal;
+	ofs << '\n';
 	//Data:
 	for(size_t iomega=0; iomega<ImEps[0].out.size(); iomega++)
 	{	double omega = ImEps[0].dE * iomega;
@@ -58,6 +36,70 @@ inline void writeImEps(const char* fname, const std::vector<Histogram>& ImEps)
 		ofs << '\n';
 	}
 }
+
+struct Interp1
+{
+	std::vector<double> headerVals; //header values for each columns (read from file but not used by this class)
+	std::vector<double> xGrid; //common x values (uniform grid)
+	std::vector<std::vector<double> > yGrid; //y values per column
+	
+	//Read from file which has a single line header, interpolate along columns
+	//xScale and yScale allow for unit conversions in the input data
+	Interp1(string fname, double xScale, double yScale)
+	{	logPrintf("Reading '%s': ", fname.c_str()); logFlush();
+		ifstream ifs(fname.c_str());
+		string line; //read line by line
+		//Read header:
+		{	getline(ifs, line);
+			istringstream iss(line);
+			string comment; iss >> comment; //ignore
+			while(!iss.eof())
+			{	double headerVal; iss >> headerVal;
+				if(iss.fail()) break;
+				headerVals.push_back(headerVal);
+			}
+			logPrintf("%lu columns, ", headerVals.size()); logFlush();
+		}
+		//Read data:
+		yGrid.resize(headerVals.size());
+		while(!ifs.eof())
+		{	getline(ifs, line);
+			if(!line.length()) break; //quit on empty line, otherwise must have full data
+			istringstream iss(line);
+			//Read x:
+			double x; iss >> x;
+			if(iss.fail()) die("Error reading x[%lu]\n", xGrid.size())
+			xGrid.push_back(x * xScale);
+			//read y values:
+			for(size_t iy=0; iy<headerVals.size(); iy++)
+			{	double y; iss >> y;
+				if(iss.fail()) die("Error reading y[%lu][%lu]\n", iy, xGrid.size())
+				yGrid[iy].push_back(y * yScale);
+			}
+		}
+		//Make sure x is an uniform grid:
+		xMin = xGrid[0];
+		double dx = (xGrid.back() - xMin) / (xGrid.size() - 1);
+		dxInv = 1./dx;
+		for(size_t i=0; i<xGrid.size(); i++)
+			if(fabs(dxInv*(xGrid[i]-xMin) - i) > 1e-6)
+				die("x is not a uniform grid\n")
+		logPrintf("%lu rows.\n", xGrid.size()); logFlush();
+	}
+	
+	inline double operator()(int iColumn, double x)
+	{	const std::vector<double>& yCol = yGrid[iColumn];
+		double fx = dxInv * (x - xMin);
+		if(fx <= 0.) return yCol.front();
+		if(fx >= yCol.size()-1) return yCol.back();
+		int ix = floor(fx); double tx = fx - ix; //find integer and fractional coordinate
+		return (1.-tx)*yCol[ix] + tx*yCol[ix+1];
+	}
+	
+private:
+	double xMin, dxInv; //for speeding up interpolation
+};
+
 
 int main(int argc, char** argv)
 {	string inputFilename; bool dryRun, printDefaults;
@@ -72,10 +114,6 @@ int main(int argc, char** argv)
 	const double Tl = inputMap.get("Tl") * Kelvin; //lattice temperature
 	const int spinWeight = round(inputMap.get("spinWeight"));
 	const matrix3<> R = matrix3<>(0,1,1, 1,0,1, 1,1,0) * (0.5*inputMap.get("aCubic")*Angstrom);
-	const double invTauTePrefac = inputMap.get("invTauTePrefac"); // prefactor A as in invTau(Te)=A*T^2
-	const double EfJellium = inputMap.get("EfJellium") * eV; // jellium fermi energy in eV, converted to hartrees
-	const int numEnergies = inputMap.get("eeRelaxNumEnergies");
-	const int numTimes = inputMap.get("eeRelaxNumTimes");
 
 	logPrintf("\nInputs after conversion to atomic units:\n");
 	logPrintf("nKptsN1 = %d\n", nKptsN1);
@@ -85,8 +123,6 @@ int main(int argc, char** argv)
 	logPrintf("Tl = %lg\n", Tl);
 	logPrintf("spinWeight = %d\n", spinWeight);
 	logPrintf("R:\n");
-	logPrintf("invTauTePrefac = %lg\n", invTauTePrefac);
-	logPrintf("EfJellium = %lg\n", EfJellium);
 	R.print(globalLog, " %lg ");
 	if(dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
@@ -95,54 +131,10 @@ int main(int argc, char** argv)
 	}
 	logPrintf("\n");
 
-	//Read in nonthermal electron distribution function from eeRleax code:
-	std::ifstream inFile1("fermiDists.dat",std::ios::in);
-	std::vector<diagMatrix> distFunctArr(numTimes);
-	double inputEnergySI, distF;
-	std::vector<double> inputEnergy(numEnergies);
-	if (!inFile1.is_open())
-	{	std::cerr << "There was a problem opening the distribution input file!\n";
- 		exit(1);//exit or do additional error checking
-	}
-	for (int a = 0; a < numEnergies; a++)
-	{	for (int iT = 0; iT < (numTimes+1); iT++)
-		{	if (iT==0)
-			{	inFile1 >> inputEnergySI;
-				inputEnergy.push_back(inputEnergySI*eV); // convert to atomic units
-				logPrintf("inputEnergySI = %lg\n", inputEnergySI);
-			}
-			if (iT>0) 
-			{	inFile1 >> distF;
-				logPrintf("distF = %lg\n", distF);
-				distFunctArr[iT-1].push_back(distF);
-			}
-		}
-	}
-	//The rest of the code assumes that the matrix distFunctArr has the distribution function for each time in each column, first column is energy
-
-	//Read in electron linewidth correction from eeRleax dode:
-	std::ifstream inFile2("invTau.dat",std::ios::in);
-	std::vector<diagMatrix> LWcorrection(numTimes);
-	double trash, LWcorr;
-	if (!inFile2.is_open())
-	{	std::cerr << "There was a problem opening the linewidth correction input file!\n";
- 		exit(1);//exit or do additional error checking
-	}
-	for (int a = 0; a < numEnergies; a++)
-	{	for (int iT = 0; iT < (numTimes+1); iT++)
-		{       if (iT==0)
-			{	inFile2 >> trash;
-				//logPrintf("inputEnergySI = %lg\n", trash);
-			}
-			if (iT>0)
-			{	inFile2 >> LWcorr;
-				//logPrintf("LWcorr = %lg\n", LWcorr);
-				LWcorrection[iT-1].push_back(LWcorr);
-			}
-		}
-	}
-
-
+	Interp1 fInterp("fermiDists.dat", eV, 1.);
+	Interp1 lwInterp("invTau.dat", eV, eV);
+	int numTimes = fInterp.headerVals.size();
+	
 	//Initialize Wannier bandstructure:
 	std::vector< vector3<complex> > Ahat(1); //assume cubic symmetry and only calculate x-axis
 	Ahat[0] = vector3<complex>(1., 0., 0.);
@@ -230,7 +222,7 @@ int main(int argc, char** argv)
 			{	Farr[ik][iT] = Earr[ik];
 				for(double& f: Farr[ik][iT]) //convert to fillings:
 				{	logPrintf("energyRequest = %lg\n", f/eV);
-					f = interp1(inputEnergy,distFunctArr[iT],f);
+					f = fInterp(iT,f);
 					logPrintf("f = %lg\n", f);
 					if (f>1 || f<0) exit(1);
 				}
@@ -340,9 +332,9 @@ int main(int argc, char** argv)
 	for(int iT=0; iT<numTimes; iT++)
 	{	for(int iomega=iomegaStart; iomega<iomegaStop; iomega++) //input frequency grid split over MPI
 		{	double omegaCur = iomega*dE;
-			double bDirect = breadthDirect[iT].out[iomega] + interp1(inputEnergy,LWcorrection[iT],omegaCur);//recal breadth and add Te dependence of lifetime
+			double bDirect = breadthDirect[iT].out[iomega] + lwInterp(iT,omegaCur);//recal breadth and add Te dependence of lifetime
 			//logPrintf("bDirect = %lg\n", bDirect);
-			double bPhonon = breadthPhonon[iT].out[iomega] + interp1(inputEnergy,LWcorrection[iT],omegaCur);//recal breadth and add Te dependence of lifetime
+			double bPhonon = breadthPhonon[iT].out[iomega] + lwInterp(iT,omegaCur);//recal breadth and add Te dependence of lifetime
 			//logPrintf("bPhonon = %lg\n", bPhonon);
 			for(size_t jomega=0; jomega<ImEpsDirectBroad[iT].out.size(); jomega++) //output frequency grid
 			{	double omega = jomega*dE;
@@ -359,8 +351,8 @@ int main(int argc, char** argv)
 
 	if(mpiUtil->isHead())
 	{	//Print calculated ImEps contributions:
-		writeImEps("ImEps_directNontherm.dat", ImEpsDirectBroad);
-		writeImEps("ImEps_phononNontherm.dat", ImEpsPhononBroad);
+		writeImEps("ImEps_directNontherm.dat", ImEpsDirectBroad, fInterp.headerVals);
+		writeImEps("ImEps_phononNontherm.dat", ImEpsPhononBroad, fInterp.headerVals);
 		
 		//Print experimental dielectric function (at room temperature):
 		ofstream ofsExpt("ImEps_expt.dat");
