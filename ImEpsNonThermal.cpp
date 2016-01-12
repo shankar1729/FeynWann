@@ -191,8 +191,7 @@ int main(int argc, char** argv)
 		for(vector3<>& k: kArr)
 			for(int j=0; j<3; j++)
 				k[j] = Random::uniform();
-
-        }
+	}
 
 	//Initalize line width of electronic states
 	LineWidth lineWidth("Wannier/wannier", bs);
@@ -215,27 +214,25 @@ int main(int argc, char** argv)
 		
 		//Calculate electronic states and matrix elements for bunch:
 		std::vector<diagMatrix> Earr = bs.getStates(kArr);
-		std::vector<diagMatrix> ImEarr = lineWidth(kArr);
+		std::vector<diagMatrix> ImEarr0 = lineWidth(kArr); //zero temperature linewidths
 		std::vector< std::vector<matrix> > Parr = bs.getDipoleMatElem(kArr);
-		std::vector< std::vector<diagMatrix> > Farr(bunchSize); //fillings by k-point, temperature and band
+		std::vector< std::vector<diagMatrix> > Farr(bunchSize), ImEarr(bunchSize); //fillings and linewidths by k-point, temperature and band
 		for(int ik=0; ik<bunchSize; ik++)
-		{	Farr[ik].resize(numTimes);
+		{	Farr[ik].assign(numTimes, diagMatrix(nBands));
+			ImEarr[ik].assign(numTimes, diagMatrix(nBands));
 			for(int iT=0; iT<numTimes; iT++)
-			{	Farr[ik][iT] = Earr[ik];
-				for(double& f: Farr[ik][iT]) //convert to fillings:
-				{	//logPrintf("energyRequest = %lg\n", f/eV);
-					f = fInterp(iT,f);
-					//logPrintf("f = %lg\n", f);
-					if (f>1 || f<0) exit(1);
+				for(int b=0; b<nBands; b++)
+				{	double E = Earr[ik][b];
+					Farr[ik][iT][b] = fInterp(iT,E); //interpolate electron occupations (not necessarily a Fermi distribution)
+					ImEarr[ik][iT][b] = ImEarr0[ik][b] + lwInterp(iT,E); //add linewidth correction (nterpolated as a function of carrier energy)
 				}
-			}
 		}
 
 		diagMatrix omegaPhArr[bunchSize];
 		std::vector<matrix> gePhArr[bunchSize];
 		for(int ik1=0; ik1<bunchSize; ik1++)
 		{	const diagMatrix& E1 = Earr[ik1];
-			const diagMatrix& ImE1 = ImEarr[ik1];
+			const std::vector<diagMatrix>& ImE1 = ImEarr[ik1];
 			const std::vector<diagMatrix>& F1 = Farr[ik1];
 			const matrix& P1 = Parr[ik1][0];
 			
@@ -247,7 +244,7 @@ int main(int argc, char** argv)
 					double weight = (directPrefac0/(omega*omega)) * P1(c,v).norm(); //upto Te-dependent electron occupation factors
 					for(int iT=0; iT<numTimes; iT++)
 					{	ImEpsDirect[iT].addEvent(omega, weight * (F1[iT][v] - F1[iT][c]));
-						breadthDirect[iT].addEvent(omega, weight * (F1[iT][v] - F1[iT][c]) * (ImE1[c]+ImE1[v]));
+						breadthDirect[iT].addEvent(omega, weight * (F1[iT][v] - F1[iT][c]) * (ImE1[iT][c]+ImE1[iT][v]));
 					}	
 				}
 			}
@@ -259,7 +256,7 @@ int main(int argc, char** argv)
 
 			for(int ik2=0; ik2<bunchSize; ik2++) if(ik2 != ik1)
 			{	const diagMatrix& E2 = Earr[ik2];
-				const diagMatrix& ImE2 = ImEarr[ik2];
+				const std::vector<diagMatrix>& ImE2 = ImEarr[ik2];
 				const std::vector<diagMatrix>& F2 = Farr[ik2];
 				const matrix& P2 = Parr[ik2][0];
 			
@@ -294,7 +291,7 @@ int main(int argc, char** argv)
 							//Include T dependent electron occupations:
 							for(int iT=0; iT<numTimes; iT++)
 							{	ImEpsPhonon[iT].addEvent(omega, weight * (F1[iT][v] - F2[iT][c]));
-								breadthPhonon[iT].addEvent(omega, fabs(weight * (F1[iT][v] - F2[iT][c]))*(ImE2[c]+ImE1[v]));
+								breadthPhonon[iT].addEvent(omega, fabs(weight * (F1[iT][v] - F2[iT][c]))*(ImE2[iT][c]+ImE1[iT][v]));
 								weightPhonon[iT].addEvent(omega, fabs(weight * (F1[iT][v] - F2[iT][c]))); //different from ImEpsPhonon, since weight can be negative due to singularity extrapolation
 							}
 						}
@@ -334,10 +331,8 @@ int main(int argc, char** argv)
 	for(int iT=0; iT<numTimes; iT++)
 	{	for(int iomega=iomegaStart; iomega<iomegaStop; iomega++) //input frequency grid split over MPI
 		{	double omegaCur = iomega*dE;
-			double bDirect = breadthDirect[iT].out[iomega] + lwInterp(iT,omegaCur);//recal breadth and add Te dependence of lifetime
-			//logPrintf("bDirect = %lg\n", bDirect);
-			double bPhonon = breadthPhonon[iT].out[iomega] + lwInterp(iT,omegaCur);//recal breadth and add Te dependence of lifetime
-			//logPrintf("bPhonon = %lg\n", bPhonon);
+			double bDirect = breadthDirect[iT].out[iomega]; //non-thermal carrier distribution corrections already included above
+			double bPhonon = breadthPhonon[iT].out[iomega]; //non-thermal carrier distribution corrections already included above
 			for(size_t jomega=0; jomega<ImEpsDirectBroad[iT].out.size(); jomega++) //output frequency grid
 			{	double omega = jomega*dE;
 				double kernelDirect = lorentzianOdd(omega, omegaCur, bDirect) * dE;
