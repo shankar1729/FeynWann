@@ -126,6 +126,7 @@ int main(int argc, char** argv)
 	double phononPrefac0 = 4 * std::pow(M_PI,2) * spinWeight / (nKpairs*fabs(det(R))); //frequency independent part of prefac
 	double directPrefac0 = 4 * std::pow(M_PI,2) * spinWeight / (nKpts*fabs(det(R))); //frequency independent part of prefac
 	double GePhPrefac = spinWeight * (2*M_PI) / nKpairs;
+	double TlRatio = Tl / (0.026*eV); //Ratio of Tl to the Tl at which e-ph linewidths were calculated
 	
 	//Singularity extrapolation parameters
 	double extrapCoeff[] = {-19./12, 13./3, -7./4 }; //account for constant, 1/eta and eta^2 dependence
@@ -240,7 +241,7 @@ int main(int argc, char** argv)
 		
 		//Calculate electronic states and matrix elements for bunch:
 		std::vector<diagMatrix> Earr = bs.getStates(kArr);
-		std::vector<diagMatrix> ImEarr = lineWidth(kArr);
+		std::vector<diagMatrix> ImEarr = lineWidth(kArr, 1., TlRatio); //account for linear Tl dependence of e-ph linewidths
 		std::vector< std::vector<matrix> > Parr = bs.getDipoleMatElem(kArr);
 		std::vector< std::vector<diagMatrix> > Farr(bunchSize); //fillings by k-point, temperature and band
 		for(int ik=0; ik<bunchSize; ik++)
