@@ -83,7 +83,9 @@ struct Interp1
 		dxInv = 1./dx;
 		for(size_t i=0; i<xGrid.size(); i++)
 			if(fabs(dxInv*(xGrid[i]-xMin) - i) > 1e-6)
+			{	//logPrintf("index = %d, xMin = %lg, xGrid[i] = %lg, dxInv = %lg\n", i,xMin,xGrid[i],dxInv);
 				die("x is not a uniform grid\n")
+			}
 		logPrintf("%lu rows.\n", xGrid.size()); logFlush();
 	}
 	
@@ -130,9 +132,11 @@ int main(int argc, char** argv)
 		return 0;
 	}
 	logPrintf("\n");
-
-	Interp1 fInterp("fermiDists.dat", eV, 1.);
-	Interp1 lwInterp("invTau.dat", eV, eV);
+	
+	Interp1 fInterp("eeRelax-2.175-838.f", eV, 1.);
+	Interp1 lwInterp("eeRelax-2.175-838.lwDelta", eV, eV);
+	//Interp1 fInterp("fermiDists.dat", eV, 1.);
+	//Interp1 lwInterp("LWdelta.dat", eV, eV);
 	int numTimes = fInterp.headerVals.size();
 	
 	//Initialize Wannier bandstructure:
@@ -197,7 +201,8 @@ int main(int argc, char** argv)
 	LineWidth lineWidth("Wannier/wannier", bs);
 
 	//Initialize frequency grid:
-	double omegaMax = 77.210*eV;
+	//double omegaMax = 77.210*eV;
+	double omegaMax = 19.92*eV;
 
 	//Initialize unbroadened histograms:
 	std::vector<Histogram> ImEpsDirect(numTimes, Histogram(0, dE, omegaMax)), breadthDirect(numTimes, Histogram(0, dE, omegaMax));
@@ -363,6 +368,14 @@ int main(int argc, char** argv)
 			ofsExpt << omega/eV << '\t' << imag(eps.epsilon) << '\n';
 			ofsReExpt << omega/eV << '\t' << real(eps.epsilon) << '\n';
 		}
+
+		//Print Linewidth correction at each temp:
+		ofstream ofs("LWcorrection.dat");
+		ofs << "#LinewidthCorrection[eV]\n";
+		for(int iT=0; iT<numTimes; iT++)
+		{	ofs << lwInterp(iT,0)/eV << '\n';
+		}
+
 	}
 	
 	finalizeSystem();
