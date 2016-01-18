@@ -178,7 +178,8 @@ int main(int argc, char** argv)
 	int nModes = bs.getPhononModes(vector3<>()).nRows();
 	double phononPrefac0 = 4 * std::pow(M_PI,2) * spinWeight / (nKpairs*fabs(det(R))); //frequency independent part of prefac
 	double directPrefac0 = 4 * std::pow(M_PI,2) * spinWeight / (nKpts*fabs(det(R))); //frequency independent part of prefac
-	
+	double TlRatio = Tl / (0.026*eV); //Ratio of Tl to the Tl at which e-ph linewidths were calculated	
+
 	//Singularity extrapolation parameters
 	double extrapCoeff[] = {-19./12, 13./3, -7./4 }; //account for constant, 1/eta and eta^2 dependence
 	//double extrapCoeff[] = { -1, 2.}; //account for constant and 1/eta dependence
@@ -219,7 +220,7 @@ int main(int argc, char** argv)
 		
 		//Calculate electronic states and matrix elements for bunch:
 		std::vector<diagMatrix> Earr = bs.getStates(kArr);
-		std::vector<diagMatrix> ImEarr0 = lineWidth(kArr); //zero temperature linewidths
+		std::vector<diagMatrix> ImEarr0 = lineWidth(kArr, 1., TlRatio); //account for linear Tl dependence of e-ph linewidths
 		std::vector< std::vector<matrix> > Parr = bs.getDipoleMatElem(kArr);
 		std::vector< std::vector<diagMatrix> > Farr(bunchSize), ImEarr(bunchSize); //fillings and linewidths by k-point, temperature and band
 		for(int ik=0; ik<bunchSize; ik++)
@@ -369,7 +370,7 @@ int main(int argc, char** argv)
 			ofsReExpt << omega/eV << '\t' << real(eps.epsilon) << '\n';
 		}
 
-		//Print Linewidth correction at each temp:
+		//Print Linewidth correction at each time:
 		ofstream ofs("LWcorrection.dat");
 		ofs << "#LinewidthCorrection[eV]\n";
 		for(int iT=0; iT<numTimes; iT++)

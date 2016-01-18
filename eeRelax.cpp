@@ -36,7 +36,7 @@ struct eeRelax
 		De = (argc<4 ? 0.016 : atof(argv[3]))/eV;
 		logPrintf("Using De = %lg eV^{-1}\n", De/(1./eV));
 		runName = string("eeRelax-") + argv[1] + string("-") + argv[2];
-		T0 = 298*Kelvin;
+		T0 = 300*Kelvin;
 		
 		//Energy grid:
 		double Eouter = Ephoton + 10*T0;
