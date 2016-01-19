@@ -65,6 +65,8 @@ add_WannierMetropolis_executable(phononEnergy)
 add_WannierMetropolis_executable(FermiSurface)
 add_WannierMetropolis_executable(ImEpsNonThermal)
 add_WannierMetropolis_executable(eeRelax)
+add_WannierMetropolis_executable(ePhRelax)
 
 target_link_libraries(eeRelax ${GSL_LIBRARY})
+target_link_libraries(ePhRelax ${GSL_LIBRARY})
 
