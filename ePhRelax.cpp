@@ -20,7 +20,6 @@ struct ePhRelax
 
 		//Get the system parameters (mu, T, lattice vectors etc.)
 		InputMap inputMap(inputFilename);	
-		double mu = inputMap.get("mu"); //initial guess only - will be calculated self-consistently in this executable
 		const double Z = inputMap.get("Z"); //number of electrons per unit cell
 		const double T = inputMap.get("T") * Kelvin; //initial temperature in Kelvin (electron and lattice)
 		const double Uabs = inputMap.get("Uabs") * Joule/std::pow(meter,3); //absorbed laser energy per unit volume in Joule/meter^3
@@ -29,7 +28,6 @@ struct ePhRelax
 		double detR = fabs(det(R));
 		
 		logPrintf("\nInputs after conversion to atomic units:\n");
-		logPrintf("mu = %lg\n", mu);
 		logPrintf("Z = %lg\n", Z);
 		logPrintf("T = %lg\n", T);
 		logPrintf("Uabs = %lg\n", Uabs);
@@ -46,12 +44,50 @@ struct ePhRelax
 		//Read electron and phonon DOS (and convert to atomic units and per-unit volume):
 		dos.init("dos.dat", eV, 1./(detR*eV));
 		dosPh.init("phononDOS.dat", eV, 1./(detR*eV));
+		
+		//Determine initial Fermi distribution:
+		//--- Bisect for chemical potential:
+		double dmuMin = dos.xGrid.front() - 10*T;
+		double dmuMax = dos.xGrid.back() + 10*T;
+		double dmu = 0.5*(dmuMin + dmuMax);
+		const double tol = 1e-9*T;
+		while(dmuMax-dmuMin > tol)
+		{	//calculate number of electrons at current Z:
+			double nElectrons = 0.;
+			const double& dE = dos.dx;
+			for(size_t ie=0; ie<dos.xGrid.size(); ie++)
+			{	const double& Ei = dos.xGrid[ie];
+				double fi = fermi((Ei - dmu)/T);
+				nElectrons += dE * dos.yGrid[0][ie] * fi * detR;
+			}
+			((nElectrons>Z) ? dmuMax : dmuMin) = dmu;
+			dmu = 0.5*(dmuMin + dmuMax);
+		}
+		logPrintf("Initial Fermi distribution: dmu = %le eV\n", dmu/eV);
+		//--- calculate density of states at the Fermi level:
+		double dos0 = 0.;
+		for(size_t ie=0; ie<dos.xGrid.size(); ie++)
+			dos0 += dos.dx * dos.yGrid[0][ie] * fermiPrime((dos.xGrid[ie] - dmu)/T) * (-1./T);
+		logPrintf("Density of states at Fermi level = %le /eV-cell\n", dos0*(eV*detR));
 	}
 	
 	//Calculate lattice specific heat
 	inline double Cl(double Tl) const
-	{
+	{	assert(dosPh.xMin==0.);
+		const double& domegaPh = dosPh.dx;
+		double result = 0.;
+		for(size_t ie=1; ie<dosPh.xGrid.size(); ie++) //omit zero energy phonons to avoid 0/0 error
+		{	double omegaPh = ie*domegaPh;
+			double x = omegaPh/Tl;
+			double g = 1./(exp(x)-1.);
+			double g_Tl = g*(g+1)*x/Tl; //dg/dTl
+			result += domegaPh * omegaPh * g_Tl  * dosPh.yGrid[0][ie];
+		}
+		return result;
 	}
+	
+	inline double fermi(double x) { return x>30. ? exp(-x) : 1./(1.+exp(x)); } //avoid overflow issues
+	inline double fermiPrime(double x) { return 0.25*(std::pow(tanh(0.5*x), 2) - 1.); } //avoid overflow issues
 };
 
 int main(int argc, char** argv)

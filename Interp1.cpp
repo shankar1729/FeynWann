@@ -40,7 +40,7 @@ void Interp1::init(string fname, double xScale, double yScale)
 	}
 	//Make sure x is an uniform grid:
 	xMin = xGrid[0];
-	double dx = (xGrid.back() - xMin) / (xGrid.size() - 1);
+	dx = (xGrid.back() - xMin) / (xGrid.size() - 1);
 	dxInv = 1./dx;
 	for(size_t i=0; i<xGrid.size(); i++)
 		if(fabs(dxInv*(xGrid[i]-xMin) - i) > 1e-2)

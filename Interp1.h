@@ -9,6 +9,7 @@ struct Interp1
 	std::vector<double> headerVals; //header values for each columns (read from file, if available, but not used by this class)
 	std::vector<double> xGrid; //common x values (uniform grid)
 	std::vector<std::vector<double> > yGrid; //y values per column
+	double xMin, dx, dxInv; //for speeding up interpolation
 	
 	//Read from file which has a single line header, interpolate along columns
 	//xScale and yScale allow for unit conversions in the input data
@@ -29,9 +30,6 @@ struct Interp1
 	{	assert(yGrid.size()==1);
 		return (*this)(0, x);
 	}
-	
-private:
-	double xMin, dxInv; //for speeding up interpolation
 };
 
 
