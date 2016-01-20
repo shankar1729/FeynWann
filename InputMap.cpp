@@ -11,7 +11,7 @@ InputMap::InputMap(string filename)
 	{	string line; getline(ifs, line); //line-by-line processing (comments can now be inline)
 		trim(line);
 		istringstream iss(line);
-		string name; double val;
+		string name; string val;
 		if(iss >> name >> val)
 			(*this)[name] = val;
 	}
@@ -26,5 +26,12 @@ double InputMap::get(string key, double defaultVal) const
 		}
 		else return defaultVal;
 	}
+	return atof(iter->second.c_str());
+}
+
+string InputMap::getString(string key) const
+{	auto iter = find(key);
+	if(iter == end()) //not found
+		die("\nCould not find required entry '%s' in input.\n", key.c_str())
 	return iter->second;
 }

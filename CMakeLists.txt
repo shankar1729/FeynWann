@@ -33,7 +33,7 @@ include_directories(${CMAKE_SOURCE_DIR})
 add_definitions(-Wall -g -O3 -std=c++0x ${MPI_CXX_COMPILE_FLAGS})
 
 #Main library for WannierMetropolis containing all the auxiliary functionality
-add_library(WannierMetropolis SHARED BandStruct.cpp Epsilon.cpp Histogram.cpp LineWidth.cpp InputMap.cpp)
+add_library(WannierMetropolis SHARED BandStruct.cpp Epsilon.cpp Histogram.cpp LineWidth.cpp InputMap.cpp Interp1.cpp)
 target_link_libraries(WannierMetropolis ${JDFTX_BUILD}/libjdftx.so ${MPI_CXX_LIBRARIES})
 
 #Executables linked to above library

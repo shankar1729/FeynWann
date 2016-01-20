@@ -10,6 +10,7 @@
 #include "Units.h"
 #include "Histogram.h"
 #include "Epsilon.h"
+#include "Interp1.h"
 
 //Lorentzian kernel for an odd function stored on postive frequencies alone:
 inline double lorentzianOdd(double omega, double omega0, double breadth)
@@ -37,72 +38,6 @@ inline void writeImEps(const char* fname, const std::vector<Histogram>& ImEps, c
 	}
 }
 
-struct Interp1
-{
-	std::vector<double> headerVals; //header values for each columns (read from file but not used by this class)
-	std::vector<double> xGrid; //common x values (uniform grid)
-	std::vector<std::vector<double> > yGrid; //y values per column
-	
-	//Read from file which has a single line header, interpolate along columns
-	//xScale and yScale allow for unit conversions in the input data
-	Interp1(string fname, double xScale, double yScale)
-	{	logPrintf("Reading '%s': ", fname.c_str()); logFlush();
-		ifstream ifs(fname.c_str());
-		string line; //read line by line
-		//Read header:
-		{	getline(ifs, line);
-			istringstream iss(line);
-			string comment; iss >> comment; //ignore
-			while(!iss.eof())
-			{	double headerVal; iss >> headerVal;
-				if(iss.fail()) break;
-				headerVals.push_back(headerVal);
-			}
-			logPrintf("%lu columns, ", headerVals.size()); logFlush();
-		}
-		//Read data:
-		yGrid.resize(headerVals.size());
-		while(!ifs.eof())
-		{	getline(ifs, line);
-			if(!line.length()) break; //quit on empty line, otherwise must have full data
-			istringstream iss(line);
-			//Read x:
-			double x; iss >> x;
-			if(iss.fail()) die("Error reading x[%lu]\n", xGrid.size())
-			xGrid.push_back(x * xScale);
-			//read y values:
-			for(size_t iy=0; iy<headerVals.size(); iy++)
-			{	double y; iss >> y;
-				if(iss.fail()) die("Error reading y[%lu][%lu]\n", iy, xGrid.size())
-				yGrid[iy].push_back(y * yScale);
-			}
-		}
-		//Make sure x is an uniform grid:
-		xMin = xGrid[0];
-		double dx = (xGrid.back() - xMin) / (xGrid.size() - 1);
-		dxInv = 1./dx;
-		for(size_t i=0; i<xGrid.size(); i++)
-			if(fabs(dxInv*(xGrid[i]-xMin) - i) > 1e-6)
-			{	//logPrintf("index = %d, xMin = %lg, xGrid[i] = %lg, dxInv = %lg\n", i,xMin,xGrid[i],dxInv);
-				die("x is not a uniform grid\n")
-			}
-		logPrintf("%lu rows.\n", xGrid.size()); logFlush();
-	}
-	
-	inline double operator()(int iColumn, double x)
-	{	const std::vector<double>& yCol = yGrid[iColumn];
-		double fx = dxInv * (x - xMin);
-		if(fx <= 0.) return yCol.front();
-		if(fx >= yCol.size()-1) return yCol.back();
-		int ix = floor(fx); double tx = fx - ix; //find integer and fractional coordinate
-		return (1.-tx)*yCol[ix] + tx*yCol[ix+1];
-	}
-	
-private:
-	double xMin, dxInv; //for speeding up interpolation
-};
-
-
 int main(int argc, char** argv)
 {	string inputFilename; bool dryRun, printDefaults;
 	initSystemCmdline(argc, argv, "Ab initio parameters for Transient Absorption analysis", inputFilename, dryRun, printDefaults);
@@ -116,7 +51,8 @@ int main(int argc, char** argv)
 	const double Tl = inputMap.get("Tl") * Kelvin; //lattice temperature
 	const int spinWeight = round(inputMap.get("spinWeight"));
 	const matrix3<> R = matrix3<>(0,1,1, 1,0,1, 1,1,0) * (0.5*inputMap.get("aCubic")*Angstrom);
-
+	string runName = inputMap.getString("runName");
+	
 	logPrintf("\nInputs after conversion to atomic units:\n");
 	logPrintf("nKptsN1 = %d\n", nKptsN1);
 	logPrintf("mu = %lg\n", mu);
@@ -126,6 +62,7 @@ int main(int argc, char** argv)
 	logPrintf("spinWeight = %d\n", spinWeight);
 	logPrintf("R:\n");
 	R.print(globalLog, " %lg ");
+	logPrintf("runName = '%s'\n", runName.c_str());
 	if(dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
 		finalizeSystem();
@@ -133,10 +70,9 @@ int main(int argc, char** argv)
 	}
 	logPrintf("\n");
 	
-	Interp1 fInterp("eeRelax-2.175-838.f", eV, 1.);
-	Interp1 lwInterp("eeRelax-2.175-838.lwDelta", eV, eV);
-	//Interp1 fInterp("fermiDists.dat", eV, 1.);
-	//Interp1 lwInterp("LWdelta.dat", eV, eV);
+	Interp1 fInterp, lwInterp;
+	fInterp.init("eeRelax-" + runName + ".f", eV, 1.);
+	lwInterp.init("eeRelax-" + runName + ".lwDelta", eV, eV);
 	int numTimes = fInterp.headerVals.size();
 	
 	//Initialize Wannier bandstructure:
