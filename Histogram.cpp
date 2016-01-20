@@ -106,3 +106,78 @@ void Histogram2D::print(string fname, double Escale, double omegaScale, double h
 		ofs <<"\n";
 	}
 }
+
+Histogram2D::Histogram2D(string fname, double Escale, double omegaScale, double histScale)
+{	logPrintf("Reading '%s':", fname.c_str()); logFlush();
+	ifstream ifs(fname.c_str());
+	string line, buf;
+	//--- E grid:
+	getline(ifs, line); assert(line == "# name: E");
+	getline(ifs, line); assert(line == "# type: matrix");
+	getline(ifs, line); { istringstream iss(line); iss >> buf >> buf >> nE; logPrintf(" nE = %d ", nE); }
+	getline(ifs, line); assert(line == "# columns: 1");
+	std::vector<double> Egrid(nE);
+	for(int iE=0; iE<nE; iE++)
+	{	getline(ifs, line);
+		istringstream iss(line);
+		double Ein; iss >> Ein;
+		Egrid[iE] = Ein/Escale;
+	}
+	Emin = Egrid.front();
+	dE = (Egrid.back()-Emin)/(nE-1);
+	dEinv = 1./dE;
+	logPrintf(" dE = %le ", dE);
+	getline(ifs, line); assert(line == "");
+	//--- omega grid:
+	getline(ifs, line); assert(line == "# name: omega");
+	getline(ifs, line); assert(line == "# type: matrix");
+	getline(ifs, line); { istringstream iss(line); iss >> buf >> buf >> nomega; logPrintf(" nomega = %d ", nomega); }
+	getline(ifs, line); assert(line == "# columns: 1");
+	std::vector<double> omegaGrid(nomega);
+	for(int iomega=0; iomega<nomega; iomega++)
+	{	getline(ifs, line);
+		istringstream iss(line);
+		double omegaIn; iss >> omegaIn;
+		omegaGrid[iomega] = omegaIn/omegaScale;
+	}
+	omegaMin = omegaGrid.front();
+	domega = (omegaGrid.back()-omegaMin)/(nomega-1);
+	domegaInv = 1./domega;
+	logPrintf(" domega = %le ", domega);
+	getline(ifs, line); assert(line == "");
+	//--- Histogram data:
+	getline(ifs, line); assert(line == "# name: histData");
+	getline(ifs, line); assert(line == "# type: matrix");
+	getline(ifs, line); { istringstream iss(line); int nRows; iss >> buf >> buf >> nRows; assert(nRows == nE); }
+	getline(ifs, line); { istringstream iss(line); int nCols; iss >> buf >> buf >> nCols; assert(nCols == nomega); }
+	out.resize(nE*nomega);
+	for(int e=0; e<nE; e++)
+	{	getline(ifs, line);
+		istringstream iss(line);
+		for(int o=0; o<nomega; o++)
+		{	double histIn; iss >> histIn;
+			out[o*nE+e] = histIn/histScale;
+		}
+	}
+	logPrintf("\n");
+}
+
+double Histogram2D::interp1(double E, double omega) const
+{	//--- E coordinate:
+	double eCenter = (E-Emin)*dEinv;
+	int ie = floor(eCenter);
+	if(ie<0 || ie+1>=nE) return 0.;
+	double te = eCenter - ie;
+	//--- omega coordinate:
+	double oCenter = (omega-omegaMin)*domegaInv;
+	int io = floor(oCenter);
+	if(io<0 || io+1>=nomega) return 0.;
+	double to = oCenter - io;
+	//--- interpolate linearly:
+	return
+		  out[( io )*nE+( ie )] * (1.-to) * (1.-te)
+		+ out[( io )*nE+(ie+1)] * (1.-to) * te
+		+ out[(io+1)*nE+( ie )] * to * (1.-te)
+		+ out[(io+1)*nE+(ie+1)] * to * te;
+}
+

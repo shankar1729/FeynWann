@@ -1,6 +1,7 @@
 #include "Units.h"
 #include "InputMap.h"
 #include "Interp1.h"
+#include "Histogram.h"
 #include <core/Util.h>
 #include <core/Operators.h>
 #include <electronic/matrix.h>
@@ -11,6 +12,7 @@
 struct ePhRelax
 {
 	Interp1 dos, dosPh;
+	diagMatrix f0, fPert; //Initial Fermi and photon-perturbed distributions
 	
 	ePhRelax(int argc, char** argv)
 	{
@@ -46,6 +48,7 @@ struct ePhRelax
 		dosPh.init("phononDOS.dat", eV, 1./(detR*eV));
 		
 		//Determine initial Fermi distribution:
+		f0.resize(dos.xGrid.size());
 		//--- Bisect for chemical potential:
 		double dmuMin = dos.xGrid.front() - 10*T;
 		double dmuMax = dos.xGrid.back() + 10*T;
@@ -54,11 +57,11 @@ struct ePhRelax
 		while(dmuMax-dmuMin > tol)
 		{	//calculate number of electrons at current Z:
 			double nElectrons = 0.;
-			const double& dE = dos.dx;
 			for(size_t ie=0; ie<dos.xGrid.size(); ie++)
 			{	const double& Ei = dos.xGrid[ie];
-				double fi = fermi((Ei - dmu)/T);
-				nElectrons += dE * dos.yGrid[0][ie] * fi * detR;
+				double& fi = f0[ie];
+				fi = fermi((Ei - dmu)/T);
+				nElectrons += dos.dx * dos.yGrid[0][ie] * fi * detR;
 			}
 			((nElectrons>Z) ? dmuMax : dmuMin) = dmu;
 			dmu = 0.5*(dmuMin + dmuMax);
@@ -69,6 +72,26 @@ struct ePhRelax
 		for(size_t ie=0; ie<dos.xGrid.size(); ie++)
 			dos0 += dos.dx * dos.yGrid[0][ie] * fermiPrime((dos.xGrid[ie] - dmu)/T) * (-1./T);
 		logPrintf("Density of states at Fermi level = %le /eV-cell\n", dos0*(eV*detR));
+		
+		//Perturb by photon-induced carrier density:
+		//--- read carrier distributions from plasmonDecay:
+		Histogram2D distribDirect("carrierDistribAll-direct.dat", 1./eV, 1./eV, 1.);
+		Histogram2D distribPhonon("carrierDistribAll-phonon.dat", 1./eV, 1./eV, 1.);
+		if(Eplasmon < distribDirect.omegaMin || Eplasmon > distribDirect.omegaMin + (distribDirect.nomega-1)*distribDirect.domega)
+			die("Plasmon energy is out of the range available in carrierDistribAll-direct.dat")
+		if(Eplasmon < distribPhonon.omegaMin || Eplasmon > distribPhonon.omegaMin + (distribPhonon.nomega-1)*distribPhonon.domega)
+			die("Plasmon energy is out of the range available in carrierDistribAll-phonon.dat")
+		//--- interpolate to required photon energy and carrier eenergy grid:
+		fPert.resize(dos.xGrid.size());
+		double Upert = 0.;
+		for(size_t ie=0; ie<dos.xGrid.size(); ie++)
+		{	const double& Ei = dos.xGrid[ie];
+			double dni = distribDirect.interp1(Ei, Eplasmon) + distribPhonon.interp1(Ei, Eplasmon); //induced carrier number change at given energy
+			fPert[ie] = dni / std::max(dos.yGrid[0][ie], 1e-3*dos0); //divide by DOS to get the effective filling change (regularize to avoid Infs)
+			Upert += dni * Ei * dos.dx; //calculate energy of perturbation
+		}
+		fPert *= Uabs / Upert; //normalize to match absorbed laser energy per unit volume
+		fPert += f0; //add initial Fermi distribution
 	}
 	
 	//Calculate lattice specific heat

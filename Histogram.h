@@ -29,6 +29,9 @@ struct Histogram2D
 	void addEvent(double E, double omega, double weight);
 	void allReduce(MPIUtil::ReduceOp op, bool safeMode=false); //collect over MPI
 	void print(string fname, double Escale, double omegaScale, double histScale) const;
+	
+	Histogram2D(string fname, double Escale, double omegaScale, double histScale); //read back histogram written using print
+	double interp1(double E, double omega) const; //return interpolated value
 };
 
 #endif //WANNIERMETROPOLIS_HISTOGRAM_H
