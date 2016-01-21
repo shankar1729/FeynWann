@@ -14,7 +14,7 @@ struct ePhRelax
 	Interp1 dos, dosPh;
 	diagMatrix f0, fPert; //Initial Fermi and photon-perturbed distributions
 	double T, dos0; //initial temperature and density of states at the Fermi level
-	double scaledDe; //De scaled by g(eF)**-3
+	double De, scaledDe; //De, and De scaled by g(eF)**-3
 	diagMatrix hInt; //energy resolved electron-phonon coupling
 	
 	//Energy grid:
@@ -35,7 +35,7 @@ struct ePhRelax
 		T = inputMap.get("T") * Kelvin; //initial temperature in Kelvin (electron and lattice)
 		const double Uabs = inputMap.get("Uabs") * Joule/std::pow(meter,3); //absorbed laser energy per unit volume in Joule/meter^3
 		const double Eplasmon = inputMap.get("Eplasmon") * eV; //incident photon energy in eV
-		const double De = inputMap.get("De") / eV; //quadratic e-e lifetime coefficient in eV^-1
+		De = inputMap.get("De") / eV; //quadratic e-e lifetime coefficient in eV^-1
 		const matrix3<> R = matrix3<>(0,1,1, 1,0,1, 1,1,0) * (0.5*inputMap.get("aCubic")*Angstrom);
 		double detR = fabs(det(R));
 		
@@ -163,6 +163,34 @@ struct ePhRelax
 		return results;
 	}
 	
+	//Evaluate e-e linewidth correction:
+	diagMatrix eeLinewidth(const diagMatrix& f) const
+	{	diagMatrix results(nE);
+		//Extend range by neActive on both sides for collision phase space evaluation
+		int neActive = ieMax - ieMin;
+		int ieMinLW = std::max(0, ieMin-neActive);
+		int ieMaxLW = std::min(nE, ieMax+neActive);
+		//e-e collisions:
+		for(int i=ieStart; i<ieStop; i++)
+		{	double rateSum = 0.;
+			for(int i1=ieMinLW; i1<ieMaxLW; i1++)
+			{	//i2 range set by both i2 and i3 in [ieMinLW,ieMaxLW)
+				int i2min = std::max(i+i1+1-ieMaxLW, ieMinLW);
+				int i2max = std::min(i+i1+1-ieMinLW, ieMaxLW);
+				for(int i2=i2min; i2<i2max; i2++)
+				{	int i3 = i+i1-i2; //energy conservation
+					rateSum += (1.-f[i1])*f[i2]*f[i3] + f[i1]*(1.-f[i2])*(1.-f[i3]);
+				}
+			}
+			results[i] = De * (dE*dE) * rateSum;
+		}
+		results.allReduce(MPIUtil::ReduceSum, true);
+		//Set constant linewidths below and above range:
+		for(int i=0; i<ieMin; i++) results[i] = results[ieMin];
+		for(int i=ieMax; i<nE; i++) results[i] = results[ieMax-1];
+		return results;
+	}
+	
 	//Calculate lattice specific heat
 	inline double Cl(double Tl) const
 	{	assert(dosPh.xMin==0.);
@@ -245,17 +273,19 @@ int main(int argc, char** argv)
 	gsl_odeiv2_driver_free(odeDriver);
 	watchSolve.stop();
 	
+	//Calculate carrier linewidths and effective temperature:
+	logPrintf("\nCalculating linewidths ... "); logFlush();
+	StopWatch watchLinewidths("Linewidths"); watchLinewidths.start();
+	std::vector<diagMatrix> lwDelta;
+	diagMatrix lw0 = e.eeLinewidth(e.f0);
+	for(diagMatrix& f: fArr)
+		lwDelta.push_back(e.eeLinewidth(f) - lw0);
+	watchLinewidths.stop();
+	logPrintf("done.\n");
+
 	//File outputs:
 	if(mpiUtil->isHead())
 	{	std::ofstream ofs;
-		
-		//Pulse shape and effective T:
-// 		ofs.open((e.runName+".pulseShape").c_str());
-// 		ofs.precision(10);
-// 		ofs << "#t[fs] pulseShape[fs^-1] Teff[K]\n";
-// 		for(size_t it=0; it<Teff.size(); it++)
-// 			ofs << (it*dt)/fs << '\t' << pulseShape[it]*fs << '\t' << Teff[it]/Kelvin << '\n';
-// 		ofs.close();
 		
 		//Lattice temperature:
 		ofs.open("temp.Tl");
@@ -284,21 +314,21 @@ int main(int argc, char** argv)
 		ofs.close();
 		
 		//Linewidth corrections [eV]
-// 		ofs.open((e.runName+".lwDelta").c_str());
-// 		ofs.precision(10);
-// 		//--- Header
-// 		ofs << "#E[ev]\\t[fs]";
-// 		for(size_t it=0; it<Teff.size(); it++)
-// 			ofs << '\t' << (it*dt)/fs;
-// 		ofs << '\n';
-// 		//--- Data
-// 		for(int ie=0; ie<e.nE; ie++)
-// 		{	ofs << e.Egrid(ie)/eV;
-// 			for(size_t it=0; it<Teff.size(); it++)
-// 				ofs << '\t' << lwDelta[it][ie]/eV;
-// 			ofs << '\n';
-// 		}
-// 		ofs.close();
+		ofs.open("temp.lwDelta");
+		ofs.precision(10);
+		//--- Header
+		ofs << "#E[ev]\\t[fs]";
+		for(size_t it=0; it<fArr.size(); it++)
+			ofs << '\t' << (it*dt)/fs;
+		ofs << '\n';
+		//--- Data
+		for(int ie=0; ie<e.nE; ie++)
+		{	ofs << e.Egrid(ie)/eV;
+			for(size_t it=0; it<fArr.size(); it++)
+				ofs << '\t' << lwDelta[it][ie]/eV;
+			ofs << '\n';
+		}
+		ofs.close();
 	}
 	
 	finalizeSystem();
