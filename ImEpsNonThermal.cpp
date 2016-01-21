@@ -71,8 +71,8 @@ int main(int argc, char** argv)
 	logPrintf("\n");
 	
 	Interp1 fInterp, lwInterp;
-	fInterp.init("eeRelax-" + runName + ".f", eV, 1.);
-	lwInterp.init("eeRelax-" + runName + ".lwDelta", eV, eV);
+	fInterp.init(runName + ".f", eV, 1.);
+	lwInterp.init(runName + ".lwDelta", eV, eV);
 	int numTimes = fInterp.headerVals.size();
 	
 	//Initialize Wannier bandstructure:
