@@ -168,6 +168,13 @@ int main(int argc, char** argv)
 			double h = (2*gF/(g*g))*hIntBar.out[i];
 			ofs << E/eV << '\t' << h/std::pow(1e-3*eV,2) << '\n';
 		}
+		ofs.close();
+		ofs.open("hInt.dat");
+		for(size_t i=0; i<dos.out.size(); i++)
+		{	double E = dos.Emin + i*dos.dE;
+			double hInt = hIntBar.out[i]; //dimensions of h * g = energy/volume
+			ofs << E/eV << '\t' << hInt/(eV/pow(Angstrom,3)) << '\n';
+		}
 	}
 	
 	finalizeSystem();

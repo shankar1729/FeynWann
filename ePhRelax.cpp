@@ -13,7 +13,9 @@ struct ePhRelax
 {
 	Interp1 dos, dosPh;
 	diagMatrix f0, fPert; //Initial Fermi and photon-perturbed distributions
+	double T, dos0; //initial temperature and density of states at the Fermi level
 	double scaledDe; //De scaled by g(eF)**-3
+	diagMatrix hInt; //energy resolved electron-phonon coupling
 	
 	//Energy grid:
 	int nE; double Emin, dE;
@@ -30,7 +32,7 @@ struct ePhRelax
 		//Get the system parameters (mu, T, lattice vectors etc.)
 		InputMap inputMap(inputFilename);	
 		const double Z = inputMap.get("Z"); //number of electrons per unit cell
-		const double T = inputMap.get("T") * Kelvin; //initial temperature in Kelvin (electron and lattice)
+		T = inputMap.get("T") * Kelvin; //initial temperature in Kelvin (electron and lattice)
 		const double Uabs = inputMap.get("Uabs") * Joule/std::pow(meter,3); //absorbed laser energy per unit volume in Joule/meter^3
 		const double Eplasmon = inputMap.get("Eplasmon") * eV; //incident photon energy in eV
 		const double De = inputMap.get("De") / eV; //quadratic e-e lifetime coefficient in eV^-1
@@ -69,9 +71,8 @@ struct ePhRelax
 		{	//calculate number of electrons at current Z:
 			double nElectrons = 0.;
 			for(int ie=0; ie<nE; ie++)
-			{	const double& Ei = dos.xGrid[ie];
-				double& fi = f0[ie];
-				fi = fermi((Ei - dmu)/T);
+			{	double& fi = f0[ie];
+				fi = fermi((Egrid(ie) - dmu)/T);
 				nElectrons += dE * dos.yGrid[0][ie] * fi * detR;
 			}
 			((nElectrons>Z) ? dmuMax : dmuMin) = dmu;
@@ -79,9 +80,9 @@ struct ePhRelax
 		}
 		logPrintf("Initial Fermi distribution: dmu = %le eV\n", dmu/eV);
 		//--- calculate density of states at the Fermi level:
-		double dos0 = 0.;
+		dos0 = 0.;
 		for(int ie=0; ie<nE; ie++)
-			dos0 += dE * dos.yGrid[0][ie] * fermiPrime((dos.xGrid[ie] - dmu)/T) * (-1./T);
+			dos0 += dE * dos.yGrid[0][ie] * fermiPrime((Egrid(ie) - dmu)/T) * (-1./T);
 		logPrintf("Density of states at Fermi level = %le /eV-cell\n", dos0*(eV*detR));
 		scaledDe = De / std::pow(dos0,3);
 		
@@ -97,13 +98,20 @@ struct ePhRelax
 		fPert.resize(nE);
 		double Upert = 0.;
 		for(int ie=0; ie<nE; ie++)
-		{	const double& Ei = dos.xGrid[ie];
+		{	const double& Ei = Egrid(ie);
 			double dni = distribDirect.interp1(Ei, Eplasmon) + distribPhonon.interp1(Ei, Eplasmon); //induced carrier number change at given energy
 			fPert[ie] = dni / std::max(dos.yGrid[0][ie], 1e-3*dos0); //divide by DOS to get the effective filling change (regularize to avoid Infs)
 			Upert += dni * Ei * dE; //calculate energy of perturbation
 		}
 		fPert *= Uabs / Upert; //normalize to match absorbed laser energy per unit volume
 		fPert += f0; //add initial Fermi distribution
+		
+		//Electron-phonon coupling:
+		Interp1 hIntInterp; hIntInterp.init("hInt.dat", eV, eV/pow(Angstrom,3));
+		//--- interpolate to all the interval midpoints of energy grid:
+		hInt.resize(nE-1);
+		for(int ie=0; ie<nE-1; ie++)
+			hInt[ie] = hIntInterp(Egrid(ie)+0.5*dE);
 		
 		//Determine active energy grid:
 		ieMin = std::max(0, int(floor((-Eplasmon-10*T-dos.xMin)/dE)));
@@ -115,10 +123,13 @@ struct ePhRelax
 		logPrintf("Active energy grid: [%d,%d) of total %d points, with [%d,%d) on current process.\n", ieMin, ieMax, nE, ieStart, ieStop);
 	}
 	
-	//Evaluate e-e collision integral (nonlinear):
+	//Evaluate e-e and e-Ph collision integrals (nonlinear):
 	diagMatrix fdot(const diagMatrix& f) const
-	{	diagMatrix results(nE);
+	{	diagMatrix results(nE+1); //last entry is TlDot
+		double& TlDot = results.back();
+		const double Tl = f.back();
 		const double* g = dos.yGrid[0].data(); //DOS data pointer
+		//e-e collisions:
 		for(int i=ieStart; i<ieStop; i++)
 		{	double rateSum = 0.;
 			for(int i1=ieMin; i1<ieMax; i1++)
@@ -137,6 +148,19 @@ struct ePhRelax
 			results[i] = (2*scaledDe) * (dE*dE) * rateSum;
 		}
 		results.allReduce(MPIUtil::ReduceSum, true);
+		//e-ph collisions:
+		double ElDot = 0.; //rate of energy transfer to lattice
+		for(int i=0; i<nE-1; i++)
+		{	if(std::max(g[i-1],g[i]) < 1e-3*dos0) continue; //ignore intervals with no electrons to avoid division by zero below
+			double fPrime = (f[i+1]-f[i])/dE;
+			double fMean = 0.5*(f[i+1]+f[i]);
+			double ElDot_i = (2*M_PI*dE) * hInt[i] * (fMean*(1.-fMean) + fPrime*Tl); //rate of energy transfer to lattice from this interval
+			double nDot = -ElDot_i / dE; //number of electrons that move up in energy due to energy transfer to lattice
+			results[i] += nDot / g[i];
+			results[i-1] -= nDot / g[i-1];
+			ElDot += ElDot_i;
+		}
+		TlDot = ElDot / Cl(Tl);
 		return results;
 	}
 	
@@ -162,8 +186,9 @@ struct ePhRelax
 //Wrapper function for GSL integrator:
 int fdot_wrapper(double t, const double* f, double* fdot, void* params)
 {	const ePhRelax& e = *((ePhRelax*)params);
-	diagMatrix fMat; fMat.assign(f, f+e.nE); //copy input to diagMatrix
+	diagMatrix fMat; fMat.assign(f, f+e.nE+1); //copy input to diagMatrix
 	diagMatrix fdotMat = e.fdot(fMat); //calculate result in diagMatrix form
+	fdotMat.bcast(); //make sure results are consistent across processes to numerical precision
 	std::copy(fdotMat.begin(), fdotMat.end(), fdot); //copy output to pointer
 	return GSL_SUCCESS;
 }
@@ -178,7 +203,7 @@ int main(int argc, char** argv)
 	double tMax = 1000.*fs, dt = 50.*fs;
 	int itInterval = std::max(1, int(round((tMax/dt)/50.))); //interval for reporting progress
 	double t = 0.;
-	diagMatrix f = e.fPert;
+	diagMatrix f = e.fPert; f.push_back(e.T);
 	std::vector<diagMatrix> fArr;
 	fArr.push_back(f);
 	logPrintf("\nSolving boltzmann eqn: "); logFlush();
@@ -208,6 +233,14 @@ int main(int argc, char** argv)
 // 		for(size_t it=0; it<Teff.size(); it++)
 // 			ofs << (it*dt)/fs << '\t' << pulseShape[it]*fs << '\t' << Teff[it]/Kelvin << '\n';
 // 		ofs.close();
+		
+		//Lattice temperature:
+		ofs.open("temp.Tl");
+		ofs.precision(10);
+		ofs << "#t[fs] Tl[K]\n";
+		for(size_t it=0; it<fArr.size(); it++)
+			ofs << (it*dt)/fs << '\t' << fArr[it].back()/Kelvin << '\n';
+		ofs.close();
 		
 		//Distributions [dimensionless]
 		//ofs.open((e.runName+".f").c_str());
