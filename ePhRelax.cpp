@@ -151,14 +151,13 @@ struct ePhRelax
 		//e-ph collisions:
 		double ElDot = 0.; //rate of energy transfer to lattice
 		for(int i=0; i<nE-1; i++)
-		{	if(std::max(g[i-1],g[i]) < 1e-3*dos0) continue; //ignore intervals with no electrons to avoid division by zero below
+		{	if(std::min(g[i],g[i+1]) < 1e-3*dos0) continue; //ignore intervals with no electrons to avoid division by zero below
 			double fPrime = (f[i+1]-f[i])/dE;
 			double fMean = 0.5*(f[i+1]+f[i]);
 			double ElDot_i = (2*M_PI*dE) * hInt[i] * (fMean*(1.-fMean) + fPrime*Tl); //rate of energy transfer to lattice from this interval
-			double nDot = -ElDot_i / dE; //number of electrons that move up in energy due to energy transfer to lattice
-			results[i] += nDot / g[i];
-			results[i-1] -= nDot / g[i-1];
 			ElDot += ElDot_i;
+			results[i] += ElDot_i / (dE*dE*g[i]);
+			results[i+1] -= ElDot_i / (dE*dE*g[i+1]);
 		}
 		TlDot = ElDot / Cl(Tl);
 		return results;
@@ -176,6 +175,28 @@ struct ePhRelax
 			double g_Tl = g*(g+1)*x/Tl; //dg/dTl
 			result += domegaPh * omegaPh * g_Tl  * dosPh.yGrid[0][ie];
 		}
+		return result;
+	}
+	
+	//Calculate lattice energy density:
+	inline double El(double Tl) const
+	{	assert(dosPh.xMin==0.);
+		const double& domegaPh = dosPh.dx;
+		double result = 0.;
+		for(size_t ie=1; ie<dosPh.xGrid.size(); ie++) //omit zero energy phonons to avoid 0/0 error
+		{	double omegaPh = ie*domegaPh;
+			double x = omegaPh/Tl;
+			double g = 1./(exp(x)-1.);
+			result += domegaPh * omegaPh * g  * dosPh.yGrid[0][ie];
+		}
+		return result;
+	}
+	
+	//Calculate electronic energy density:
+	inline double Ee(const diagMatrix& f) const
+	{	double result = 0.;
+		for(int ie=0; ie<nE; ie++)
+			result += dE * Egrid(ie) * f[ie]  * dos.yGrid[0][ie];
 		return result;
 	}
 	
@@ -198,25 +219,27 @@ int main(int argc, char** argv)
 	
 	//Solve time dependence:
 	StopWatch watchSolve("Solve"); watchSolve.start();
-	gsl_odeiv2_system odeSystem = {fdot_wrapper, NULL, size_t(e.nE), &e };
+	gsl_odeiv2_system odeSystem = {fdot_wrapper, NULL, size_t(e.nE+1), &e };
 	gsl_odeiv2_driver* odeDriver = gsl_odeiv2_driver_alloc_y_new(&odeSystem, gsl_odeiv2_step_msadams, 1e-6, 1e-6, 0.0);
-	double tMax = 1000.*fs, dt = 50.*fs;
-	int itInterval = std::max(1, int(round((tMax/dt)/50.))); //interval for reporting progress
+	double tMax = 10000.*fs, dt = 50.*fs;
+	double Ee0 = e.Ee(e.f0), El0 = e.El(e.T);
 	double t = 0.;
 	diagMatrix f = e.fPert; f.push_back(e.T);
 	std::vector<diagMatrix> fArr;
 	fArr.push_back(f);
-	logPrintf("\nSolving boltzmann eqn: "); logFlush();
+	logPrintf("\nSolving boltzmann eqn:\n");
+	logPrintf("%19s  %19s  %19s  %7s  %s\n", "Ee[J/m^3]", "El[J/m^3]", "(El+Ee)[J/m^3]", "Tl[K]", "Progress");
+	logFlush();
 	while(t < tMax)
 	{	int status = gsl_odeiv2_driver_apply(odeDriver, &t, t+dt, f.data());
 		if(status != GSL_SUCCESS) die("Error %d in ODE propagation", status)
 		fArr.push_back(f);
 		
 		//Print progress:
-		if((fArr.size()+1) % itInterval == 0)
-		{	logPrintf("%d%% ", int(round(100.*t/tMax)));
-			logFlush();
-		}
+		const double Eunits = Joule/pow(meter,3);
+		double dEe = e.Ee(f)-Ee0, dEl = e.El(f.back())-El0;
+		logPrintf("%19.13le  %19.13le  %19.13le  %7.2lf  %.1f%%\n", dEe/Eunits, dEl/Eunits, (dEe+dEl)/Eunits, f.back()/Kelvin, 100.*t/tMax);
+		logFlush();
 	}
 	logPrintf("done.\n"); logFlush();
 	gsl_odeiv2_driver_free(odeDriver);
