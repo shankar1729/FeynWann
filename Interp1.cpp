@@ -11,14 +11,14 @@ void Interp1::init(string fname, double xScale, double yScale)
 	{	istringstream iss(line);
 		string comment; iss >> comment; //ignore
 		while(!iss.eof())
-		{	double headerVal; iss >> headerVal;
+		{	string headerVal; iss >> headerVal;
 			if(iss.fail()) break;
 			headerVals.push_back(headerVal);
 		}
 		line.clear(); //use up line
 	}
 	else //No header (sigle column mode)
-		headerVals.push_back(NAN); //don't use up line already read in
+		headerVals.push_back(string()); //don't use up line already read in
 	logPrintf("%lu columns, ", headerVals.size()); logFlush();
 	//Read data:
 	yGrid.resize(headerVals.size());

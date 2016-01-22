@@ -21,11 +21,11 @@ inline double lorentzianOdd(double omega, double omega0, double breadth)
 }
 
 
-inline void writeImEps(const char* fname, const std::vector<Histogram>& ImEps, const std::vector<double>& headerVals)
+inline void writeImEps(const char* fname, const std::vector<Histogram>& ImEps, const std::vector<string>& headerVals)
 {	std::ofstream ofs(fname);
 	//Header:
 	ofs << "#omega[eV]";
-	for(const double& headerVal: headerVals)
+	for(const string& headerVal: headerVals)
 		ofs << ' ' << headerVal;
 	ofs << '\n';
 	//Data:

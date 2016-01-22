@@ -6,7 +6,7 @@
 
 struct Interp1
 {
-	std::vector<double> headerVals; //header values for each columns (read from file, if available, but not used by this class)
+	std::vector<string> headerVals; //header values for each columns (read from file, if available, but not used by this class)
 	std::vector<double> xGrid; //common x values (uniform grid)
 	std::vector<std::vector<double> > yGrid; //y values per column
 	double xMin, dx, dxInv; //for speeding up interpolation
