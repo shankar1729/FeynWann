@@ -164,31 +164,12 @@ struct ePhRelax
 	}
 	
 	//Evaluate e-e linewidth correction:
-	diagMatrix eeLinewidth(const diagMatrix& f) const
-	{	diagMatrix results(nE);
-		//Extend range by neActive on both sides for collision phase space evaluation
-		int neActive = ieMax - ieMin;
-		int ieMinLW = std::max(0, ieMin-neActive);
-		int ieMaxLW = std::min(nE, ieMax+neActive);
-		//e-e collisions:
-		for(int i=ieStart; i<ieStop; i++)
-		{	double rateSum = 0.;
-			for(int i1=ieMinLW; i1<ieMaxLW; i1++)
-			{	//i2 range set by both i2 and i3 in [ieMinLW,ieMaxLW)
-				int i2min = std::max(i+i1+1-ieMaxLW, ieMinLW);
-				int i2max = std::min(i+i1+1-ieMinLW, ieMaxLW);
-				for(int i2=i2min; i2<i2max; i2++)
-				{	int i3 = i+i1-i2; //energy conservation
-					rateSum += (1.-f[i1])*f[i2]*f[i3] + f[i1]*(1.-f[i2])*(1.-f[i3]);
-				}
-			}
-			results[i] = De * (dE*dE) * rateSum;
-		}
-		results.allReduce(MPIUtil::ReduceSum, true);
-		//Set constant linewidths below and above range:
-		for(int i=0; i<ieMin; i++) results[i] = results[ieMin];
-		for(int i=ieMax; i<nE; i++) results[i] = results[ieMax-1];
-		return results;
+	diagMatrix linewidthCorrection(const diagMatrix& f) const
+	{	//Linewidth correction within jellium model depends only on energy in electronic system:
+		double result = 0.5*De*std::pow(M_PI*T, 2);
+		for(int i=ieMin; i<ieMax; i++)
+			result += (3.*De*dE) * Egrid(i) * (f[i] - f0[i]);
+		return diagMatrix(nE, result);
 	}
 	
 	//Calculate lattice specific heat
@@ -277,9 +258,8 @@ int main(int argc, char** argv)
 	logPrintf("\nCalculating linewidths ... "); logFlush();
 	StopWatch watchLinewidths("Linewidths"); watchLinewidths.start();
 	std::vector<diagMatrix> lwDelta;
-	diagMatrix lw0 = e.eeLinewidth(e.f0);
 	for(diagMatrix& f: fArr)
-		lwDelta.push_back(e.eeLinewidth(f) - lw0);
+		lwDelta.push_back(e.linewidthCorrection(f));
 	watchLinewidths.stop();
 	logPrintf("done.\n");
 
