@@ -48,7 +48,6 @@ int main(int argc, char** argv)
 	double mu = inputMap.get("mu"); //initial guess only - will be calculated self-consistently in this executable
 	const double Z = inputMap.get("Z"); //number of electrons per unit cell
 	const double dE = inputMap.get("dE") * eV; //energy resolution used for output and energy conservation
-	const double Tl = inputMap.get("Tl") * Kelvin; //lattice temperature
 	const int spinWeight = round(inputMap.get("spinWeight"));
 	const matrix3<> R = matrix3<>(0,1,1, 1,0,1, 1,1,0) * (0.5*inputMap.get("aCubic")*Angstrom);
 	string runName = inputMap.getString("runName");
@@ -58,7 +57,6 @@ int main(int argc, char** argv)
 	logPrintf("mu = %lg\n", mu);
 	logPrintf("Z = %lg\n", Z);
 	logPrintf("dE = %lg\n", dE);
-	logPrintf("Tl = %lg\n", Tl);
 	logPrintf("spinWeight = %d\n", spinWeight);
 	logPrintf("R:\n");
 	R.print(globalLog, " %lg ");
@@ -74,6 +72,11 @@ int main(int argc, char** argv)
 	fInterp.init(runName + ".f", eV, 1.);
 	lwInterp.init(runName + ".lwDelta", eV, eV);
 	int numTimes = fInterp.headerVals.size();
+	
+	//Read lattice temperatures:
+	Interp1 TlInterp; TlInterp.init(runName + ".Tl", fs, Kelvin);
+	const std::vector<double>& Tl = TlInterp.yGrid[0];
+	assert(int(Tl.size()) == numTimes);
 	
 	//Initialize Wannier bandstructure:
 	std::vector< vector3<complex> > Ahat(1); //assume cubic symmetry and only calculate x-axis
@@ -114,7 +117,7 @@ int main(int argc, char** argv)
 	int nModes = bs.getPhononModes(vector3<>()).nRows();
 	double phononPrefac0 = 4 * std::pow(M_PI,2) * spinWeight / (nKpairs*fabs(det(R))); //frequency independent part of prefac
 	double directPrefac0 = 4 * std::pow(M_PI,2) * spinWeight / (nKpts*fabs(det(R))); //frequency independent part of prefac
-	double TlRatio = Tl / (0.026*eV); //Ratio of Tl to the Tl at which e-ph linewidths were calculated	
+	double Tl0lw = 0.026*eV; //Tl at which e-ph linewidths were calculated
 
 	//Singularity extrapolation parameters
 	double extrapCoeff[] = {-19./12, 13./3, -7./4 }; //account for constant, 1/eta and eta^2 dependence
@@ -156,18 +159,24 @@ int main(int argc, char** argv)
 		
 		//Calculate electronic states and matrix elements for bunch:
 		std::vector<diagMatrix> Earr = bs.getStates(kArr);
-		std::vector<diagMatrix> ImEarr0 = lineWidth(kArr, 1., TlRatio); //account for linear Tl dependence of e-ph linewidths
+		std::vector<diagMatrix> ImEarr_ee = lineWidth(kArr, 1., 0.);
+		std::vector<diagMatrix> ImEarr_ePh = lineWidth(kArr, 0., 1.);
+		//account for linear Tl dependence of e-ph linewidths
 		std::vector< std::vector<matrix> > Parr = bs.getDipoleMatElem(kArr);
 		std::vector< std::vector<diagMatrix> > Farr(bunchSize), ImEarr(bunchSize); //fillings and linewidths by k-point, temperature and band
 		for(int ik=0; ik<bunchSize; ik++)
 		{	Farr[ik].assign(numTimes, diagMatrix(nBands));
 			ImEarr[ik].assign(numTimes, diagMatrix(nBands));
 			for(int iT=0; iT<numTimes; iT++)
+			{	double TlRatio = Tl[iT] / Tl0lw;
 				for(int b=0; b<nBands; b++)
 				{	double E = Earr[ik][b];
 					Farr[ik][iT][b] = fInterp(iT,E); //interpolate electron occupations (not necessarily a Fermi distribution)
-					ImEarr[ik][iT][b] = ImEarr0[ik][b] + lwInterp(iT,E); //add linewidth correction (nterpolated as a function of carrier energy)
+					ImEarr[ik][iT][b] = ImEarr_ee[ik][b] //e-e contribution at low temperature
+						+ ImEarr_ePh[ik][b] * TlRatio //e-ph contribution with linear Tl dependence
+						+ lwInterp(iT,E); //add linewidth correction (interpolated as a function of carrier energy)
 				}
+			}
 		}
 
 		diagMatrix omegaPhArr[bunchSize];
@@ -205,7 +214,6 @@ int main(int argc, char** argv)
 				for(int alpha=0; alpha<nModes; alpha++)
 				{	const matrix& gePh = gePhArr[ik2][alpha];
 					double omegaPh = omegaPhArr[ik2][alpha];
-					double nPh = 1./(exp(omegaPh/Tl) - 1.);
 					for(int v=0; v<nBands; v++)
 					for(int c=0; c<nBands; c++)
 					{	
@@ -229,10 +237,11 @@ int main(int argc, char** argv)
 							double MeffSqExtrap = 0.;
 							for(int z=0; z<nExtrap; z++)
 								MeffSqExtrap += extrapCoeff[z] * Meff[z].norm();
-							double weight = (phononPrefac0/(omega*omega)) * (nPh + 0.5*(1.-ae)) * MeffSqExtrap;
 							//Include T dependent electron occupations:
 							for(int iT=0; iT<numTimes; iT++)
-							{	ImEpsPhonon[iT].addEvent(omega, weight * (F1[iT][v] - F2[iT][c]));
+							{	double nPh = 1./(exp(omegaPh/Tl[iT]) - 1.);
+								double weight = (phononPrefac0/(omega*omega)) * (nPh + 0.5*(1.-ae)) * MeffSqExtrap;
+								ImEpsPhonon[iT].addEvent(omega, weight * (F1[iT][v] - F2[iT][c]));
 								breadthPhonon[iT].addEvent(omega, fabs(weight * (F1[iT][v] - F2[iT][c]))*(ImE2[iT][c]+ImE1[iT][v]));
 								weightPhonon[iT].addEvent(omega, fabs(weight * (F1[iT][v] - F2[iT][c]))); //different from ImEpsPhonon, since weight can be negative due to singularity extrapolation
 							}
