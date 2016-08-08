@@ -14,21 +14,26 @@ int main(int argc, char** argv)
 
 	//Get the system parameters (mu, T, lattice vectors etc.)
 	InputMap inputMap(inputFilename);
-	const int nKptsN1 = inputMap.get("nKptsN1");
+	const int nKpts = inputMap.get("nKpts");
 	const int totalBlocks = inputMap.get("totalBlocks"); assert(totalBlocks>0);
-	const double mu = inputMap.get("mu");
-	const double T = inputMap.get("T") * eV;
-	const int spinWeight = round(inputMap.get("spinWeight"));
-	const matrix3<> R = matrix3<>(0,1,1, 1,0,1, 1,1,0) * (0.5*inputMap.get("aCubic")*Angstrom);
+	const double T = inputMap.get("T") * Kelvin;
 
 	logPrintf("\nInputs after conversion to atomic units:\n");
-	logPrintf("nKptsN1 = %d\n", nKptsN1);
+	logPrintf("nKpts = %d\n", nKpts);
 	logPrintf("totalBlocks = %d\n", totalBlocks);
-	logPrintf("mu = %lg\n", mu);
 	logPrintf("T = %lg\n", T);
-	logPrintf("spinWeight = %d\n", spinWeight);
+	logPrintf("\n");
+	
+	//Initialize Wannier bandstructure:
+	const int bunchSize = 32;
+	BandStruct bs("Wannier/totalE", "Wannier/wannier", true);
+	bs.setCacheSize(2*bunchSize);
+	
+	logPrintf("\nParameters extracted from DFT calculation:\n");
+	logPrintf("mu = %lg\n", bs.mu);
+	logPrintf("spinWeight = %d\n", bs.spinWeight);
 	logPrintf("R:\n");
-	R.print(globalLog, " %lg ");
+	bs.R.print(globalLog, " %lg ");
 	if(dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
 		finalizeSystem();
@@ -36,19 +41,14 @@ int main(int argc, char** argv)
 	}
 	logPrintf("\n");
 
-	//Initialize Wannier bandstructure:
-	const int bunchSize = 32;
-	BandStruct bs("Wannier/wannier", mu, spinWeight, "Wannier/totalE");
-	bs.setCacheSize(2*bunchSize);
-	
 	// Compute T and Gamma
 	double Tsum = 0., TsumSq = 0., GammaSum = 0., GammaSumSq = 0.;
 	double gSum = 0., gSumSq = 0., tauInvSum = 0., tauInvSumSq = 0.;
 	logPrintf("Calculating T and Gamma... "); logFlush();
 	int blockStart = (totalBlocks * (mpiUtil->iProcess())) / mpiUtil->nProcesses(); //MPI division
 	int blockStop = (totalBlocks * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
-	int nKptsMin = nKptsN1/totalBlocks;
-	double Omega = fabs(det(R));
+	int nKptsMin = nKpts/totalBlocks;
+	double Omega = fabs(det(bs.R));
 	const double Emax = 10*T; //max energy from Fermi level to consider
 	double EconserveExpFac = -0.5/(T*T), EconservePrefac = 1./(sqrt(2*M_PI)*T); //energy conserving Gaussian parameters
 	for(int block=blockStart; block<blockStop; block++)
@@ -91,7 +91,7 @@ int main(int argc, char** argv)
 			std::vector<diagMatrix> Earr = bs.getStates(kArr, Emax);
 			std::vector< vector3<> > vArr[bunchSize];
 			for(int ik=0; ik<bunchSize; ik++)
-				vArr[ik] = bs.getVelocity(kArr[ik], R, Emax);
+				vArr[ik] = bs.getVelocity(kArr[ik], Emax);
 			
 			diagMatrix omegaPh[bunchSize];
 			std::vector<matrix> gePh[bunchSize];
@@ -125,8 +125,8 @@ int main(int argc, char** argv)
 				}
 			}
 		}
-		double prefacT = spinWeight/(3.*nKpts);
-		double prefacGamma = spinWeight*(2*M_PI)/(3*nKpts*nKpts*1./nBunches);
+		double prefacT = bs.spinWeight/(3.*nKpts);
+		double prefacGamma = bs.spinWeight*(2*M_PI)/(3*nKpts*nKpts*1./nBunches);
 		Tblock *= prefacT; Tsum += Tblock; TsumSq += std::pow(Tblock,2);
 		gBlock *= prefacT; gSum += gBlock; gSumSq += std::pow(gBlock,2);
 		GammaBlock *= prefacGamma; GammaSum += GammaBlock; GammaSumSq += std::pow(GammaBlock,2);

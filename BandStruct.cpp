@@ -16,10 +16,41 @@ void readMatrix(matrix& m, string fname, int spinWeight)
 	logPrintf("done.\n"); logFlush();
 }
 
-BandStruct::BandStruct(string prefix, double mu, int spinWeight, string phononPrefix, std::vector< vector3<complex> > Ahat)
-: spinWeight(spinWeight), nPol(Ahat.size()), cacheSize(6)
-{	//Read cell map
-	ifstream ifs(prefix + ".mlwfCellMap");
+BandStruct::BandStruct(string totalEprefix, string wannierPrefix, bool needPhonons, std::vector< vector3<complex> > Ahat)
+: spinWeight(0), mu(NAN), nPol(Ahat.size()), cacheSize(6)
+{	
+	//Read relevant parameters from totalE.out:
+	logPrintf("Reading '%s.out' ... ", totalEprefix.c_str()); logFlush();
+	ifstream ifs(totalEprefix + ".out");
+	while(!ifs.eof())
+	{	string line; getline(ifs, line);
+		if(line.find("Initializing the grid") != string::npos)
+		{	getline(ifs, line); //skip the line containing "R = "
+			for(int j=0; j<3; j++)
+			{	getline(ifs, line);
+				sscanf(line.c_str(), "[ %lf %lf %lf ]", &R(j,0), &R(j,1), &R(j,2));
+			}
+		}
+		else if(line.find("spintype") != string::npos)
+		{	istringstream iss(line); string buf, spinString;
+			iss >> buf >> spinString;
+			if(spinString == "no-spin")
+				spinWeight = 2;
+			else if(spinString == "spin-orbit")
+				spinWeight = 1;
+			else
+				die("Spin-polarized modes not yet supported.\n");
+		}
+		else if(line.find("FillingsUpdate:") != string::npos)
+		{	istringstream iss(line); string buf;
+			iss >> buf >> buf >> mu;
+		}
+	}
+	ifs.close();
+	logPrintf("done.\n"); logFlush();
+	
+	//Read cell map
+	ifs.open(wannierPrefix + ".mlwfCellMap");
 	string headerLine; getline(ifs, headerLine); //read and ignore header line
 	vector3<int> cm;
 	double x,y,z;
@@ -28,7 +59,7 @@ BandStruct::BandStruct(string prefix, double mu, int spinWeight, string phononPr
 	ifs.close();
 
 	//Read wannier hamiltonian
-	string fnameH = prefix + ".mlwfH";
+	string fnameH = wannierPrefix + ".mlwfH";
 	nBands = sqrt(fileSize(fnameH.c_str()) / ((spinWeight==1 ? sizeof(complex) : sizeof(double)) * cellMap.size()));
 	hWannier.init(nBands*nBands, cellMap.size());
 	readMatrix(hWannier, fnameH, spinWeight);
@@ -43,7 +74,7 @@ BandStruct::BandStruct(string prefix, double mu, int spinWeight, string phononPr
 	//Initialize main window (if available):
 	nMain = 0; mainFirst = 0; omegaMain = 0.;
 	{	//read Wannier band contrib file
-		string fname = prefix + ".mlwfBandContrib";
+		string fname = wannierPrefix + ".mlwfBandContrib";
 		FILE* fp = fopen(fname.c_str(), "r");
 		if(!fp) die("Could not open %s for reading.\n", fname.c_str());
 		double eMin = INFINITY, eMax = -INFINITY;
@@ -80,22 +111,22 @@ BandStruct::BandStruct(string prefix, double mu, int spinWeight, string phononPr
 	}
 	else nMain = nBands; //so that all Wannier centers are always used
 	
-	if(phononPrefix.length())
+	if(needPhonons)
 	{	//Read phonon cell map
-		ifs.open((phononPrefix + ".phononCellMap").c_str());
+		ifs.open((totalEprefix + ".phononCellMap").c_str());
 		getline(ifs, headerLine); //read and ignore header line
 		while(ifs >> cm[0] >> cm[1] >> cm[2] >> x >> y >> z)
 			phononCellMap.push_back(cm);
 		ifs.close();
 
 		//Read phonon force matrix
-		string phFile = phononPrefix + ".phononOmegaSq";
+		string phFile = totalEprefix + ".phononOmegaSq";
 		nModes = sqrt(fileSize(phFile.c_str())/(sizeof(double)*phononCellMap.size())); //phonon omegaSq is always real
 		omegaSqPh.init(nModes*nModes, phononCellMap.size());
 		omegaSqPh.read_real(phFile.c_str());
 		
 		//Read phononCellMapSqPh
-		ifs.open((prefix + ".mlwfCellMapSqPh").c_str());
+		ifs.open((wannierPrefix + ".mlwfCellMapSqPh").c_str());
 		getline(ifs, headerLine); // read and ignore header line
 		CellPair cp;
 		while(ifs >> cp.iR1[0] >> cp.iR1[1] >> cp.iR1[2] >> cp.iR2[0] >> cp.iR2[1] >> cp.iR2[2])
@@ -118,7 +149,7 @@ BandStruct::BandStruct(string prefix, double mu, int spinWeight, string phononPr
 	if(nPol)
 	{	if(mpiUtil->isHead())
 		{	pWannier.init(nBands*nBands*3, cellMap.size());
-			readMatrix(pWannier, prefix + ".mlwfP", spinWeight);
+			readMatrix(pWannier, wannierPrefix + ".mlwfP", spinWeight);
 			compressMatElemArr(pWannier);
 			//Pre-contract photon polarizations:
 			matrix rot(3, nPol);
@@ -134,7 +165,7 @@ BandStruct::BandStruct(string prefix, double mu, int spinWeight, string phononPr
 	if(omegaSqPh)
 	{	if(mpiUtil->isHead())
 		{	wannierHePh.init(nModes*nBands*nBands * phononCellMap.size(), phononCellMap.size());
-			readMatrix(wannierHePh, prefix + ".mlwfHePh", spinWeight);
+			readMatrix(wannierHePh, wannierPrefix + ".mlwfHePh", spinWeight);
 			compressMatElemArr(wannierHePh);
 		}
 		else wannierHePh.init(nModes*nPacked * phononCellMap.size(), phononCellMap.size());
@@ -272,7 +303,7 @@ double BandStruct::get_mk1k2(vector3<> k1, vector3<> k2, double omega, double T)
 	return mk1k2;
 }
 
-std::vector< vector3<> > BandStruct::getVelocity(vector3<> k, const matrix3<>& R, double omegaMax) const
+std::vector< vector3<> > BandStruct::getVelocity(vector3<> k, double omegaMax) const
 {	static StopWatch watch("BandStruct::getVelocity"); watch.start();
 	std::shared_ptr<const CacheEntry> ce = getElectronCache(k, omegaMax);
 	int nBandsEff = ce->nBands();

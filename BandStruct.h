@@ -12,11 +12,10 @@ class BandStruct
 {	
 public:
 	BandStruct(
-		string filePrefix, //!< filename prefix for Wannier band structure and matrix element files
-		double mu, //!< Fermi level; all energies will subsequently be referenced against it
-		int spinWeight, //!< 2 => non-relativistic, 1 => relativistic
-		string phononPrefix=string(), //!< filename prefix for phonon dispersion files
-		std::vector< vector3<complex> > Ahat = std::vector< vector3<complex> >() //!< list of relevant phonon polarizations (must specify if dipole matrix elements needed)
+		string totalEprefix, //!< filename prefix for DFT outputs
+		string wannierPrefix, //!< filename prefix for wannier outputs
+		bool needPhonons, //!< whether to initialize phonon-related quantities
+		std::vector< vector3<complex> > Ahat = std::vector< vector3<complex> >() //!< list of relevant photon polarizations (must specify if dipole matrix elements needed)
 	);
 	
 	diagMatrix getStates(vector3<> k, double omegaMax=DBL_MAX, matrix* evecs=0) const; //if omegaMax is less than omegaMain (if available), use main centers alone. Optionally retrieve eigenvectors
@@ -30,7 +29,7 @@ public:
 	
 	double get_mk(vector3<> k, double omega, double T) const; //calculate the energy conservation weight at a given k-point
 	double get_mk1k2(vector3<> k1, vector3<> k2, double omega, double T) const; //calculate the energy conservation weight at a given k-point pair
-	std::vector< vector3<> > getVelocity(vector3<> k, const matrix3<>& R, double omegaMax=DBL_MAX) const; //calculate velocities (in Cartesian coordinates; converted using lattice vectors R)
+	std::vector< vector3<> > getVelocity(vector3<> k, double omegaMax=DBL_MAX) const; //calculate velocities (in Cartesian coordinates
 	
 	inline static double mk_sub(double Ec, double Ev, double omega, double T)
 	{	return std::pow((Ec - Ev - omega),2) - 2*T*T * (logFermi(Ev/T) + logFermi(-Ec/T));
@@ -41,15 +40,21 @@ public:
 	}
 	
 	void setCacheSize(int cacheSize) { this->cacheSize = std::max(6, cacheSize); } //control cache size for electron and phonon states
+	
+	//DFT / Wannier / Phonon parameters:
+	matrix3<> R; //!< lattice vectors
+	int nBands, spinWeight; //!< number of Wannier bands for the electrons and weight per spin channel
+	double mu; //!< chemical potential (if a metal)
+	int nPol; //!< number of photon polarizations in pre-contracted matrix elements
+	int nModes; //!< number of phonon modes (polarizations)
+	
 private:
 	//Electrons:
 	std::vector< vector3<int> > cellMap; //electron Wannier cell map
-	int nBands, spinWeight; //number of Wannier bands for the electrons and weight per spin channel
 	int nMain, mainFirst; double omegaMain; //number of "main" Wannier centers, index of first main center and max frequency for which main window suffices
 	matrix hWannier, pWannier; //Wannier hamiltonian and dipole matrix elements
 	matrix hWannierMain; //Wannier hamiltonian for the main centers alone
 	
-	int nPol; //number of photon polarizations in pre-contracted matrix elements
 	int nPacked; //packed size of matrix elements (nBands x nBands when no main matrix elements)
 	void compressMatElemArr(matrix& mArr) const; //replace a matrix element array by its packed version
 	void transformMatElemArr(matrix& mArr, const matrix& rot) const; //replace a packed matrix element array by its transformed version with given transformation matrix rot
@@ -58,7 +63,6 @@ private:
 	
 	//Phonons:
 	std::vector< vector3<int> > phononCellMap; //cell map for phonon force matrix
-	int nModes; //number of phonon modes (polarizations)
 	matrix omegaSqPh; //phonon force matrix
 	
 	//Electron-phonon interaction:
