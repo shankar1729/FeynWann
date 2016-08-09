@@ -8,6 +8,47 @@
 #include "InputMap.h"
 #include "Units.h"
 
+void reportResult(const std::vector<matrix3<>>& result, string resultName, double unit, string unitName, int blockStart, int blockStop)
+{	matrix3<> resultMean, resultStd;
+	for(int i=0; i<3; i++)
+	{	for(int j=0; j<3; j++)
+		{	double sum = 0., sumSq = 0.; int N = 0;
+			for(int block=blockStart; block<blockStop; block++)
+			{	N++;
+				sum += result[block](i,j);
+				sumSq += std::pow(result[block](i,j), 2);
+			}
+			mpiUtil->allReduce(N, MPIUtil::ReduceSum);
+			mpiUtil->allReduce(sum, MPIUtil::ReduceSum);
+			mpiUtil->allReduce(sumSq, MPIUtil::ReduceSum);
+			resultMean(i,j) = sum/N;
+			resultStd(i,j) = sqrt(sumSq/N - std::pow(sum/N,2));
+		}
+		char mOpen[] = "/|\\", mClose[] = "\\|/";
+		logPrintf("%20s%c", i==1 ? (resultName + " = ").c_str() : "", mOpen[i]);
+		for(int j=0; j<3; j++) logPrintf(" %12lg", resultMean(i,j)/unit);
+		logPrintf(" %c%5s%c", mClose[i], i==1 ? " +/- " : "", mOpen[i]);
+		for(int j=0; j<3; j++) logPrintf(" %12lg", resultStd(i,j)/unit);
+		logPrintf(" %c %s\n", mClose[i], i==1 ? unitName.c_str() : "");
+	}
+	logPrintf("\n");
+}
+void reportResult(const std::vector<double>& result, string resultName, double unit, string unitName, int blockStart, int blockStop)
+{	double sum = 0., sumSq = 0.; int N = 0;
+	for(int block=blockStart; block<blockStop; block++)
+	{	N++;
+		sum += result[block];
+		sumSq += std::pow(result[block], 2);
+	}
+	mpiUtil->allReduce(N, MPIUtil::ReduceSum);
+	mpiUtil->allReduce(sum, MPIUtil::ReduceSum);
+	mpiUtil->allReduce(sumSq, MPIUtil::ReduceSum);
+	double resultMean = sum/N;
+	double resultStd = sqrt(sumSq/N - std::pow(sum/N,2));
+	logPrintf("%17s = %12lg +/- %12lg %s\n", resultName.c_str(), resultMean/unit, resultStd/unit, unitName.c_str());
+}
+
+
 int main(int argc, char** argv)
 {	string inputFilename; bool dryRun, printDefaults;
 	initSystemCmdline(argc, argv, "Monte Carlo estimate of resistivity", inputFilename, dryRun, printDefaults);
@@ -42,8 +83,8 @@ int main(int argc, char** argv)
 	logPrintf("\n");
 
 	// Compute T and Gamma
-	double Tsum = 0., TsumSq = 0., GammaSum = 0., GammaSumSq = 0.;
-	double gSum = 0., gSumSq = 0., tauInvSum = 0., tauInvSumSq = 0.;
+	std::vector<matrix3<>> Tarr(totalBlocks), GammaArr(totalBlocks), rhoArr(totalBlocks); //results per block
+	std::vector<double> rhoBarArr(totalBlocks), tauArr(totalBlocks), tauDrudeArr(totalBlocks), vFarr(totalBlocks), gArr(totalBlocks);
 	logPrintf("Calculating T and Gamma... "); logFlush();
 	int blockStart = (totalBlocks * (mpiUtil->iProcess())) / mpiUtil->nProcesses(); //MPI division
 	int blockStop = (totalBlocks * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
@@ -53,8 +94,8 @@ int main(int argc, char** argv)
 	double EconserveExpFac = -0.5/(T*T), EconservePrefac = 1./(sqrt(2*M_PI)*T); //energy conserving Gaussian parameters
 	for(int block=blockStart; block<blockStop; block++)
 	{	Random::seed(block);
-		double Tblock = 0., GammaBlock=0.;
-		double gBlock = 0., tauInvBlock=0.;
+		matrix3<> Tcur, Gamma;
+		double g = 0., tauInv=0.;
 		double nKpts = 0.; int nBunches = 0;
 		while(nKpts < nKptsMin)
 		{	//Get a bunch of k-points with states near the Fermi level:
@@ -103,13 +144,13 @@ int main(int argc, char** argv)
 				
 				for(int v=0; v<Earr[ik1].nRows(); v++)
 				{	double dFdEi = -1/(T*std::pow(2*cosh(Earr[ik1][v]/(2*T)),2));
-					double viDotvi = vArr[ik1][v].length_squared();
-					Tblock += viDotvi*(-dFdEi);
-					gBlock += (-dFdEi);
+					matrix3<> viDotvi = outer(vArr[ik1][v], vArr[ik1][v]);
+					Tcur += viDotvi*(-dFdEi);
+					g += (-dFdEi);
 					for(int ik2=0; ik2<bunchSize; ik2++)
 						if(ik2 != ik1)
 							for(int c=0; c<Earr[ik2].nRows(); c++)
-							{	double viDotvj = dot(vArr[ik1][v], vArr[ik2][c]);
+							{	matrix3<> viDotvj = outer(vArr[ik1][v], vArr[ik2][c]);
 								double fj = 1./(exp(Earr[ik2][c]/T)+1);
 								for(int alpha=0; alpha<omegaPh[ik2].nRows(); alpha++)
 								{	double nPh = 1./(exp(omegaPh[ik2][alpha]/T) - 1.);
@@ -117,62 +158,41 @@ int main(int argc, char** argv)
 									for(int ae=-1; ae<=+1; ae+=2)
 									{	double delta = EconservePrefac * exp(EconserveExpFac * std::pow(Earr[ik2][c]-Earr[ik1][v] - ae*omegaPh[ik2][alpha],2));
 										double occFactors = (-dFdEi) * (nPh+0.5 - ae*(0.5-fj));
-										GammaBlock += (viDotvi -  viDotvj) * occFactors * delta * gePhSq;
-										tauInvBlock += occFactors * delta * gePhSq;
+										Gamma += (viDotvi -  viDotvj) * (occFactors * delta * gePhSq);
+										tauInv += occFactors * delta * gePhSq;
 									}
 								}
 							}
 				}
 			}
 		}
-		double prefacT = bs.spinWeight/(3.*nKpts);
-		double prefacGamma = bs.spinWeight*(2*M_PI)/(3*nKpts*nKpts*1./nBunches);
-		Tblock *= prefacT; Tsum += Tblock; TsumSq += std::pow(Tblock,2);
-		gBlock *= prefacT; gSum += gBlock; gSumSq += std::pow(gBlock,2);
-		GammaBlock *= prefacGamma; GammaSum += GammaBlock; GammaSumSq += std::pow(GammaBlock,2);
-		tauInvBlock *= prefacGamma; tauInvSum += tauInvBlock; tauInvSumSq += std::pow(tauInvBlock,2);
+		//Apply normalizing factors:
+		double prefacT = bs.spinWeight/(nKpts);
+		double prefacGamma = bs.spinWeight*(2*M_PI)/(nKpts*nKpts*1./nBunches);
+		Tcur *= prefacT;
+		g *= prefacT;
+		Gamma *= prefacGamma; Gamma = 0.5*(Gamma + (~Gamma)); //symmetrize
+		tauInv *= prefacGamma;
+		//Store relevant quantities:
+		Tarr[block] = Tcur;
+		GammaArr[block] = Gamma;
+		rhoArr[block] = Omega * (inv(Tcur) * Gamma * inv(Tcur));
+		rhoBarArr[block] = trace(rhoArr[block])/3.;
+		tauArr[block] = g / tauInv;
+		tauDrudeArr[block] = trace(Tcur) / trace(Gamma);
+		vFarr[block] = sqrt(trace(Tcur)/g);
+		gArr[block] = g;
 	}
+	logPrintf("done.\n\n");
 
-	mpiUtil->allReduce(Tsum, MPIUtil::ReduceSum);
-	mpiUtil->allReduce(TsumSq, MPIUtil::ReduceSum);
-	double Tt = Tsum / totalBlocks;
-	double Tstd = sqrt(TsumSq/totalBlocks - Tt*Tt)/sqrt(totalBlocks);
-	logPrintf("T = %lg +/- %lg\n", Tt, Tstd);
+	reportResult(Tarr, "T", 1, "", blockStart, blockStop);
+	reportResult(GammaArr, "Gamma", 1, "", blockStart, blockStop);
+	reportResult(rhoArr, "Resistivity", 1e-9*Ohm*meter, "nOhm-m", blockStart, blockStop);
+	reportResult(rhoBarArr, "Resistivity", 1e-9*Ohm*meter, "nOhm-m", blockStart, blockStop);
+	reportResult(tauDrudeArr, "tauDrude", fs, "fs", blockStart, blockStop);
+	reportResult(tauArr, "tau", fs, "fs", blockStart, blockStop);
+	reportResult(vFarr, "vF", 1, "", blockStart, blockStop);
+	reportResult(gArr, "g(eF)", 1, "", blockStart, blockStop);
 	
-	//Decay rate:
-	mpiUtil->allReduce(GammaSum, MPIUtil::ReduceSum);
-	mpiUtil->allReduce(GammaSumSq, MPIUtil::ReduceSum);
-	double Gamma = GammaSum / totalBlocks;
-	double GammaStd = sqrt(GammaSumSq/totalBlocks - Gamma*Gamma)/sqrt(totalBlocks);
-	logPrintf("Gamma = %lg +/- %lg\n", Gamma, GammaStd);
-	
-	// Calculate Resistivity
-	double rho = Omega*Gamma/(Tt*Tt);
-	double rhoStd = rho * hypot(GammaStd/Gamma, sqrt(2.)*Tstd/Tt);
-	logPrintf("Resistivity = %lg +/- %lg ohm-m\n", rho/(Ohm*meter), rhoStd/(Ohm*meter));
-	
-	//Drude relaxation time
-	double tauDrude = Tt / Gamma;
-	double tauDrudeStd = tauDrude * hypot(Tstd/Tt, GammaStd/Gamma);
-	logPrintf("tauDrude = %lg +/- %lg fs\n", tauDrude/fs, tauDrudeStd/fs);
-	
-	//Calculate lifetime:
-	mpiUtil->allReduce(gSum, MPIUtil::ReduceSum);
-	mpiUtil->allReduce(gSumSq, MPIUtil::ReduceSum);
-	mpiUtil->allReduce(tauInvSum, MPIUtil::ReduceSum);
-	mpiUtil->allReduce(tauInvSumSq, MPIUtil::ReduceSum);
-	double gMean = gSum / totalBlocks;
-	double gStd = sqrt(gSumSq/totalBlocks - gMean*gMean)/sqrt(totalBlocks);
-	double tauInv = tauInvSum / totalBlocks;
-	double tauInvStd = sqrt(tauInvSumSq/totalBlocks - tauInv*tauInv)/sqrt(totalBlocks);
-	double tau = gMean / tauInv;
-	double tauStd = tau * hypot(tauInvStd/tauInv, gStd/gMean);
-	logPrintf("tau = %lg +/- %lg fs\n", tau/fs, tauStd/fs);
-	
-	double vF = sqrt(Tt/gMean);
-	double vFstd = vF * 0.5 * hypot(Tstd/Tt, gStd/gMean);
-	logPrintf("vF = %lg +/- %lg\n", vF, vFstd);
-	
-	logPrintf("g(eF) = %lg +/- %lg\n", 3.*gMean, 3.*gStd);
 	finalizeSystem();
 }
