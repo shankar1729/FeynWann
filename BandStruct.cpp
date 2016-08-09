@@ -31,6 +31,10 @@ BandStruct::BandStruct(string totalEprefix, string wannierPrefix, bool needPhono
 				sscanf(line.c_str(), "[ %lf %lf %lf ]", &R(j,0), &R(j,1), &R(j,2));
 			}
 		}
+		else if(line.find("kpoint-folding") != string::npos)
+		{	istringstream iss(line); string buf;
+			iss >> buf >> kfold[0] >> kfold[1] >> kfold[2];
+		}
 		else if(line.find("spintype") != string::npos)
 		{	istringstream iss(line); string buf, spinString;
 			iss >> buf >> spinString;

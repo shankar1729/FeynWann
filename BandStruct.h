@@ -43,6 +43,7 @@ public:
 	
 	//DFT / Wannier / Phonon parameters:
 	matrix3<> R; //!< lattice vectors
+	vector3<int> kfold; //!< k-point folding in original calculation
 	int nBands, spinWeight; //!< number of Wannier bands for the electrons and weight per spin channel
 	double mu; //!< chemical potential (if a metal)
 	int nPol; //!< number of photon polarizations in pre-contracted matrix elements
@@ -97,6 +98,7 @@ private:
 	size_t cacheSize;
 	
 	friend class LineWidth; //Needs access to cache and other Wannier properties
+	friend class Wannierizer; //Used by electronPhononLinewidth to transform back to Wannier
 };
 
 #endif //WANNIERMETROPOLIS_BANDSTRUCT_H

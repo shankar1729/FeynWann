@@ -53,7 +53,7 @@ int main(int argc, char** argv)
 {	string inputFilename; bool dryRun, printDefaults;
 	initSystemCmdline(argc, argv, "Monte Carlo estimate of resistivity", inputFilename, dryRun, printDefaults);
 
-	//Get the system parameters (mu, T, lattice vectors etc.)
+	//Read input file:
 	InputMap inputMap(inputFilename);
 	const int nKpts = inputMap.get("nKpts");
 	const int totalBlocks = inputMap.get("totalBlocks"); assert(totalBlocks>0);
