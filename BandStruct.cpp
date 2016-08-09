@@ -20,7 +20,7 @@ BandStruct::BandStruct(string totalEprefix, string wannierPrefix, bool needPhono
 : spinWeight(0), mu(NAN), nPol(Ahat.size()), cacheSize(6)
 {	
 	//Read relevant parameters from totalE.out:
-	logPrintf("Reading '%s.out' ... ", totalEprefix.c_str()); logFlush();
+	logPrintf("\nReading '%s.out' ... ", totalEprefix.c_str()); logFlush();
 	ifstream ifs(totalEprefix + ".out");
 	while(!ifs.eof())
 	{	string line; getline(ifs, line);
@@ -47,11 +47,18 @@ BandStruct::BandStruct(string totalEprefix, string wannierPrefix, bool needPhono
 		}
 		else if(line.find("FillingsUpdate:") != string::npos)
 		{	istringstream iss(line); string buf;
-			iss >> buf >> buf >> mu;
+			iss >> buf >> buf >> mu >> buf >> nElectrons;
 		}
 	}
 	ifs.close();
 	logPrintf("done.\n"); logFlush();
+	logPrintf("Parameters extracted from DFT calculation:\n");
+	logPrintf("mu = %lg\n", mu);
+	logPrintf("nElectrons = %lg\n", nElectrons);
+	logPrintf("spinWeight = %d\n", spinWeight);
+	logPrintf("kfold:"); kfold.print(globalLog, " %d ");
+	logPrintf("R:\n");
+	R.print(globalLog, " %lg ");
 	
 	//Read cell map
 	ifs.open(wannierPrefix + ".mlwfCellMap");

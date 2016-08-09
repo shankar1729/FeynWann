@@ -18,7 +18,7 @@ int main(int argc, char** argv)
 	//Get the system parameters (mu, T, lattice vectors etc.)
 	InputMap inputMap(inputFilename);
 	const double EplasmonMax = inputMap.get("EplasmonMax") * eV;
-	const double T = inputMap.get("T") * eV;
+	const double T = inputMap.get("T") * Kelvin;
 	const matrix3<> R = matrix3<>(0,1,1, 1,0,1, 1,1,0) * (0.5*inputMap.get("aCubic")*Angstrom);
 	const double Zjellium = inputMap.get("Zjellium");
 	const int tau = inputMap.get("tau")*fs;

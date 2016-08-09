@@ -47,33 +47,30 @@ int main(int argc, char** argv)
 
 	//Get the system parameters (mu, T, lattice vectors etc.)
 	InputMap inputMap(inputFilename);
-	const int nKptsN1 = inputMap.get("nKptsN1");
-	double mu = inputMap.get("mu"); //initial guess only - will be calculated self-consistently in this executable
-	const double Z = inputMap.get("Z"); //number of electrons per unit cell
+	long nKpts = inputMap.get("nKpts");
 	const double dE = inputMap.get("dE") * eV; //energy resolution used for output and energy conservation
 	const double TeMin = inputMap.get("TeMin") * Kelvin; //electron temperature grid start
 	const double TeMax = inputMap.get("TeMax") * Kelvin; //electron temperature grid stop
 	const double TeStep = inputMap.get("TeStep") * Kelvin; //electron temperature grid spacing
 	const double Tl = inputMap.get("Tl") * Kelvin; //lattice temperature
-	const int spinWeight = round(inputMap.get("spinWeight"));
-	const matrix3<> R = matrix3<>(0,1,1, 1,0,1, 1,1,0) * (0.5*inputMap.get("aCubic")*Angstrom);
 	const double invTauTePrefac = inputMap.get("invTauTePrefac"); // prefactor A as in invTau(Te)=A*T^2
-	const double EfJellium = inputMap.get("EfJellium") * eV; // jellium fermi energy in eV, converted to hartrees
 
 	logPrintf("\nInputs after conversion to atomic units:\n");
-	logPrintf("nKptsN1 = %d\n", nKptsN1);
-	logPrintf("mu = %lg\n", mu);
-	logPrintf("Z = %lg\n", Z);
+	logPrintf("nKpts = %ld\n", nKpts);
 	logPrintf("dE = %lg\n", dE);
 	logPrintf("TeMin = %lg\n", TeMin);
 	logPrintf("TeMax = %lg\n", TeMax);
 	logPrintf("TeStep = %lg\n", TeStep);
 	logPrintf("Tl = %lg\n", Tl);
-	logPrintf("spinWeight = %d\n", spinWeight);
-	logPrintf("R:\n");
 	logPrintf("invTauTePrefac = %lg\n", invTauTePrefac);
-	logPrintf("EfJellium = %lg\n", EfJellium);
-	R.print(globalLog, " %lg ");
+	
+	//Initialize Wannier bandstructure:
+	std::vector< vector3<complex> > Ahat(1); //assume cubic symmetry and only calculate x-axis
+	Ahat[0] = vector3<complex>(1., 0., 0.);
+	BandStruct bs("Wannier/totalE", "Wannier/wannier", true, Ahat);
+	const int bunchSize = 32;
+	bs.setCacheSize(2*bunchSize);
+
 	if(dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
 		finalizeSystem();
@@ -81,13 +78,6 @@ int main(int argc, char** argv)
 	}
 	logPrintf("\n");
 	
-	//Initialize Wannier bandstructure:
-	std::vector< vector3<complex> > Ahat(1); //assume cubic symmetry and only calculate x-axis
-	Ahat[0] = vector3<complex>(1., 0., 0.);
-	BandStruct bs("Wannier/wannier", mu, spinWeight, "Wannier/totalE", Ahat);
-	const int bunchSize = 32;
-	bs.setCacheSize(2*bunchSize);
-
 	//Initialize temperature grid:
 	std::vector<double> TeArr(int(ceil((TeMax-TeMin)/TeStep)));
 	for(size_t iT=0; iT<TeArr.size(); iT++)
@@ -116,16 +106,16 @@ int main(int argc, char** argv)
 	logPrintf("Initialized energy grid: %lg to %lg eV with %lu points.\n", Emin/eV, (Emin+dE*(dos.out.size()-1))/eV, dos.out.size());
 	
 	//Initialize sampling parameters:
-	int ikStart, ikStop; TaskDivision(nKptsN1, mpiUtil).myRange(ikStart, ikStop);
+	int ikStart, ikStop; TaskDivision(nKpts, mpiUtil).myRange(ikStart, ikStop);
 	int nBunchesMine = ceil((ikStop-ikStart)*1./bunchSize); //number of bunches on current process
 	int iBunchInterval = std::max(1, int(round(nBunchesMine/50.))); //interval for reporting progress
-	long nKpts = nBunchesMine * bunchSize; mpiUtil->allReduce(nKpts, MPIUtil::ReduceSum); //total number of sampled k-points
+	nKpts = nBunchesMine * bunchSize; mpiUtil->allReduce(nKpts, MPIUtil::ReduceSum); //total number of sampled k-points
 	long nKpairs = nKpts * (bunchSize-1); //total number of sampled k-point pairs for phonon-assisted transitions
 	int nBands = Egamma.nRows();
 	int nModes = bs.getPhononModes(vector3<>()).nRows();
-	double phononPrefac0 = 4 * std::pow(M_PI,2) * spinWeight / (nKpairs*fabs(det(R))); //frequency independent part of prefac
-	double directPrefac0 = 4 * std::pow(M_PI,2) * spinWeight / (nKpts*fabs(det(R))); //frequency independent part of prefac
-	double GePhPrefac = spinWeight * (2*M_PI) / nKpairs;
+	double phononPrefac0 = 4 * std::pow(M_PI,2) * bs.spinWeight / (nKpairs*fabs(det(bs.R))); //frequency independent part of prefac
+	double directPrefac0 = 4 * std::pow(M_PI,2) * bs.spinWeight / (nKpts*fabs(det(bs.R))); //frequency independent part of prefac
+	double GePhPrefac = bs.spinWeight * (2*M_PI) / nKpairs;
 	double TlRatio = Tl / (0.026*eV); //Ratio of Tl to the Tl at which e-ph linewidths were calculated
 	
 	//Singularity extrapolation parameters
@@ -138,7 +128,7 @@ int main(int argc, char** argv)
 	
 	logPrintf("\nCollecting DOS: "); logFlush();
 	std::vector< std::vector< vector3<> > > kArrArr(nBunchesMine); //use exact same set of MC k-points in the two passes for consistency
-	const double dosWeight = spinWeight*(1./nKpts);
+	const double dosWeight = bs.spinWeight*(1./nKpts);
 	for(int iBunch=0; iBunch<nBunchesMine; iBunch++)
 	{
 		//Generate a bunch of k-points:
@@ -170,8 +160,8 @@ int main(int argc, char** argv)
 	double Zmax = 0.;
 	for(const double& g: dos.out)
 		Zmax += dE * g;
-	if(Zmax < Z)
-		die("Current DOS can only support %lg electrons > %lg electrons specified.\n", Zmax, Z);
+	if(Zmax < bs.nElectrons)
+		die("Current DOS can only support %lg electrons > %lg electrons specified.\n", Zmax, bs.nElectrons);
 	int iTstart, iTstop; TaskDivision(TeArr.size(), mpiUtil).myRange(iTstart, iTstop);
 	for(int iT=iTstart; iT<iTstop; iT++)
 	{	const double Te = TeArr[iT], invTe = 1./Te;
@@ -189,7 +179,7 @@ int main(int argc, char** argv)
 				double fi = fermi(invTe*(Ei - dmuCur));
 				nElectrons += dE * dos.out[ie] * fi;
 			}
-			((nElectrons>Z) ? dmuMax : dmuMin) = dmuCur;
+			((nElectrons>bs.nElectrons) ? dmuMax : dmuMin) = dmuCur;
 			dmuCur = 0.5*(dmuMin + dmuMax);
 		}
 		//Calculate electronic specific heat:
@@ -231,7 +221,6 @@ int main(int argc, char** argv)
 	diagMatrix GePh(TeArr.size());
 	Histogram MepNum(Emin, dE, Emax);
 	Histogram MepDen(Emin, dE, Emax);
-	Histogram MepAshcroftNum(Emin, dE, Emax);
 	const double EconserveScaleFac = 1./dE, EconservePrefac = 1./(M_PI*dE); //energy conserving Lorentzian parameters
 	logPrintf("\nePhCoupling and ImEps: "); logFlush();
 	for(int iBunch=0; iBunch<nBunchesMine; iBunch++)
@@ -310,11 +299,6 @@ int main(int argc, char** argv)
 						MepDen.addEvent(E1[v], delta);
 						MepDen.addEvent(E2[c], delta);
 						
-						//Approxiimate matrix element squared from Ashcroft & Mermin p.523
-						const double Omega = fabs(det(R));
-						MepAshcroftNum.addEvent(E1[v], delta * omegaPh * EfJellium / (3*Z));
-						MepAshcroftNum.addEvent(E2[c], delta * omegaPh * EfJellium / (3*Z));
-
 						//Electron-phonon heat baths coupling GePh:
 						for(size_t iT=0; iT<TeArr.size(); iT++)
 						{	//Note occFactors = ((f1-f2)*nPh - f2*(1-f1)) / (Tl - Te)
@@ -375,14 +359,6 @@ int main(int argc, char** argv)
 			ofs << (MepNum.Emin + i*MepNum.dE)/eV << '\t' << MepNum.out[i]/MepDen.out[i] << '\n';
 	}
 
-	//Ashcroft Matrix element statistics:
-	MepAshcroftNum.allReduce(MPIUtil::ReduceSum);
-	if(mpiUtil->isHead())
-	{	ofstream ofss("MepAshcroft.dat");
-		for(size_t i=0; i<MepAshcroftNum.out.size(); i++)
-			ofss << (MepAshcroftNum.Emin + i*MepAshcroftNum.dE)/eV << '\t' << MepAshcroftNum.out[i]/MepDen.out[i] << '\n';
-	}
-
 	//e-ph coupling:
 	GePh.allReduce(MPIUtil::ReduceSum);
 	
@@ -425,7 +401,7 @@ int main(int argc, char** argv)
         for(Histogram& h: ImEpsPhononBroad) h.allReduce(MPIUtil::ReduceSum);
 
 	if(mpiUtil->isHead())
-	{	const double Omega = fabs(det(R));
+	{	const double Omega = fabs(det(bs.R));
 		const double CeSI = Joule/(Kelvin*pow(meter,3));
 		const double GePhSI = Joule*invSeconds/(Kelvin*pow(meter,3));
 		ofstream ofs("TAparameters.dat");

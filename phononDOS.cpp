@@ -20,25 +20,26 @@ int main(int argc, char** argv)
 
 	//Get the system parameters (mu, T, lattice vectors etc.)
 	InputMap inputMap(inputFilename);
-	const int nKptsN1 = inputMap.get("nKptsN1");
+	int nKpts = inputMap.get("nKpts");
 	const double vL = inputMap.get("vL") * meter*invSeconds; //longitudinal speed of sound
 	const double vT = inputMap.get("vT") * meter*invSeconds; //transverse speed of sound (assumed x2)
 	const double domegaPh = inputMap.get("domegaPh") * eV; //phonon energy resolution (should be much smaller than TD)
-	const double TlMin = inputMap.get("TlMin") * Kelvin; //electron temperature grid start
-	const double TlMax = inputMap.get("TlMax") * Kelvin; //electron temperature grid stop
-	const double TlStep = inputMap.get("TlStep") * Kelvin; //electron temperature grid spacing
-	const matrix3<> R = matrix3<>(0,1,1, 1,0,1, 1,1,0) * (0.5*inputMap.get("aCubic")*Angstrom);
-
+	const double TlMin = inputMap.get("TlMin") * Kelvin; //lattice temperature grid start
+	const double TlMax = inputMap.get("TlMax") * Kelvin; //lattice temperature grid stop
+	const double TlStep = inputMap.get("TlStep") * Kelvin; //lattice temperature grid spacing
+	
 	logPrintf("\nInputs after conversion to atomic units:\n");
-	logPrintf("nKptsN1 = %d\n", nKptsN1);
+	logPrintf("nKpts = %d\n", nKpts);
 	logPrintf("vL = %lg\n", vL);
 	logPrintf("vT = %lg\n", vT);
 	logPrintf("domegaPh = %lg\n", domegaPh);
 	logPrintf("TlMin = %lg\n", TlMin);
 	logPrintf("TlMax = %lg\n", TlMax);
 	logPrintf("TlStep = %lg\n", TlStep);
-	logPrintf("R:\n");
-	R.print(globalLog, " %lg ");
+	
+	//Initialize Wannier bandstructure:
+	BandStruct bs("Wannier/totalE", "Wannier/wannier", true);
+
 	if(dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
 		finalizeSystem();
@@ -46,9 +47,6 @@ int main(int argc, char** argv)
 	}
 	logPrintf("\n");
 	
-	//Initialize Wannier bandstructure:
-	BandStruct bs("Wannier/wannier", 0., 2., "Wannier/totalE");
-
 	//Initialize temperature grid:
 	std::vector<double> TlArr(int(ceil((TlMax-TlMin)/TlStep)));
 	for(size_t iT=0; iT<TlArr.size(); iT++)
@@ -56,7 +54,7 @@ int main(int argc, char** argv)
 	logPrintf("Initialized temperature grid: %lg to %lg K with %lu points.\n", TlArr.front()/Kelvin, TlArr.back()/Kelvin, TlArr.size());
 	
 	//Calculate Debye temperatures / energies (same in atomic units):
-	const double kD  = std::pow(6*M_PI*M_PI/fabs(det(R)), 1./3);
+	const double kD  = std::pow(6*M_PI*M_PI/fabs(det(bs.R)), 1./3);
 	const double TdebyeL = vL * kD; logPrintf("Longitudinal Debye energy: %3.0lf K (%.1lf meV)\n", TdebyeL/Kelvin, TdebyeL/(1e-3*eV));
 	const double TdebyeT = vT * kD; logPrintf("Transverse Debye energy:   %3.0lf K (%.1lf meV)\n", TdebyeT/Kelvin, TdebyeT/(1e-3*eV));
 	
@@ -74,10 +72,10 @@ int main(int argc, char** argv)
 	logPrintf("Initialized phonon energy grid: 0 to %lg eV with %lu points.\n", (domegaPh*(dos.out.size()-1))/eV, dos.out.size());
 	
 	//Initialize sampling parameters:
-	int ikStart, ikStop; TaskDivision(nKptsN1, mpiUtil).myRange(ikStart, ikStop);
+	int ikStart, ikStop; TaskDivision(nKpts, mpiUtil).myRange(ikStart, ikStop);
 	int nkMine = (ikStop-ikStart); //number of k's on current process
 	int ikInterval = std::max(1, int(round(nkMine/50.))); //interval for reporting progress
-	int nKpts = nkMine; mpiUtil->allReduce(nKpts, MPIUtil::ReduceSum); //total number of sampled k-points
+	nKpts = nkMine; mpiUtil->allReduce(nKpts, MPIUtil::ReduceSum); //total number of sampled k-points
 	int nModes = bs.getPhononModes(vector3<>()).nRows();
 	if(nModes != 3) logPrintf("WARNING: the Debye estimates are only valid if nModes = 3.\n");
 	
@@ -110,8 +108,8 @@ int main(int argc, char** argv)
 	//Calculate Cl at each temperature:
 	diagMatrix Cl(TlArr.size(), 0.), ClDebye(TlArr.size(), 0.);
 	int iTstart, iTstop; TaskDivision(TlArr.size(), mpiUtil).myRange(iTstart, iTstop);
-	const double dosPrefacDebyeL = fabs(det(R)) / (2*M_PI*M_PI * std::pow(vL,3)); 
-	const double dosPrefacDebyeT = fabs(det(R)) / (2*M_PI*M_PI * std::pow(vT,3)); 
+	const double dosPrefacDebyeL = fabs(det(bs.R)) / (2*M_PI*M_PI * std::pow(vL,3)); 
+	const double dosPrefacDebyeT = fabs(det(bs.R)) / (2*M_PI*M_PI * std::pow(vT,3)); 
 	std::vector<double> dosDebyeArr(dos.out.size());
 	for(int iT=iTstart; iT<iTstop; iT++)
 	{	const double Tl = TlArr[iT], invTl = 1./Tl;
@@ -146,7 +144,7 @@ int main(int argc, char** argv)
 
 
 	if(mpiUtil->isHead())
-	{	const double Omega = fabs(det(R));
+	{	const double Omega = fabs(det(bs.R));
 		const double ClSI = Joule/(Kelvin*pow(meter,3));
 		ofstream ofs("phononCl.dat");
 		ofs << "#T[K] Cl[J/m^3K] ClDebye[J/m^3K]\n";

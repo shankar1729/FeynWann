@@ -44,23 +44,23 @@ int main(int argc, char** argv)
 
 	//Get the system parameters (mu, T, lattice vectors etc.)
 	InputMap inputMap(inputFilename);	
-	const int nKptsN1 = inputMap.get("nKptsN1");
-	double mu = inputMap.get("mu"); //initial guess only - will be calculated self-consistently in this executable
+	long nKpts = inputMap.get("nKpts");
 	const double Z = inputMap.get("Z"); //number of electrons per unit cell
 	const double dE = inputMap.get("dE") * eV; //energy resolution used for output and energy conservation
-	const int spinWeight = round(inputMap.get("spinWeight"));
-	const matrix3<> R = matrix3<>(0,1,1, 1,0,1, 1,1,0) * (0.5*inputMap.get("aCubic")*Angstrom);
 	string runName = inputMap.getString("runName");
 	
 	logPrintf("\nInputs after conversion to atomic units:\n");
-	logPrintf("nKptsN1 = %d\n", nKptsN1);
-	logPrintf("mu = %lg\n", mu);
+	logPrintf("nKpts = %ld\n", nKpts);
 	logPrintf("Z = %lg\n", Z);
 	logPrintf("dE = %lg\n", dE);
-	logPrintf("spinWeight = %d\n", spinWeight);
-	logPrintf("R:\n");
-	R.print(globalLog, " %lg ");
-	logPrintf("runName = '%s'\n", runName.c_str());
+	
+	//Initialize Wannier bandstructure:
+	std::vector< vector3<complex> > Ahat(1); //assume cubic symmetry and only calculate x-axis
+	Ahat[0] = vector3<complex>(1., 0., 0.);
+	BandStruct bs("Wannier/totalE", "Wannier/wannier", true, Ahat);
+	const int bunchSize = 32;
+	bs.setCacheSize(2*bunchSize);
+
 	if(dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
 		finalizeSystem();
@@ -77,15 +77,7 @@ int main(int argc, char** argv)
 	Interp1 TlInterp; TlInterp.init(runName + ".Tl", fs, Kelvin);
 	const std::vector<double>& Tl = TlInterp.yGrid[0];
 	assert(int(Tl.size()) == numTimes);
-	
-	//Initialize Wannier bandstructure:
-	std::vector< vector3<complex> > Ahat(1); //assume cubic symmetry and only calculate x-axis
-	Ahat[0] = vector3<complex>(1., 0., 0.);
-	BandStruct bs("Wannier/wannier", mu, spinWeight, "Wannier/totalE", Ahat);
-	const int bunchSize = 32;
-	bs.setCacheSize(2*bunchSize);
-
-	
+		
 	//Initialize energy grid:
 	diagMatrix Egamma = bs.getStates(vector3<>());
 	double Emin = Egamma.front(), Emax = Egamma.back(); //eigenvalues are sorted
@@ -108,15 +100,15 @@ int main(int argc, char** argv)
 	logPrintf("Initialized energy grid: %lg to %lg eV with %d points.\n", Emin/eV, (Emin+dE*(steps))/eV, steps);
 	
 	//Initialize sampling parameters:
-	int ikStart, ikStop; TaskDivision(nKptsN1, mpiUtil).myRange(ikStart, ikStop);
+	int ikStart, ikStop; TaskDivision(nKpts, mpiUtil).myRange(ikStart, ikStop);
 	int nBunchesMine = ceil((ikStop-ikStart)*1./bunchSize); //number of bunches on current process
 	int iBunchInterval = std::max(1, int(round(nBunchesMine/50.))); //interval for reporting progress
-	long nKpts = nBunchesMine * bunchSize; mpiUtil->allReduce(nKpts, MPIUtil::ReduceSum); //total number of sampled k-points
+	nKpts = nBunchesMine * bunchSize; mpiUtil->allReduce(nKpts, MPIUtil::ReduceSum); //total number of sampled k-points
 	long nKpairs = nKpts * (bunchSize-1); //total number of sampled k-point pairs for phonon-assisted transitions
 	int nBands = Egamma.nRows();
 	int nModes = bs.getPhononModes(vector3<>()).nRows();
-	double phononPrefac0 = 4 * std::pow(M_PI,2) * spinWeight / (nKpairs*fabs(det(R))); //frequency independent part of prefac
-	double directPrefac0 = 4 * std::pow(M_PI,2) * spinWeight / (nKpts*fabs(det(R))); //frequency independent part of prefac
+	double phononPrefac0 = 4 * std::pow(M_PI,2) * bs.spinWeight / (nKpairs*fabs(det(bs.R))); //frequency independent part of prefac
+	double directPrefac0 = 4 * std::pow(M_PI,2) * bs.spinWeight / (nKpts*fabs(det(bs.R))); //frequency independent part of prefac
 	double Tl0lw = 0.026*eV; //Tl at which e-ph linewidths were calculated
 
 	//Singularity extrapolation parameters

@@ -11,22 +11,13 @@
 
 int main(int argc, char** argv)
 {   string inputFilename; bool dryRun, printDefaults;
-	initSystemCmdline(argc, argv, "Generate event list for transport modules", inputFilename, dryRun, printDefaults);
-
-	//Get the system parameters (mu, T, lattice vectors etc.)
-	InputMap inputMap(inputFilename);
-	const double mu = inputMap.get("mu");
-	const int spinWeight = round(inputMap.get("spinWeight"));
-
-	logPrintf("\nInputs after conversion to atomic units:\n");
-	logPrintf("mu = %lg\n", mu);
-	logPrintf("spinWeight = %d\n", spinWeight);
+	initSystemCmdline(argc, argv, "Plot FCC Fermi surface", inputFilename, dryRun, printDefaults);
 
 	const int nk = 64;
 	matrix3<> R = matrix3<>(0,1,1, 1,0,1, 1,1,0) * 0.5; //unit fcc lattice
 	
 	//Initialize bandstructure and linewidth
-	BandStruct bs("Wannier/wannier", mu, spinWeight);
+	BandStruct bs("Wannier/totalE", "Wannier/wannier", false);
 	LineWidth lineWidth("Wannier/wannier", bs);
 	bs.setCacheSize(nk);
 	
@@ -54,7 +45,7 @@ int main(int argc, char** argv)
 		}
 	
 	//Output bands which cross the Fermi level:
-	for(int b=0; b<nBands; b+=(spinWeight==1 ? 2 : 1)) //pick only one from degenerate relativistic bands
+	for(int b=0; b<nBands; b+=(bs.spinWeight==1 ? 2 : 1)) //pick only one from degenerate relativistic bands
 	{	//Determine energy range:
 		double Emin = std::min_element(Epair[b].begin(), Epair[b].end())->first;
 		double Emax = std::max_element(Epair[b].begin(), Epair[b].end())->first;

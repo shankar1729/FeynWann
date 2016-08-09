@@ -21,19 +21,18 @@ int main(int argc, char** argv)
 
 	//Get the system parameters (mu, T, lattice vectors etc.)
 	InputMap inputMap(inputFilename);
-	const int nKptsN1 = inputMap.get("nKptsN1");
-	double mu = inputMap.get("mu"); //initial guess only - will be calculated self-consistently in this executable
+	long nKpts = inputMap.get("nKpts");
 	const double dE = inputMap.get("dE") * eV; //energy resolution used for output and energy conservation
-	const int spinWeight = round(inputMap.get("spinWeight"));
-	const matrix3<> R = matrix3<>(0,1,1, 1,0,1, 1,1,0) * (0.5*inputMap.get("aCubic")*Angstrom);
-
+	
 	logPrintf("\nInputs after conversion to atomic units:\n");
-	logPrintf("nKptsN1 = %d\n", nKptsN1);
-	logPrintf("mu = %lg\n", mu);
+	logPrintf("nKpts = %ld\n", nKpts);
 	logPrintf("dE = %lg\n", dE);
-	logPrintf("spinWeight = %d\n", spinWeight);
-	logPrintf("R:\n");
-	R.print(globalLog, " %lg ");
+	
+	//Initialize Wannier bandstructure:
+	BandStruct bs("Wannier/totalE", "Wannier/wannier", true);
+	const int bunchSize = 32;
+	bs.setCacheSize(2*bunchSize);
+
 	if(dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
 		finalizeSystem();
@@ -41,11 +40,6 @@ int main(int argc, char** argv)
 	}
 	logPrintf("\n");
 	
-	//Initialize Wannier bandstructure:
-	BandStruct bs("Wannier/wannier", mu, spinWeight, "Wannier/totalE");
-	const int bunchSize = 32;
-	bs.setCacheSize(2*bunchSize);
-
 	//Initalize line width of electronic states
 	LineWidth lineWidth("Wannier/wannier", bs);
 
@@ -72,18 +66,18 @@ int main(int argc, char** argv)
 	logPrintf("Initialized energy grid: %lg to %lg eV with %lu points.\n", Emin/eV, (Emin+dE*(dos.out.size()-1))/eV, dos.out.size());
 	
 	//Initialize sampling parameters:
-	int ikStart, ikStop; TaskDivision(nKptsN1, mpiUtil).myRange(ikStart, ikStop);
+	int ikStart, ikStop; TaskDivision(nKpts, mpiUtil).myRange(ikStart, ikStop);
 	int nBunchesMine = ceil((ikStop-ikStart)*1./bunchSize); //number of bunches on current process
 	int iBunchInterval = std::max(1, int(round(nBunchesMine/50.))); //interval for reporting progress
-	long nKpts = nBunchesMine * bunchSize; mpiUtil->allReduce(nKpts, MPIUtil::ReduceSum); //total number of sampled k-points
+	nKpts = nBunchesMine * bunchSize; mpiUtil->allReduce(nKpts, MPIUtil::ReduceSum); //total number of sampled k-points
 	long nKpairs = nKpts * (bunchSize-1); //total number of sampled k-point pairs for phonon-assisted transitions
 	int nBands = Egamma.nRows();
 	int nModes = bs.getPhononModes(vector3<>()).nRows();
 	
 	logPrintf("\nCollecting g and h: "); logFlush();
 	std::vector< std::vector< vector3<> > > kArrArr(nBunchesMine); //use exact same set of MC k-points in the two passes for consistency
-	const double dosWeight = spinWeight/(nKpts*fabs(det(R)));
-	const double hIntWeight = spinWeight/(nKpairs*fabs(det(R)));
+	const double dosWeight = bs.spinWeight/(nKpts*fabs(det(bs.R)));
+	const double hIntWeight = bs.spinWeight/(nKpairs*fabs(det(bs.R)));
 	for(int iBunch=0; iBunch<nBunchesMine; iBunch++)
 	{
 		//Generate a bunch of k-points:

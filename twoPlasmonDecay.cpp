@@ -25,21 +25,22 @@ int main(int argc, char** argv)
 
 	//Get the system parameters (mu, T, lattice vectors etc.)
 	InputMap inputMap(inputFilename);
-	const int nKptsN1 = inputMap.get("nKptsN1");
+	long nKpts = inputMap.get("nKpts");
 	const double EplasmonMax = inputMap.get("EplasmonMax") * eV;
-	const double mu = inputMap.get("mu");
-	const double T = inputMap.get("T") * eV;
-	const int spinWeight = round(inputMap.get("spinWeight"));
-	const matrix3<> R = matrix3<>(0,1,1, 1,0,1, 1,1,0) * (0.5*inputMap.get("aCubic")*Angstrom);
+	const double T = inputMap.get("T") * Kelvin;
 	
 	logPrintf("\nInputs after conversion to atomic units:\n");
-	logPrintf("nKptsN1 = %d\n", nKptsN1);
+	logPrintf("nKpts = %ld\n", nKpts);
 	logPrintf("EplasmonMax = %lg\n", EplasmonMax);
-	logPrintf("mu = %lg\n", mu);
 	logPrintf("T = %lg\n", T);
-	logPrintf("spinWeight = %d\n", spinWeight);
-	logPrintf("R:\n");
-	R.print(globalLog, " %lg ");
+	
+	//Initialize Wannier bandstructure:
+	std::vector< vector3<complex> > Ahat(1);
+	Ahat[0] = vector3<complex>(1.,0.,0.); //cubic crystal, one polarization sufficient
+	BandStruct bs("Wannier/totalE", "Wannier/wannier", true, Ahat);
+	const int bunchSize = 32;
+	bs.setCacheSize(2*bunchSize);
+
 	if(dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
 		finalizeSystem();
@@ -50,26 +51,19 @@ int main(int argc, char** argv)
 	//Initialize dielectric model:
 	Epsilon eps("Wannier/epsilon.dat");
 	
-	//Initialize Wannier bandstructure:
-	std::vector< vector3<complex> > Ahat(1);
-	Ahat[0] = vector3<complex>(1.,0.,0.); //cubic crystal, one polarization sufficient
-	BandStruct bs("Wannier/wannier", mu, spinWeight, "Wannier/totalE", Ahat);
-	const int bunchSize = 32;
-	bs.setCacheSize(2*bunchSize);
-
 	//Initalize line width of intermediate electronic states
 	LineWidth lineWidth("Wannier/wannier", bs);
 
 	//Initialize sampling parameters:
-	int ikStart, ikStop; TaskDivision(nKptsN1, mpiUtil).myRange(ikStart, ikStop);
+	int ikStart, ikStop; TaskDivision(nKpts, mpiUtil).myRange(ikStart, ikStop);
 	int nBunchesMine = ceil((ikStop-ikStart)*1./bunchSize); //number of bunches on current process
-	long nKpts = nBunchesMine * bunchSize; mpiUtil->allReduce(nKpts, MPIUtil::ReduceSum); //total number of sampled k-points
+	nKpts = nBunchesMine * bunchSize; mpiUtil->allReduce(nKpts, MPIUtil::ReduceSum); //total number of sampled k-points
 	long nKpairs = nKpts * (bunchSize-1); //total number of sampled k-point pairs for phonon-assisted transitions
 	int nBands = bs.getStates(vector3<>()).nRows();
 	int nModes = bs.getPhononModes(vector3<>()).nRows();
 	complex I(0,1);
-	double prefac0 = spinWeight * M_PI / (nKpts * fabs(det(R))); //frequency independent part of prefac
-	double prefac0ph = spinWeight * M_PI / (nKpairs * fabs(det(R))); //frequency independent part of prefac
+	double prefac0 = bs.spinWeight * M_PI / (nKpts * fabs(det(bs.R))); //frequency independent part of prefac
+	double prefac0ph = bs.spinWeight * M_PI / (nKpairs * fabs(det(bs.R))); //frequency independent part of prefac
 	
 	//Singularity extrapolation parameters
 	double extrapCoeff[] = {-19./12, 13./3, -7./4 }; //account for constant, 1/eta and eta^2 dependence

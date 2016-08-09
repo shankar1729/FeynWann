@@ -15,19 +15,20 @@ int main(int argc, char** argv)
 
 	//Get the system parameters (mu, T, lattice vectors etc.)
 	InputMap inputMap(inputFilename);
-	const int nKptsN1 = inputMap.get("nKptsN1");
-	const double mu = inputMap.get("mu");
-	const int spinWeight = round(inputMap.get("spinWeight"));
+	long nKpts = inputMap.get("nKpts");
 	const double Zjellium = inputMap.get("Zjellium");
-	const matrix3<> R = matrix3<>(0,1,1, 1,0,1, 1,1,0) * (0.5*inputMap.get("aCubic")*Angstrom);
 
 	logPrintf("\nInputs after conversion to atomic units:\n");
-	logPrintf("nKptsN1 = %d\n", nKptsN1);
-	logPrintf("mu = %lg\n", mu);
-	logPrintf("spinWeight = %d\n", spinWeight);
-	logPrintf("R:\n");
+	logPrintf("nKpts = %ld\n", nKpts);
 	logPrintf("Zjellium = %lg\n", Zjellium);
-	R.print(globalLog, " %lg ");
+
+	//Initialize Wannier bandstructure:
+	std::vector< vector3<complex> > Ahat(1); //assume cubic symmetry and only calculate x-axis
+	Ahat[0] = vector3<complex>(1., 0., 0.);
+	BandStruct bs("Wannier/totalE", "Wannier/wannier", false, Ahat);
+	const int bunchSize = 32;
+	bs.setCacheSize(2*bunchSize);
+
 	if(dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
 		finalizeSystem();
@@ -35,13 +36,6 @@ int main(int argc, char** argv)
 	}
 	logPrintf("\n");
 	
-	//Initialize Wannier bandstructure:
-	std::vector< vector3<complex> > Ahat(1); //assume cubic symmetry and only calculate x-axis
-	Ahat[0] = vector3<complex>(1., 0., 0.);
-	BandStruct bs("Wannier/wannier", mu, spinWeight, string(), Ahat);
-	const int bunchSize = 32;
-	bs.setCacheSize(2*bunchSize);
-
 	//Initialize energy grid:
 	double dE = 0.1*eV;
 	diagMatrix Egamma = bs.getStates(vector3<>());
@@ -64,14 +58,14 @@ int main(int argc, char** argv)
 	logPrintf("Initialized energy grid: %lg to %lg eV with %lu points.\n", Emin/eV, (Emin+dE*(dos.out.size()-1))/eV, dos.out.size());
 	
 	//Initialize sampling parameters:
-	int ikStart, ikStop; TaskDivision(nKptsN1, mpiUtil).myRange(ikStart, ikStop);
+	int ikStart, ikStop; TaskDivision(nKpts, mpiUtil).myRange(ikStart, ikStop);
 	int nBunchesMine = ceil((ikStop-ikStart)*1./bunchSize); //number of bunches on current process
 	int iBunchInterval = std::max(1, int(round(nBunchesMine/50.))); //interval for reporting progress
-	long nKpts = nBunchesMine * bunchSize; mpiUtil->allReduce(nKpts, MPIUtil::ReduceSum); //total number of sampled k-points
+	nKpts = nBunchesMine * bunchSize; mpiUtil->allReduce(nKpts, MPIUtil::ReduceSum); //total number of sampled k-points
 	int nBands = Egamma.nRows();
 
 	logPrintf("\nCollecting DOS and KE: "); logFlush();
-	const double dosWeight = spinWeight*(1./nKpts);
+	const double dosWeight = bs.spinWeight*(1./nKpts);
 	for(int iBunch=0; iBunch<nBunchesMine; iBunch++)
 	{
 		//Generate a bunch of k-points:
@@ -103,7 +97,7 @@ int main(int argc, char** argv)
 	KEeff.allReduce(MPIUtil::ReduceSum);
 
 	//Jellium parameters:
-	const double nJellium = Zjellium / fabs(det(R));
+	const double nJellium = Zjellium / fabs(det(bs.R));
 	const double kF = std::pow(3*M_PI*M_PI*nJellium, 1./3);
 	const double eF = 0.5*kF*kF;
 

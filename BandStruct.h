@@ -45,7 +45,7 @@ public:
 	matrix3<> R; //!< lattice vectors
 	vector3<int> kfold; //!< k-point folding in original calculation
 	int nBands, spinWeight; //!< number of Wannier bands for the electrons and weight per spin channel
-	double mu; //!< chemical potential (if a metal)
+	double mu, nElectrons; //!< chemical potential (if a metal) and number of electrons per unit cell
 	int nPol; //!< number of photon polarizations in pre-contracted matrix elements
 	int nModes; //!< number of phonon modes (polarizations)
 	

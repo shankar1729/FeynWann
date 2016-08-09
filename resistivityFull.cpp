@@ -148,26 +148,20 @@ int main(int argc, char** argv)
 
 	//Get the system parameters (mu, T, lattice vectors etc.)
 	InputMap inputMap(inputFilename);
-	const double mu = inputMap.get("mu");
-	const double T = inputMap.get("T") * eV;
-	const int spinWeight = round(inputMap.get("spinWeight"));
-	const matrix3<> R = matrix3<>(0,1,1, 1,0,1, 1,1,0) * (0.5*inputMap.get("aCubic")*Angstrom);
+	const double T = inputMap.get("T") * Kelvin;
 
 	logPrintf("\nInputs after conversion to atomic units:\n");
-	logPrintf("mu = %lg\n", mu);
 	logPrintf("T = %lg\n", T);
-	logPrintf("spinWeight = %d\n", spinWeight);
-	logPrintf("R:\n");
-	R.print(globalLog, " %lg ");
+
+	//Initialize Wannier bandstructure:
+	BandStruct bs("Wannier/totalE", "Wannier/wannier", true);
+
 	if(dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
 		finalizeSystem();
 		return 0;
 	}
 	logPrintf("\n"); logFlush();
-
-	//Initialize Wannier bandstructure:
-	BandStruct bs("Wannier/wannier", mu, spinWeight, "Wannier/totalE");
 
 	//Compile list of k-points and bands within fermi level:
 	vector3<int> Nk(1,1,1); Nk *= 32;
@@ -198,7 +192,7 @@ int main(int argc, char** argv)
 			}
 		if(!need_k) continue;
 		//Calculate velocity and add relevant states:
-		std::vector< vector3<> > V = bs.getVelocity(k, R);
+		std::vector< vector3<> > V = bs.getVelocity(k);
 		for(state.b=0; state.b<E.nRows(); state.b++)
 			if(fabs(E[state.b]) < 10*T)
 			{	state.e = E[state.b];
@@ -381,9 +375,9 @@ int main(int argc, char** argv)
 	matrix fPrimeV = fPrime * V;
 	
 	//Simple estimate (analgous to resistivity.cpp, but on uniform k-mesh):
-	double Tt = (-spinWeight/(3.*NkProd)) * trace(dagger(V) * fPrimeV).real();
-	double Gamma = (spinWeight/(3.*NkProd)) * trace(dagger(V) * (B * fPrimeV)).real();
-	double rhoSimple = fabs(det(R))*Gamma/(Tt*Tt);
+	double Tt = (-bs.spinWeight/(3.*NkProd)) * trace(dagger(V) * fPrimeV).real();
+	double Gamma = (bs.spinWeight/(3.*NkProd)) * trace(dagger(V) * (B * fPrimeV)).real();
+	double rhoSimple = fabs(det(bs.R))*Gamma/(Tt*Tt);
 	double tauDrude = Tt / Gamma;
 	
 	//Calculate inv(B) * fPrimeV iteratively:
@@ -391,7 +385,7 @@ int main(int argc, char** argv)
 	B.applyInverse(fPrimeV, invB_fPrimeV);
 	
 	//Calculate conductivity tensor using Boltzmann equation:
-	matrix sigmaMat = (spinWeight/(NkProd*fabs(det(R)))) * dagger(V) * invB_fPrimeV;
+	matrix sigmaMat = (bs.spinWeight/(NkProd*fabs(det(bs.R)))) * dagger(V) * invB_fPrimeV;
 	logPrintf("\nConductivity tensor [atomic units]:\n");
 	sigmaMat.print_real(globalLog, " %12.5le ");
 	logPrintf("\n");

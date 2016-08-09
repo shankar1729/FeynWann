@@ -81,12 +81,6 @@ int main(int argc, char** argv)
 	BandStruct bs("Wannier/totalE", "Wannier/wannier", true);
 	bs.setCacheSize(2*bunchSize);
 	
-	logPrintf("\nParameters extracted from DFT calculation:\n");
-	logPrintf("mu = %lg\n", bs.mu);
-	logPrintf("spinWeight = %d\n", bs.spinWeight);
-	logPrintf("kfold:"); bs.kfold.print(globalLog, " %d ");
-	logPrintf("R:\n");
-	bs.R.print(globalLog, " %lg ");
 	if(dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
 		finalizeSystem();

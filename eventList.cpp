@@ -54,21 +54,22 @@ int main(int argc, char** argv)
 
 	//Get the system parameters (mu, T, lattice vectors etc.)
 	InputMap inputMap(inputFilename);
-	const int nKptsN1 = inputMap.get("nKptsN1");
+	const int nKpts = inputMap.get("nKpts");
 	const double Eplasmon = inputMap.get("Eplasmon") * eV;
-	const double mu = inputMap.get("mu");
-	const double T = inputMap.get("T") * eV;
-	const int spinWeight = round(inputMap.get("spinWeight"));
-	matrix3<> R = matrix3<>(0,1,1, 1,0,1, 1,1,0) * (0.5*inputMap.get("aCubic")*Angstrom);
+	const double T = inputMap.get("T") * Kelvin;
 
 	logPrintf("\nInputs after conversion to atomic units:\n");
-	logPrintf("nKptsN1 = %d\n", nKptsN1);
+	logPrintf("nKpts = %d\n", nKpts);
 	logPrintf("Eplasmon = %lg\n", Eplasmon);
-	logPrintf("mu = %lg\n", mu);
 	logPrintf("T = %lg\n", T);
-	logPrintf("spinWeight = %d\n", spinWeight);
-	logPrintf("R:\n");
-	R.print(globalLog, " %lg ");
+
+	//Initialize Wannier bandstructure:
+	std::vector< vector3<complex> > Ahat(3); //use Cartesian basis unlike other executables so that event lists can have the general uncontracted matrix element
+	for(int iDir=0; iDir<3; iDir++)
+		Ahat[iDir][iDir] = 1.;
+	BandStruct bs("Wannier/totalE", "Wannier/wannier", true, Ahat);
+	bs.setCacheSize(4);
+
 	if(dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
 		finalizeSystem();
@@ -81,13 +82,6 @@ int main(int argc, char** argv)
 	double omega = Eplasmon;
 	eps.setFrequency(omega);
 	
-	//Initialize Wannier bandstructure:
-	std::vector< vector3<complex> > Ahat(3); //use Cartesian basis unlike other executables so that event lists can have the general uncontracted matrix element
-	for(int iDir=0; iDir<3; iDir++)
-		Ahat[iDir][iDir] = 1.;
-	BandStruct bs("Wannier/wannier", mu, spinWeight, "Wannier/totalE", Ahat);
-	bs.setCacheSize(4);
-
 	//Singularity extrapolation parameters
 	double extrapCoeff[] = {-19./12, 13./3, -7./4 }; //account for constant, 1/eta and eta^2 dependence
 	//double extrapCoeff[] = { -1, 2.}; //account for constant and 1/eta dependence
@@ -95,9 +89,9 @@ int main(int argc, char** argv)
 	const double eta = 0.1*eV;
 
 	//Monte-Carlo loop over k-points:
-	const double mhlfByTsq = -0.5/(T*T), EconservePrefac = (0.5*spinWeight)/(T*sqrt(2*M_PI));
+	const double mhlfByTsq = -0.5/(T*T), EconservePrefac = (0.5*bs.spinWeight)/(T*sqrt(2*M_PI));
 	const double weightCut = 1e-2 * EconservePrefac;
-	size_t ieStart, ieStop; TaskDivision(nKptsN1, mpiUtil).myRange(ieStart, ieStop);
+	size_t ieStart, ieStop; TaskDivision(nKpts, mpiUtil).myRange(ieStart, ieStop);
 	size_t neMine = ieStop-ieStart;
 	size_t ieInterval = std::max(1, int(round(neMine/50.))); //interval for reporting progress
 	logPrintf("\nProgress: "); logFlush();
@@ -213,8 +207,8 @@ int main(int argc, char** argv)
 	//Normalize events based on the total k-points explored:
 	mpiUtil->allReduce(nkDirect, MPIUtil::ReduceSum);
 	mpiUtil->allReduce(nkPhonon, MPIUtil::ReduceSum);
-	double directPrefac = 4 * std::pow(M_PI,2) * spinWeight / (nkDirect*fabs(det(R)) * omega*omega); //prefactor that yields Im(eps)
-	double phononPrefac = 4 * std::pow(M_PI,2) * spinWeight / (nkPhonon*fabs(det(R)) * omega*omega); //prefactor that yields Im(eps)
+	double directPrefac = 4 * std::pow(M_PI,2) * bs.spinWeight / (nkDirect*fabs(det(bs.R)) * omega*omega); //prefactor that yields Im(eps)
+	double phononPrefac = 4 * std::pow(M_PI,2) * bs.spinWeight / (nkPhonon*fabs(det(bs.R)) * omega*omega); //prefactor that yields Im(eps)
 	for(Event& e: events) e.PcvSq *= directPrefac;
 	for(Event& e: eventsPh) e.PcvSq *= phononPrefac;
 
