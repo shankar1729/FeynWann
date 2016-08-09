@@ -20,7 +20,7 @@ inline double lorentzianOdd(double omega, double omega0, double breadth)
 
 int main(int argc, char** argv)
 {	string inputFilename; bool dryRun, printDefaults;
-	initSystemCmdline(argc, argv, "Monte Carlo estimate of all single-plasmon decay processes", inputFilename, dryRun, printDefaults);
+	initSystemCmdline(argc, argv, "Monte Carlo estimate of imaginary dielectric tensor (ImEps)", inputFilename, dryRun, printDefaults);
 
 	//Get the system parameters (mu, T, lattice vectors etc.)
 	InputMap inputMap(inputFilename);
@@ -46,9 +46,6 @@ int main(int argc, char** argv)
 		return 0;
 	}
 	logPrintf("\n");
-
-	//Initialize dielectric model:
-	Epsilon eps("Wannier/epsilon.dat");
 
 	//Initalize line width of electronic states
 	LineWidth lineWidth("Wannier/wannier", bs);
@@ -84,11 +81,11 @@ int main(int argc, char** argv)
 	
 	//Initialize unbroadened histograms:
 	const double domega = T;
-	Histogram ImEpsDirect(0, domega, omegaMax), breadthDirect(0, domega, omegaMax);
-	Histogram ImEpsPhonon(0, domega, omegaMax), breadthPhonon(0, domega, omegaMax), weightPhonon(0, domega, omegaMax);
-	Histogram2D ImEpsDirect_E(-EplasmonMax, domega, EplasmonMax,  0, domega, omegaMax); //ImEps resolved by carrier density
-	Histogram2D ImEpsPhonon_E(-EplasmonMax, domega, EplasmonMax,  0, domega, omegaMax);
-	int nomega = ImEpsDirect.out.size();
+	Histogram ImEpsDeltaDirect(0, domega, omegaMax), breadthDirect(0, domega, omegaMax);
+	Histogram ImEpsDeltaPhonon(0, domega, omegaMax), breadthPhonon(0, domega, omegaMax), weightPhonon(0, domega, omegaMax);
+	Histogram2D ImEpsDeltaDirect_E(-EplasmonMax, domega, EplasmonMax,  0, domega, omegaMax); //ImEpsDelta resolved by carrier density
+	Histogram2D ImEpsDeltaPhonon_E(-EplasmonMax, domega, EplasmonMax,  0, domega, omegaMax);
+	int nomega = ImEpsDeltaDirect.out.size();
 	logPrintf("Initialized frequency grid: 0 to %lg eV with %d points.\n", (domega*(nomega-1))/eV, nomega);
 	
 	//Monte Carlo loop:
@@ -124,9 +121,9 @@ int main(int argc, char** argv)
 				{	double omega = E[c] - E[v]; //energy conservation
 					if(omega<domega || omega>=omegaMax) continue; //irrelevant event
 					double weight = (directPrefac0/(omega*omega)) * (F[v]-F[c]) * P[0](c,v).norm(); //norm=abs^2
-					ImEpsDirect.addEvent(omega, weight);
-					ImEpsDirect_E.addEvent(E[v], omega, -weight); //hole
-					ImEpsDirect_E.addEvent(E[c], omega, +weight); //electron
+					ImEpsDeltaDirect.addEvent(omega, weight);
+					ImEpsDeltaDirect_E.addEvent(E[v], omega, -weight); //hole
+					ImEpsDeltaDirect_E.addEvent(E[c], omega, +weight); //electron
 					breadthDirect.addEvent(omega, weight*(ImE[c]+ImE[v]));
 				}
 			}
@@ -173,11 +170,11 @@ int main(int argc, char** argv)
 									MeffSqExtrap += extrapCoeff[z] * Meff[z].norm();
 								double weight = (phononPrefac0/(omega*omega)) * (F1[v]-F2[c]) * (nPh + 0.5*(1.-ae)) * MeffSqExtrap;
 								//Histogram:
-								ImEpsPhonon.addEvent(omega, weight);
-								ImEpsPhonon_E.addEvent(E1[v], omega, -weight); //hole
-								ImEpsPhonon_E.addEvent(E2[c], omega, +weight); //electron
+								ImEpsDeltaPhonon.addEvent(omega, weight);
+								ImEpsDeltaPhonon_E.addEvent(E1[v], omega, -weight); //hole
+								ImEpsDeltaPhonon_E.addEvent(E2[c], omega, +weight); //electron
 								breadthPhonon.addEvent(omega, fabs(weight)*(ImE2[c]+ImE1[v]));
-								weightPhonon.addEvent(omega, fabs(weight)); //different from ImEpsPhonon, since weight can be negative due to singularity extrapolation
+								weightPhonon.addEvent(omega, fabs(weight)); //different from ImEpsDeltaPhonon, since weight can be negative due to singularity extrapolation
 							}
 						}
 					}
@@ -191,10 +188,10 @@ int main(int argc, char** argv)
 			logFlush();
 		}
 	}
-	ImEpsDirect.allReduce(MPIUtil::ReduceSum);
-	ImEpsPhonon.allReduce(MPIUtil::ReduceSum);
-	ImEpsDirect_E.allReduce(MPIUtil::ReduceSum);
-	ImEpsPhonon_E.allReduce(MPIUtil::ReduceSum);
+	ImEpsDeltaDirect.allReduce(MPIUtil::ReduceSum);
+	ImEpsDeltaPhonon.allReduce(MPIUtil::ReduceSum);
+	ImEpsDeltaDirect_E.allReduce(MPIUtil::ReduceSum);
+	ImEpsDeltaPhonon_E.allReduce(MPIUtil::ReduceSum);
 	breadthDirect.allReduce(MPIUtil::ReduceSum);
 	breadthPhonon.allReduce(MPIUtil::ReduceSum);
 	weightPhonon.allReduce(MPIUtil::ReduceSum);
@@ -202,60 +199,56 @@ int main(int argc, char** argv)
 	
 	//Normalize the breadths:
 	for(int iomega=0; iomega<nomega; iomega++)
-	{	breadthDirect.out[iomega] = std::max(T, ImEpsDirect.out[iomega] ? breadthDirect.out[iomega]/ImEpsDirect.out[iomega] : 0.);
+	{	breadthDirect.out[iomega] = std::max(T, ImEpsDeltaDirect.out[iomega] ? breadthDirect.out[iomega]/ImEpsDeltaDirect.out[iomega] : 0.);
 		breadthPhonon.out[iomega] = std::max(T, weightPhonon.out[iomega] ? breadthPhonon.out[iomega]/weightPhonon.out[iomega] : 0.);
 	}
 	breadthDirect.print("breadth-direct.dat", 1./eV, 1./eV);
 	breadthPhonon.print("breadth-phonon.dat", 1./eV, 1./eV);
 	
-	//Print experimental linewidth:
-	Histogram imEpsToGamma(0, domega, EplasmonMax);
-	if(mpiUtil->isHead())
-	{	ofstream ofs("GammaAll-expt.dat");
-		for(size_t jomega=0; jomega<imEpsToGamma.out.size(); jomega++)
-		{	double omega = jomega ? jomega*domega : 1e-3*domega; //avoid exact zero in calculation
-			eps.setFrequency(omega, false);
-			double Gamma = eps.exptLinewidth();
-			imEpsToGamma.out[jomega] = Gamma / eps.epsilon.imag();
-			omega = jomega*domega; //output exact zero
-			ofs << omega/eV << '\t' << Gamma/eV << '\n';
-		}
-	}
-	mpiUtil->bcast(imEpsToGamma.out.data(), imEpsToGamma.out.size());
-	
-	//Convert ImEps to Gamma with broadening:
-	Histogram GammaDirect(0, domega, EplasmonMax);
-	Histogram GammaPhonon(0, domega, EplasmonMax);
-	Histogram2D GammaDirect_E(-EplasmonMax, domega, EplasmonMax,  0, domega, EplasmonMax);
-	Histogram2D GammaPhonon_E(-EplasmonMax, domega, EplasmonMax,  0, domega, EplasmonMax);
+	//Apply broadening:
+	Histogram ImEpsDirect(0, domega, EplasmonMax);
+	Histogram ImEpsPhonon(0, domega, EplasmonMax);
+	Histogram2D ImEpsDirect_E(-EplasmonMax, domega, EplasmonMax,  0, domega, EplasmonMax);
+	Histogram2D ImEpsPhonon_E(-EplasmonMax, domega, EplasmonMax,  0, domega, EplasmonMax);
 	int iomegaStart, iomegaStop; TaskDivision(nomega, mpiUtil).myRange(iomegaStart, iomegaStop);
 	logPrintf("Applying broadening ... "); logFlush();
 	for(int iomega=iomegaStart; iomega<iomegaStop; iomega++) //input frequency grid split over MPI
 	{	double omegaCur = iomega*domega;
 		double bDirect = breadthDirect.out[iomega];
 		double bPhonon = breadthPhonon.out[iomega];
-		for(size_t jomega=0; jomega<GammaDirect.out.size(); jomega++) //output frequency grid
+		for(size_t jomega=0; jomega<ImEpsDirect.out.size(); jomega++) //output frequency grid
 		{	double omega = jomega*domega;
-			double ieToGamma = imEpsToGamma.out[jomega];
-			double kernelDirect = ieToGamma * lorentzianOdd(omega, omegaCur, bDirect) * domega;
-			double kernelPhonon = ieToGamma * lorentzianOdd(omega, omegaCur, bPhonon) * domega;
-			GammaDirect.out[jomega] += kernelDirect * ImEpsDirect.out[iomega];
-			GammaPhonon.out[jomega] += kernelPhonon * ImEpsPhonon.out[iomega];
+			double kernelDirect = lorentzianOdd(omega, omegaCur, bDirect) * domega;
+			double kernelPhonon = lorentzianOdd(omega, omegaCur, bPhonon) * domega;
+			ImEpsDirect.out[jomega] += kernelDirect * ImEpsDeltaDirect.out[iomega];
+			ImEpsPhonon.out[jomega] += kernelPhonon * ImEpsDeltaPhonon.out[iomega];
 			//Carrier distributions:
-			const int nE = GammaDirect_E.nE; assert(nE == ImEpsDirect_E.nE);
+			const int nE = ImEpsDirect_E.nE; assert(nE == ImEpsDeltaDirect_E.nE);
 			for(int iE=0; iE<nE; iE++)
 			{	int iOE = iomega*nE + iE;
 				int jOE = jomega*nE + iE;
-				GammaDirect_E.out[jOE] += kernelDirect * ImEpsDirect_E.out[iOE];
-				GammaPhonon_E.out[jOE] += kernelPhonon * ImEpsPhonon_E.out[iOE];
+				ImEpsDirect_E.out[jOE] += kernelDirect * ImEpsDeltaDirect_E.out[iOE];
+				ImEpsPhonon_E.out[jOE] += kernelPhonon * ImEpsDeltaPhonon_E.out[iOE];
 			}
 		}
 	}
-	GammaDirect.allReduce(MPIUtil::ReduceSum); GammaDirect.print("GammaAll-direct.dat", 1./eV, 1./eV);
-	GammaPhonon.allReduce(MPIUtil::ReduceSum); GammaPhonon.print("GammaAll-phonon.dat", 1./eV, 1./eV);
-	GammaDirect_E.allReduce(MPIUtil::ReduceSum); GammaDirect_E.print("carrierDistribAll-direct.dat", 1./eV, 1./eV, 1.);
-	GammaPhonon_E.allReduce(MPIUtil::ReduceSum); GammaPhonon_E.print("carrierDistribAll-phonon.dat", 1./eV, 1./eV, 1.);
+	ImEpsDirect.allReduce(MPIUtil::ReduceSum);
+	ImEpsPhonon.allReduce(MPIUtil::ReduceSum);
+	ImEpsDirect_E.allReduce(MPIUtil::ReduceSum); ImEpsDirect_E.print("carrierDistribAll-direct.dat", 1./eV, 1./eV, 1.);
+	ImEpsPhonon_E.allReduce(MPIUtil::ReduceSum); ImEpsPhonon_E.print("carrierDistribAll-phonon.dat", 1./eV, 1./eV, 1.);
 	logPrintf("done.\n"); logFlush();
+	
+	//Output ImEps:
+	if(mpiUtil->isHead())
+	{	ofstream ofs("ImEps.dat");
+		ofs << "#omega[eV] direct phonon\n";
+		for(size_t iOmega=0; iOmega<ImEpsDirect.out.size(); iOmega++)
+		{	double omega = ImEpsDirect.Emin + ImEpsDirect.dE * iOmega;
+			ofs << omega/eV << '\t'
+				<< ImEpsDirect.out[iOmega] << '\t'
+				<< ImEpsPhonon.out[iOmega] << '\n';
+		}
+	}
 	
 	finalizeSystem();
 	return 0;

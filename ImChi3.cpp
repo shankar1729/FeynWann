@@ -21,7 +21,7 @@ inline double lorentzianOdd(double omega, double omega0, double breadth)
 
 int main(int argc, char** argv)
 {	string inputFilename; bool dryRun, printDefaults;
-	initSystemCmdline(argc, argv, "Monte Carlo estimate of two-plasmon decay rate", inputFilename, dryRun, printDefaults);
+	initSystemCmdline(argc, argv, "Monte Carlo estimate of imaginary cubic susceptibility (ImChi3)", inputFilename, dryRun, printDefaults);
 
 	//Get the system parameters (mu, T, lattice vectors etc.)
 	InputMap inputMap(inputFilename);
