@@ -20,8 +20,9 @@ public:
 	void save(string fname) const
 	{	//Calculate cell weights:
 		int nCells = bs.cellMap.size();
-		PeriodicLookup<vector3<>> plook(std::vector<vector3<>>(), (~bs.R)*bs.R, nCells);
-		std::vector<std::vector<int>> cellSets; cellSets.reserve(nCells);
+		std::vector<std::vector<int>> cellSets; cellSets.reserve(nCells); //cells grouped by translatinal equivalence
+		std::vector<vector3<>> cellSupArr; cellSupArr.reserve(nCells); //unique cells in supercell coordinates
+		PeriodicLookup<vector3<>> plook(cellSupArr, (~bs.R)*bs.R, nCells);
 		for(int iCell=0; iCell<nCells; iCell++)
 		{	vector3<> cellSup;
 			for(int j=0; j<3; j++)
@@ -29,6 +30,7 @@ public:
 			size_t setIndex = plook.find(cellSup);
 			if(setIndex == string::npos) //not yet found, create new set:
 			{	plook.addPoint(cellSets.size(), cellSup);
+				cellSupArr.push_back(cellSup);
 				cellSets.push_back(std::vector<int>(1,iCell));
 			}
 			else cellSets[setIndex].push_back(iCell);
@@ -39,7 +41,7 @@ public:
 			for(int iCell: cellSet)
 				cellWeights[iCell] = 1./(cellSet.size()*cellSets.size());
 		//Transform from Bloch to Wannier:
-		int qStart, qStop; TaskDivision(kArr.size()).myRange(qStart, qStop);
+		int qStart, qStop; TaskDivision(kArr.size(), mpiUtil).myRange(qStart, qStop);
 		std::vector<vector3<>> kArrMine(kArr.begin()+qStart, kArr.begin()+qStop);
 		auto ceArr = bs.getElectronCache(kArrMine);
 		matrix ImSigmaRS(bs.nBands*bs.nBands, ceArr.size());
@@ -169,7 +171,7 @@ int main(int argc, char** argv)
 		if(fp)
 		{	diagMatrix E = bs.getStates(kInArr[q]);
 			for(int b=0; b<nBands; b++)
-				fprintf(fp, "%+19.12le %19.12le\n", E[b]/eV, ImSigma[q][b]/(1./fs));
+				fprintf(fp, "%+19.12le %19.12le\n", E[b], ImSigma[q][b]);
 		}
 	}
 	if(fp) fclose(fp);
