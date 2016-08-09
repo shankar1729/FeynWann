@@ -27,15 +27,19 @@ int main(int argc, char** argv)
 	long nKpts = inputMap.get("nKpts");
 	const double EplasmonMax = inputMap.get("EplasmonMax") * eV;
 	const double T = inputMap.get("T") * Kelvin;
-	
+	const double polTheta = inputMap.get("polTheta") * (M_PI/180);
+	const double polPhi = inputMap.get("polPhi") * (M_PI/180);
+
 	logPrintf("\nInputs after conversion to atomic units:\n");
 	logPrintf("nKpts = %ld\n", nKpts);
 	logPrintf("EplasmonMax = %lg\n", EplasmonMax);
 	logPrintf("T = %lg\n", T);
+	logPrintf("polTheta = %lg\n", polTheta);
+	logPrintf("polPhi = %lg\n", polPhi);
 
 	//Initialize Wannier bandstructure:
 	std::vector< vector3<complex> > Ahat(1);
-	Ahat[0] = vector3<complex>(1., 0., 0.); //cubic symmetry => one projection sufficient (also since not looking at momentum distribution)
+	Ahat[0] = vector3<complex>(sin(polTheta)*cos(polPhi), sin(polTheta)*sin(polPhi), cos(polTheta));
 	BandStruct bs("Wannier/totalE", "Wannier/wannier", true, Ahat);
 	const int bunchSize = 32;
 	bs.setCacheSize(2*bunchSize);
