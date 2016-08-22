@@ -17,11 +17,13 @@ void readMatrix(matrix& m, string fname, int spinWeight)
 }
 
 BandStruct::BandStruct(string totalEprefix, string wannierPrefix, bool needPhonons, std::vector< vector3<complex> > Ahat)
-: spinWeight(0), mu(NAN), nPol(Ahat.size()), cacheSize(6)
+: spinWeight(0), mu(NAN), nElectrons(0), nPol(Ahat.size()), cacheSize(6)
 {	
 	//Read relevant parameters from totalE.out:
 	logPrintf("\nReading '%s.out' ... ", totalEprefix.c_str()); logFlush();
 	ifstream ifs(totalEprefix + ".out");
+	if(!ifs.is_open()) die("could not open file.\n");
+	bool initDone = false; //whether finished reading the initialization part of totalE.out
 	while(!ifs.eof())
 	{	string line; getline(ifs, line);
 		if(line.find("Initializing the grid") != string::npos)
@@ -45,14 +47,25 @@ BandStruct::BandStruct(string totalEprefix, string wannierPrefix, bool needPhono
 			else
 				die("Spin-polarized modes not yet supported.\n");
 		}
-		else if(line.find("FillingsUpdate:") != string::npos)
+		else if(line.find("Initialization completed") != string::npos)
+		{	initDone = true;
+		}
+		else if(initDone && (line.find("FillingsUpdate:") != string::npos))
 		{	istringstream iss(line); string buf;
 			iss >> buf >> buf >> mu >> buf >> nElectrons;
+		}
+		else if(line.find("nElectrons:") == 0) //nElectrons, nBands, nStates line
+		{	istringstream iss(line); string buf;
+			iss >> buf >> nElectrons;
 		}
 	}
 	ifs.close();
 	logPrintf("done.\n"); logFlush();
-	logPrintf("Parameters extracted from DFT calculation:\n");
+	if(std::isnan(mu))
+	{	mu = 0.;
+		logPrintf("NOTE: mu unavailable (probably semiconductor/insulator); setting to zero.\n");
+	}
+	logPrintf("\nParameters extracted from DFT calculation:\n");
 	logPrintf("mu = %lg\n", mu);
 	logPrintf("nElectrons = %lg\n", nElectrons);
 	logPrintf("spinWeight = %d\n", spinWeight);

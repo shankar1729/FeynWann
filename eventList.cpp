@@ -77,11 +77,8 @@ int main(int argc, char** argv)
 	}
 	logPrintf("\n");
 
-	//Initialize dielectric model:
-	Epsilon eps("Wannier/epsilon.dat");
 	double omega = Eplasmon;
-	eps.setFrequency(omega);
-	
+
 	//Singularity extrapolation parameters
 	double extrapCoeff[] = {-19./12, 13./3, -7./4 }; //account for constant, 1/eta and eta^2 dependence
 	//double extrapCoeff[] = { -1, 2.}; //account for constant and 1/eta dependence
