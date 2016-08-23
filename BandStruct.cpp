@@ -17,7 +17,7 @@ void readMatrix(matrix& m, string fname, int spinWeight)
 }
 
 BandStruct::BandStruct(string totalEprefix, string wannierPrefix, bool needPhonons, std::vector< vector3<complex> > Ahat)
-: spinWeight(0), mu(NAN), nElectrons(0), nPol(Ahat.size()), cacheSize(6)
+: spinWeight(0), mu(NAN), nElectrons(0), nValence(0), nPol(Ahat.size()), cacheSize(6)
 {	
 	//Read relevant parameters from totalE.out:
 	logPrintf("\nReading '%s.out' ... ", totalEprefix.c_str()); logFlush();
@@ -63,7 +63,10 @@ BandStruct::BandStruct(string totalEprefix, string wannierPrefix, bool needPhono
 	logPrintf("done.\n"); logFlush();
 	if(std::isnan(mu))
 	{	mu = 0.;
-		logPrintf("NOTE: mu unavailable (probably semiconductor/insulator); setting to zero.\n");
+		logPrintf("NOTE: mu unavailable (setting to zero); must be semiconductor/insulator.\n");
+		nValence = int(round(nElectrons/spinWeight)); //nValence is set to zero when mu is available
+		if(fabs(nValence*spinWeight-nElectrons > 1e-6))
+			die("Number of electrons incompatible with semiconductor / insulator.\n");
 	}
 	logPrintf("\nParameters extracted from DFT calculation:\n");
 	logPrintf("mu = %lg\n", mu);

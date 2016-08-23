@@ -144,7 +144,9 @@ int main(int argc, char** argv)
 				
 				for(int bIn=0; bIn<Ein.nRows(); bIn++)
 				{	for(int bOut=0; bOut<Eout.nRows(); bOut++)
-					{	double fOut = 1./(exp(Eout[bOut]/T)+1);
+					{	double fOut = bs.nValence
+							? (bOut<bs.nValence ? 1. : 0.) //insulator/semiconductor
+							: 1./(exp(Eout[bOut]/T)+1); //metal (energies referenced to mu)
 						for(int alpha=0; alpha<omegaPh.nRows(); alpha ++)
 						{	double nPh = 1./(exp(omegaPh[alpha]/T) - 1.);
 							for(int ae=-1; ae<=+1; ae+=2)
