@@ -76,6 +76,31 @@ int main(int argc, char** argv)
 	}
 	logPrintf("\n");
 
+	/* //HACK: check translation invariance of e-ph matrix elements:
+	if(mpiUtil->isHead())
+	{	FILE* fp = fopen("test_gePh.dat", "w");
+		for(int block=0; block<200; block++)
+		{	vector3<> k1; for(int j=0; j<3; j++) k1[j] = Random::uniform();
+			std::vector< vector3<> > k2arr(bunchSize);
+			for(vector3<>& k2: k2arr) for(int j=0; j<3; j++) k2[j] = k1[j] + Random::normal(0., 0.05, 2);
+			k2arr[0] = k1;
+			std::vector<matrix> gePh[bunchSize];
+			bs.setPhononMatElemArray(k1, k2arr, gePh);
+			for(int ik2=0; ik2<bunchSize; ik2++)
+			{	vector3<> dk = k2arr[ik2] - k1;
+				for(int j=0; j<3; j++) dk[j] -= floor(0.5+dk[j]);
+				double dkMag = (dk * inv(bs.R)).length();
+				fprintf(fp, "%lf", dkMag);
+				for(int mode=0; mode<3; mode++) //pick only acoustic-like modes
+					for(int b=0; b<bs.nBands; b++)
+						fprintf(fp, " %le", gePh[ik2][mode](b,b).abs());
+				fprintf(fp, "\n");
+			}
+		}
+		fclose(fp);
+	}
+	die("Testing.\n"); */
+	
 	// Compute T and Gamma
 	std::vector<matrix3<>> Tarr(totalBlocks), GammaArr(totalBlocks), rhoArr(totalBlocks); //results per block
 	std::vector<double> rhoBarArr(totalBlocks), tauArr(totalBlocks), tauDrudeArr(totalBlocks), vFarr(totalBlocks), gArr(totalBlocks);
