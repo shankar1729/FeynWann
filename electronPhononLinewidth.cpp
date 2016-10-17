@@ -81,6 +81,14 @@ int main(int argc, char** argv)
 	BandStruct bs("Wannier/totalE", "Wannier/wannier", true);
 	bs.setCacheSize(2*bunchSize);
 	
+	vector3<int> NkIn = bs.kfold, NkOut;
+	for(int j=0; j<3; j++)
+		NkOut[j] = NkIn[j] * (bs.isTruncated[j] ? 1 : NkMult); //multiply k-points in periodic directions
+	logPrintf("NkFine = "); NkOut.print(globalLog, " %d ");
+	vector3<int> strideIn(NkIn[1]*NkIn[2], NkIn[2], 1);
+	int prodNkIn = NkIn[0]*NkIn[1]*NkIn[2];
+	bs.setCacheSize(NkOut[2]*4);
+	
 	if(dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
 		finalizeSystem();
@@ -88,12 +96,6 @@ int main(int argc, char** argv)
 	}
 	logPrintf("\n");
 
-	vector3<int> NkIn = bs.kfold;
-	vector3<int> NkOut = NkIn * NkMult;
-	vector3<int> strideIn(NkIn[1]*NkIn[2], NkIn[2], 1);
-	int prodNkIn = NkIn[0]*NkIn[1]*NkIn[2];
-	bs.setCacheSize(NkOut[2]*4);
-	
 	//Calculate lifetimes for states in input k-point mesh:
 	int nBands = bs.nBands;
 	std::vector<diagMatrix> ImSigma(prodNkIn, diagMatrix(nBands, 0.)); //imaginary part of self-energy on NkIn mesh
@@ -130,7 +132,7 @@ int main(int argc, char** argv)
 		//Initialize k2 array:
 		for(ikOut[2]=0; ikOut[2]<NkOut[2]; ikOut[2]++)
 			for(int j=0; j<3; j++)
-				kOutArr[ikOut[2]][j] = (ikOut[j] + 0.5) / NkOut[j]; //use Gamma-offset mesh for out
+				kOutArr[ikOut[2]][j] = (ikOut[j] + (bs.isTruncated[j] ? 0.0 : 0.5)) / NkOut[j]; //use Gamma-offset mesh for out (offset along periodic directions alone)
 		//Loop over first k-point (irreducible wedge):
 		for(int q=0; q<prodNkIn; q++)
 		{	const vector3<>& kIn = kInArr[q];

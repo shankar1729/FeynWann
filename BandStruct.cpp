@@ -47,6 +47,31 @@ BandStruct::BandStruct(string totalEprefix, string wannierPrefix, bool needPhono
 			else
 				die("Spin-polarized modes not yet supported.\n");
 		}
+		else if(line.find("coulomb-interaction") != string::npos)
+		{	istringstream iss(line); string cmdName, typeString, dirString;
+			iss >> cmdName >> typeString >> dirString;
+			if(typeString == "Periodic")
+			{	isTruncated = vector3<bool>(false, false, false);
+			}
+			else if(typeString == "Slab")
+			{	isTruncated = vector3<bool>(false, false, false);
+				if(dirString == "100") isTruncated[0] = true;
+				else if(dirString == "010") isTruncated[1] = true;
+				else if(dirString == "001") isTruncated[2] = true;
+				else die("Unrecognized truncation direction '%s'\n", dirString.c_str());
+			}
+			else if(typeString == "Wire" || typeString == "Cylindrical")
+			{	isTruncated = vector3<bool>(true, true, true);
+				if(dirString == "100") isTruncated[0] = false;
+				else if(dirString == "010") isTruncated[1] = false;
+				else if(dirString == "001") isTruncated[2] = false;
+				else die("Unrecognized truncation direction '%s'\n", dirString.c_str());
+			}
+			else if(typeString == "Isolated" || typeString == "Spherical")
+			{	isTruncated = vector3<bool>(true, true, true);
+			}
+			else die("Unrecognized truncation type '%s'\n", typeString.c_str());
+		}
 		else if(line.find("Initialization completed") != string::npos)
 		{	initDone = true;
 		}
@@ -72,7 +97,8 @@ BandStruct::BandStruct(string totalEprefix, string wannierPrefix, bool needPhono
 	logPrintf("mu = %lg\n", mu);
 	logPrintf("nElectrons = %lg\n", nElectrons);
 	logPrintf("spinWeight = %d\n", spinWeight);
-	logPrintf("kfold:"); kfold.print(globalLog, " %d ");
+	logPrintf("kfold = "); kfold.print(globalLog, " %d ");
+	logPrintf("isTruncated = "); isTruncated.print(globalLog, " %d ");
 	logPrintf("R:\n");
 	R.print(globalLog, " %lg ");
 	
