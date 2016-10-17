@@ -99,7 +99,6 @@ int main(int argc, char** argv)
 	}
 	vector3<int> strideIn(NkIn[1]*NkIn[2], NkIn[2], 1);
 	int prodNkIn = NkIn[0]*NkIn[1]*NkIn[2];
-	bs.setCacheSize(NkOut[2]*4);
 	
 	if(dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
@@ -121,40 +120,46 @@ int main(int argc, char** argv)
 				kIn[j] = kInOff[j] + ikIn[j] * (1./NkIn[j]); //use Gamma-centered mesh for in
 		}
 	}
-	double prefacImSigma = 0.5 * 2*M_PI/(NkOut[0]*NkOut[1]*NkOut[2]); //Note factor of 0.5 between decay rate and ImSigma due to squaring of wavefunctions to probability
+	std::vector<vector3<>> kOutArr(NkOut[0] * NkOut[1] * NkOut[2]);
+	vector3<int> strideOut(NkOut[1]*NkOut[2], NkOut[2], 1);
+	{	vector3<> ikOut;
+		for(ikOut[0]=0; ikOut[0]<NkOut[0]; ikOut[0]++)
+		for(ikOut[1]=0; ikOut[1]<NkOut[1]; ikOut[1]++)
+		for(ikOut[2]=0; ikOut[2]<NkOut[2]; ikOut[2]++)
+		{	vector3<>& kOut = kOutArr[dot(ikOut,strideOut)];
+			for(int j=0; j<3; j++)
+				kOut[j] = kInOff[j] + (ikOut[j] + (bs.isTruncated[j] ? 0.0 : 0.5)) / NkOut[j]; //use Gamma-offset mesh for out (offset along periodic directions alone)
+		}
+	}
+	double prefacImSigma = 0.5 * 2*M_PI/(kOutArr.size()); //Note factor of 0.5 between decay rate and ImSigma due to squaring of wavefunctions to probability
 	double EconserveScaleFac = 1./T, EconservePrefac = 1./(M_PI*T); //energy conserving Lorentzian parameters
-	std::vector< std::vector<matrix> > gePhArr(NkOut[2]);
 	//Loop over blocks of one dimension of second k-point
-	std::vector< vector3<> > kOutArr(NkOut[2]);
-	int NkOut01 = NkOut[0] * NkOut[1];
-	int ik01start = (NkOut01 * mpiUtil->iProcess()) / mpiUtil->nProcesses();
-	int ik01stop = (NkOut01 * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
-	int nk01mine = ik01stop-ik01start;
-	int nk01interval = std::max(1, int(round(nk01mine/50.))); //interval for reporting progress
+	int ikOutStart = (kOutArr.size() * mpiUtil->iProcess()) / mpiUtil->nProcesses();
+	int ikOutStop = (kOutArr.size() * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
+	int nkOutBlocks = ceildiv(ikOutStop-ikOutStart, bunchSize);
+	int nkOutInterval = std::max(1, int(round(nkOutBlocks/50.))); //interval for reporting progress
 	vector3<int> ikOut;
-	for(int ik01=ik01start; ik01<ik01stop; ik01++)
-	{	ikOut[0] = ik01 / NkOut[1];
-		ikOut[1] = ik01 - ikOut[0] * NkOut[1];
-		//Print progress:
-		int nk01done = ik01-ik01start+1;
-		if(nk01done % nk01interval == 0)
-		{	logPrintf("Working on nk01 = %d of %d\n", nk01done, nk01mine);
+	for(int ikOut=ikOutStart; ikOut<ikOutStop; ikOut+=bunchSize)
+	{	//Print progress:
+		int ikOutBlocks = (ikOut-ikOutStart)/bunchSize+1;
+		if(ikOutBlocks % nkOutInterval == 0)
+		{	logPrintf("Working on ikOutBlock = %d of %d\n", ikOutBlocks, nkOutBlocks);
 			logFlush();
 		}
 		//Initialize k2 array:
-		for(ikOut[2]=0; ikOut[2]<NkOut[2]; ikOut[2]++)
-			for(int j=0; j<3; j++)
-				kOutArr[ikOut[2]][j] = kInOff[j] + (ikOut[j] + (bs.isTruncated[j] ? 0.0 : 0.5)) / NkOut[j]; //use Gamma-offset mesh for out (offset along periodic directions alone)
+		int bunchSizeCur = std::min(bunchSize, ikOutStop-ikOut);
+		std::vector<vector3<>> kOutCur(kOutArr.begin()+ikOut, kOutArr.begin()+ikOut+bunchSizeCur);
+		std::vector< std::vector<matrix> > gePhArr(bunchSizeCur);
 		//Loop over first k-point (irreducible wedge):
 		for(int q=0; q<prodNkIn; q++)
 		{	const vector3<>& kIn = kInArr[q];
-			bs.setPhononMatElemArray(kIn, kOutArr, gePhArr.data());
+			bs.setPhononMatElemArray(kIn, kOutCur, gePhArr.data());
 			const diagMatrix& Ein = bs.getStates(kIn);
-			for(int ikOut2=0; ikOut2<NkOut[2]; ikOut2++)
-			{	const vector3<>& kOut = kOutArr[ikOut2];
+			for(int ik2=0; ik2<bunchSizeCur; ik2++)
+			{	const vector3<>& kOut = kOutCur[ik2];
 				diagMatrix Eout = bs.getStates(kOut);
 				diagMatrix omegaPh = bs.getPhononModes(kIn - kOut);
-				const std::vector<matrix>& gePh = gePhArr[ikOut2];
+				const std::vector<matrix>& gePh = gePhArr[ik2];
 				
 				for(int bIn=0; bIn<Ein.nRows(); bIn++)
 				{	for(int bOut=0; bOut<Eout.nRows(); bOut++)
