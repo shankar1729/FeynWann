@@ -72,10 +72,17 @@ int main(int argc, char** argv)
 	InputMap inputMap(inputFilename);
 	const double T = inputMap.get("T") * Kelvin;
 	const int NkMult = int(round(inputMap.get("NkMult"))); //increase in number of k-points for phonon mesh
+	vector3<> k0; //optional input to get linewidths at single k-point
+	k0[0] = inputMap.get("k0x", INFINITY);
+	k0[1] = inputMap.get("k0y", INFINITY);
+	k0[2] = inputMap.get("k0z", INFINITY);
 	logPrintf("\nInputs after conversion to atomic units:\n");
 	logPrintf("T = %lg\n", T);
 	logPrintf("NkMult = %d\n", NkMult);
-
+	if(std::isfinite(k0.length_squared()))
+	{	logPrintf("k0 = ");
+		k0.print(globalLog, " %lf ");
+	}
 	//Initialize Wannier bandstructure:
 	const int bunchSize = 32;
 	BandStruct bs("Wannier/totalE", "Wannier/wannier", true);
@@ -85,6 +92,11 @@ int main(int argc, char** argv)
 	for(int j=0; j<3; j++)
 		NkOut[j] = NkIn[j] * (bs.isTruncated[j] ? 1 : NkMult); //multiply k-points in periodic directions
 	logPrintf("NkFine = "); NkOut.print(globalLog, " %d ");
+	vector3<> kInOff; //extra offset for k-point meshes (none for mesh mode)
+	if(std::isfinite(k0.length_squared()))
+	{	NkIn = vector3<int>(1,1,1);
+		kInOff = k0; //offset k-meshes by supplied special point
+	}
 	vector3<int> strideIn(NkIn[1]*NkIn[2], NkIn[2], 1);
 	int prodNkIn = NkIn[0]*NkIn[1]*NkIn[2];
 	bs.setCacheSize(NkOut[2]*4);
@@ -106,7 +118,7 @@ int main(int argc, char** argv)
 		for(ikIn[2]=0; ikIn[2]<NkIn[2]; ikIn[2]++)
 		{	vector3<>& kIn = kInArr[dot(ikIn,strideIn)];
 			for(int j=0; j<3; j++)
-				kIn[j] = ikIn[j] * (1./NkIn[j]); //use Gamma-centered mesh for in
+				kIn[j] = kInOff[j] + ikIn[j] * (1./NkIn[j]); //use Gamma-centered mesh for in
 		}
 	}
 	double prefacImSigma = 0.5 * 2*M_PI/(NkOut[0]*NkOut[1]*NkOut[2]); //Note factor of 0.5 between decay rate and ImSigma due to squaring of wavefunctions to probability
@@ -132,7 +144,7 @@ int main(int argc, char** argv)
 		//Initialize k2 array:
 		for(ikOut[2]=0; ikOut[2]<NkOut[2]; ikOut[2]++)
 			for(int j=0; j<3; j++)
-				kOutArr[ikOut[2]][j] = (ikOut[j] + (bs.isTruncated[j] ? 0.0 : 0.5)) / NkOut[j]; //use Gamma-offset mesh for out (offset along periodic directions alone)
+				kOutArr[ikOut[2]][j] = kInOff[j] + (ikOut[j] + (bs.isTruncated[j] ? 0.0 : 0.5)) / NkOut[j]; //use Gamma-offset mesh for out (offset along periodic directions alone)
 		//Loop over first k-point (irreducible wedge):
 		for(int q=0; q<prodNkIn; q++)
 		{	const vector3<>& kIn = kInArr[q];
@@ -163,7 +175,8 @@ int main(int argc, char** argv)
 		}
 	}
 	FILE* fp = 0;
-	if(mpiUtil->isHead()) fp = fopen("ImSigma_ePh.dat", "w");
+	if(prodNkIn==1) logPrintf("\n#E ImSigma_ePh\n");
+	if(mpiUtil->isHead()) fp = (prodNkIn==1) ? globalLog : fopen("ImSigma_ePh.dat", "w"); //for special k-point mode, only report in log file
 	for(int q=0; q<prodNkIn; q++)
 	{	ImSigma[q].allReduce(MPIUtil::ReduceSum);
 		if(fp)
@@ -172,7 +185,8 @@ int main(int argc, char** argv)
 				fprintf(fp, "%+19.12le %19.12le\n", E[b], ImSigma[q][b]);
 		}
 	}
-	if(fp) fclose(fp);
+	if(fp && fp != globalLog) fclose(fp);
+	if(prodNkIn==1) { logPrintf("\n"); finalizeSystem(); return 0; } //Skip wannierization for special k-point mode
 	
 	//Wannierized output:
 	Wannierizer(bs, ImSigma, kInArr).save("Wannier/wannier.mlwfImSigma_ePh");
