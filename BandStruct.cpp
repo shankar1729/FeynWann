@@ -148,6 +148,7 @@ BandStruct::BandStruct(string totalEprefix, string wannierPrefix, bool needPhono
 		{	omegaMain = std::min(mu-eMin, eMax-mu);
 			if(omegaMain < 0.) omegaMain = 0.; //if Fermi level does not lie in [eMin,eMax]
 		}
+		eMinMain = eMin; eMaxMain = eMax;
 	}
 	if(omegaMain)
 	{	logPrintf("Initialized main window of half-width %lf eV with %d of %d Wannier centers.\n", omegaMain/eV, nMain, nBands);

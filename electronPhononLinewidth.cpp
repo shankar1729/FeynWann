@@ -64,6 +64,15 @@ public:
 	}
 };
 
+inline bool eigsEqual(const diagMatrix& E1, const diagMatrix& E2, double Emin, double Emax, double tol)
+{	if(E1.nRows() != E2.nRows()) return false;
+	for(int b=0; b<E1.nRows(); b++)
+	{	if(E1[b]>=Emin && E1[b]<=Emax && fabs(E1[b]-E2[b])>tol)
+			return false;
+	}
+	return true;
+}
+
 int main(int argc, char** argv)
 {   string inputFilename; bool dryRun, printDefaults;
 	initSystemCmdline(argc, argv, "Electron-phonon scattering contribution to electron linewidth", inputFilename, dryRun, printDefaults);
@@ -109,16 +118,29 @@ int main(int argc, char** argv)
 
 	//Calculate lifetimes for states in input k-point mesh:
 	int nBands = bs.nBands;
-	std::vector<diagMatrix> ImSigma(prodNkIn, diagMatrix(nBands, 0.)); //imaginary part of self-energy on NkIn mesh
-	std::vector<vector3<>> kInArr(prodNkIn);
+	std::vector<vector3<>> kInArr(prodNkIn), kInReduced;
+	std::vector<int> iReduced(prodNkIn, -1);
 	{	vector3<> ikIn;
+		std::vector<diagMatrix> Earr(prodNkIn);
 		for(ikIn[0]=0; ikIn[0]<NkIn[0]; ikIn[0]++)
 		for(ikIn[1]=0; ikIn[1]<NkIn[1]; ikIn[1]++)
 		for(ikIn[2]=0; ikIn[2]<NkIn[2]; ikIn[2]++)
-		{	vector3<>& kIn = kInArr[dot(ikIn,strideIn)];
+		{	int iIn = dot(ikIn,strideIn);
+			vector3<>& kIn = kInArr[iIn];
 			for(int j=0; j<3; j++)
 				kIn[j] = kInOff[j] + ikIn[j] * (1./NkIn[j]); //use Gamma-centered mesh for in
+			Earr[iIn] = bs.getStates(kIn);
 		}
+		//Reduce k-points based on degeneracies:
+		for(int i1=0; i1<prodNkIn; i1++)
+			if(iReduced[i1]<0)
+			{	iReduced[i1] = kInReduced.size();
+				for(int i2=i1+1; i2<prodNkIn; i2++)
+					if(eigsEqual(Earr[i1], Earr[i2], bs.eMinMain, bs.eMaxMain, 1e-5))
+						iReduced[i2] = kInReduced.size();
+				kInReduced.push_back(kInArr[i1]);
+			}
+		if(prodNkIn>1) logPrintf("Symmetry degeneracies reduced %d input k-points to %lu\n", prodNkIn, kInReduced.size());
 	}
 	std::vector<vector3<>> kOutArr(NkOut[0] * NkOut[1] * NkOut[2]);
 	vector3<int> strideOut(NkOut[1]*NkOut[2], NkOut[2], 1);
@@ -138,6 +160,7 @@ int main(int argc, char** argv)
 	int ikOutStop = (kOutArr.size() * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
 	int nkOutBlocks = ceildiv(ikOutStop-ikOutStart, bunchSize);
 	int nkOutInterval = std::max(1, int(round(nkOutBlocks/50.))); //interval for reporting progress
+	std::vector<diagMatrix> ImSigmaReduced(kInReduced.size(), diagMatrix(nBands, 0.)); //imaginary part of self-energy on reduced mesh
 	vector3<int> ikOut;
 	for(int ikOut=ikOutStart; ikOut<ikOutStop; ikOut+=bunchSize)
 	{	//Print progress:
@@ -151,8 +174,8 @@ int main(int argc, char** argv)
 		std::vector<vector3<>> kOutCur(kOutArr.begin()+ikOut, kOutArr.begin()+ikOut+bunchSizeCur);
 		std::vector< std::vector<matrix> > gePhArr(bunchSizeCur);
 		//Loop over first k-point (irreducible wedge):
-		for(int q=0; q<prodNkIn; q++)
-		{	const vector3<>& kIn = kInArr[q];
+		for(size_t q=0; q<kInReduced.size(); q++)
+		{	const vector3<>& kIn = kInReduced[q];
 			bs.setPhononMatElemArray(kIn, kOutCur, gePhArr.data());
 			const diagMatrix& Ein = bs.getStates(kIn);
 			for(int ik2=0; ik2<bunchSizeCur; ik2++)
@@ -171,7 +194,7 @@ int main(int argc, char** argv)
 							for(int ae=-1; ae<=+1; ae+=2)
 							{	double delta = EconservePrefac / (1. + std::pow(EconserveScaleFac * (Eout[bOut]-Ein[bIn] - ae*omegaPh[alpha]),2));
 								double occFactors = (nPh+0.5 - ae*(0.5-fOut));
-								ImSigma[q][bIn] += prefacImSigma * occFactors * delta * gePh[alpha](bOut,bIn).norm();
+								ImSigmaReduced[q][bIn] += prefacImSigma * occFactors * delta * gePh[alpha](bOut,bIn).norm();
 							}
 						}
 					}
@@ -179,18 +202,24 @@ int main(int argc, char** argv)
 			}
 		}
 	}
-	FILE* fp = 0;
-	if(prodNkIn==1) logPrintf("\n#E ImSigma_ePh\n");
-	if(mpiUtil->isHead()) fp = (prodNkIn==1) ? globalLog : fopen("ImSigma_ePh.dat", "w"); //for special k-point mode, only report in log file
+	
+	//Collect results and map to full mesh:
+	for(size_t q=0; q<kInReduced.size(); q++)
+		ImSigmaReduced[q].allReduce(MPIUtil::ReduceSum);
+	std::vector<diagMatrix> ImSigma(prodNkIn); //imaginary part of self-energy on full input mesh
 	for(int q=0; q<prodNkIn; q++)
-	{	ImSigma[q].allReduce(MPIUtil::ReduceSum);
-		if(fp)
+		ImSigma[q] = ImSigmaReduced[iReduced[q]];
+	
+	if(mpiUtil->isHead())
+	{	if(prodNkIn==1) logPrintf("\n#E ImSigma_ePh\n");
+		FILE* fp = (prodNkIn==1) ? globalLog : fopen("ImSigma_ePh.dat", "w"); //for special k-point mode, only report in log file
+		for(int q=0; q<prodNkIn; q++)
 		{	diagMatrix E = bs.getStates(kInArr[q]);
 			for(int b=0; b<nBands; b++)
 				fprintf(fp, "%+19.12le %19.12le\n", E[b], ImSigma[q][b]);
 		}
+		if(prodNkIn>1) fclose(fp);
 	}
-	if(fp && fp != globalLog) fclose(fp);
 	if(prodNkIn==1) { logPrintf("\n"); finalizeSystem(); return 0; } //Skip wannierization for special k-point mode
 	
 	//Wannierized output:

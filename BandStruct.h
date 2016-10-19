@@ -47,6 +47,7 @@ public:
 	vector3<bool> isTruncated; //!< whether each direction is truncated
 	int nBands, spinWeight; //!< number of Wannier bands for the electrons and weight per spin channel
 	double mu, nElectrons, nValence; //!< chemical potential (if a metal), number of electrons per unit cell and number of valence bands (if insulator)
+	double eMinMain, eMaxMain; //!< energy range for main window (within which eigenvalues should be exact compared to DFT)
 	int nPol; //!< number of photon polarizations in pre-contracted matrix elements
 	int nModes; //!< number of phonon modes (polarizations)
 	
