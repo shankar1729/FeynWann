@@ -57,7 +57,7 @@ public:
 			ImSigmaRS.set(0,ImSigmaRS.nRows(), dq,dq+1, ImSigma_q);
 			phase.set(dq,dq+1, 0,nCells, dagger(ce->phase) * cellWeights);
 		}
-		matrix ImSigmaWannier = ImSigmaRS * phase;
+		matrix ImSigmaWannier = ceArr.size() ? ImSigmaRS * phase : zeroes(bs.nBands*bs.nBands, nCells);
 		ImSigmaWannier.allReduce(MPIUtil::ReduceSum);
 		if(mpiUtil->isHead())
 			ImSigmaWannier.dump(fname.c_str(), bs.spinWeight==2);
