@@ -80,14 +80,20 @@ int main(int argc, char** argv)
 	//Read input file:
 	InputMap inputMap(inputFilename);
 	const double T = inputMap.get("T") * Kelvin;
-	const int NkMult = int(round(inputMap.get("NkMult"))); //increase in number of k-points for phonon mesh
+	const double EconserveWidth = inputMap.get("EconserveWidth") * eV;
+	const int NkMultAll = int(round(inputMap.get("NkMult"))); //increase in number of k-points for phonon mesh
+	vector3<int> NkMult;
+	NkMult[0] = inputMap.get("NkxMult", NkMultAll); //override increase in x direction
+	NkMult[1] = inputMap.get("NkyMult", NkMultAll); //override increase in y direction
+	NkMult[2] = inputMap.get("NkzMult", NkMultAll); //override increase in z direction
 	vector3<> k0; //optional input to get linewidths at single k-point
 	k0[0] = inputMap.get("k0x", INFINITY);
 	k0[1] = inputMap.get("k0y", INFINITY);
 	k0[2] = inputMap.get("k0z", INFINITY);
 	logPrintf("\nInputs after conversion to atomic units:\n");
 	logPrintf("T = %lg\n", T);
-	logPrintf("NkMult = %d\n", NkMult);
+	logPrintf("EconserveWidth = %lg\n", EconserveWidth);
+	logPrintf("NkMult = "); NkMult.print(globalLog, " %d ");
 	if(std::isfinite(k0.length_squared()))
 	{	logPrintf("k0 = ");
 		k0.print(globalLog, " %lf ");
@@ -99,7 +105,7 @@ int main(int argc, char** argv)
 	
 	vector3<int> NkIn = bs.kfold, NkOut;
 	for(int j=0; j<3; j++)
-		NkOut[j] = NkIn[j] * (bs.isTruncated[j] ? 1 : NkMult); //multiply k-points in periodic directions
+		NkOut[j] = NkIn[j] * (bs.isTruncated[j] ? 1 : NkMult[j]); //multiply k-points in periodic directions
 	logPrintf("NkFine = "); NkOut.print(globalLog, " %d ");
 	vector3<> kInOff; //extra offset for k-point meshes (none for mesh mode)
 	if(std::isfinite(k0.length_squared()))
@@ -154,13 +160,14 @@ int main(int argc, char** argv)
 		}
 	}
 	double prefacImSigma = 0.5 * 2*M_PI/(kOutArr.size()); //Note factor of 0.5 between decay rate and ImSigma due to squaring of wavefunctions to probability
-	double EconserveScaleFac = 1./T, EconservePrefac = 1./(M_PI*T); //energy conserving Lorentzian parameters
+	double EconserveExpFac = -0.5/std::pow(EconserveWidth,2), EconservePrefac = 1./(sqrt(2.*M_PI)*EconserveWidth); //energy conserving Lorentzian parameters
 	//Loop over blocks of one dimension of second k-point
 	int ikOutStart = (kOutArr.size() * mpiUtil->iProcess()) / mpiUtil->nProcesses();
 	int ikOutStop = (kOutArr.size() * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
 	int nkOutBlocks = ceildiv(ikOutStop-ikOutStart, bunchSize);
 	int nkOutInterval = std::max(1, int(round(nkOutBlocks/50.))); //interval for reporting progress
 	std::vector<diagMatrix> ImSigmaReduced(kInReduced.size(), diagMatrix(nBands, 0.)); //imaginary part of self-energy on reduced mesh
+	std::vector<diagMatrix> ImSigmaReducedP(kInReduced.size(), diagMatrix(nBands, 0.)); //momentum-relaxation version of above
 	vector3<int> ikOut;
 	for(int ikOut=ikOutStart; ikOut<ikOutStop; ikOut+=bunchSize)
 	{	//Print progress:
@@ -176,11 +183,13 @@ int main(int argc, char** argv)
 		//Loop over first k-point (irreducible wedge):
 		for(size_t q=0; q<kInReduced.size(); q++)
 		{	const vector3<>& kIn = kInReduced[q];
-			bs.setPhononMatElemArray(kIn, kOutCur, gePhArr.data());
 			const diagMatrix& Ein = bs.getStates(kIn);
+			std::vector<vector3<>> vIn = bs.getVelocity(kIn);
+			bs.setPhononMatElemArray(kIn, kOutCur, gePhArr.data());
 			for(int ik2=0; ik2<bunchSizeCur; ik2++)
 			{	const vector3<>& kOut = kOutCur[ik2];
 				diagMatrix Eout = bs.getStates(kOut);
+				std::vector<vector3<>> vOut = bs.getVelocity(kOut);
 				diagMatrix omegaPh = bs.getPhononModes(kIn - kOut);
 				const std::vector<matrix>& gePh = gePhArr[ik2];
 				
@@ -189,12 +198,18 @@ int main(int argc, char** argv)
 					{	double fOut = bs.nValence
 							? (bOut<bs.nValence ? 1. : 0.) //insulator/semiconductor
 							: 1./(exp(Eout[bOut]/T)+1); //metal (energies referenced to mu)
+						double cosThetaScatter = dot(vIn[bIn], vOut[bOut])
+							/ sqrt(std::max(1e-16, vIn[bIn].length_squared() * vOut[bOut].length_squared()));
 						for(int alpha=0; alpha<omegaPh.nRows(); alpha ++)
 						{	double nPh = 1./(exp(omegaPh[alpha]/T) - 1.);
 							for(int ae=-1; ae<=+1; ae+=2)
-							{	double delta = EconservePrefac / (1. + std::pow(EconserveScaleFac * (Eout[bOut]-Ein[bIn] - ae*omegaPh[alpha]),2));
+							{	double EconserveExponent = EconserveExpFac * std::pow((Eout[bOut]-Ein[bIn] - ae*omegaPh[alpha]),2);
+								if(EconserveExponent < -15.) continue;
+								double delta = EconservePrefac * exp(EconserveExponent);
 								double occFactors = (nPh+0.5 - ae*(0.5-fOut));
-								ImSigmaReduced[q][bIn] += prefacImSigma * occFactors * delta * gePh[alpha](bOut,bIn).norm();
+								double ImSigmaContrib = prefacImSigma * occFactors * delta * gePh[alpha](bOut,bIn).norm();
+								ImSigmaReduced[q][bIn] += ImSigmaContrib;
+								ImSigmaReducedP[q][bIn] += ImSigmaContrib * (1.-cosThetaScatter);
 							}
 						}
 					}
@@ -205,18 +220,22 @@ int main(int argc, char** argv)
 	
 	//Collect results and map to full mesh:
 	for(size_t q=0; q<kInReduced.size(); q++)
-		ImSigmaReduced[q].allReduce(MPIUtil::ReduceSum);
-	std::vector<diagMatrix> ImSigma(prodNkIn); //imaginary part of self-energy on full input mesh
+	{	ImSigmaReduced[q].allReduce(MPIUtil::ReduceSum);
+		ImSigmaReducedP[q].allReduce(MPIUtil::ReduceSum);
+	}
+	std::vector<diagMatrix> ImSigma(prodNkIn), ImSigmaP(prodNkIn); //imaginary part of self-energy (and momentum-relaxation version) on full input mesh
 	for(int q=0; q<prodNkIn; q++)
-		ImSigma[q] = ImSigmaReduced[iReduced[q]];
+	{	ImSigma[q] = ImSigmaReduced[iReduced[q]];
+		ImSigmaP[q] = ImSigmaReducedP[iReduced[q]];
+	}
 	
 	if(mpiUtil->isHead())
-	{	if(prodNkIn==1) logPrintf("\n#E ImSigma_ePh\n");
+	{	if(prodNkIn==1) logPrintf("\n#E ImSigma_ePh ImSigmaP_ePh\n");
 		FILE* fp = (prodNkIn==1) ? globalLog : fopen("ImSigma_ePh.dat", "w"); //for special k-point mode, only report in log file
-		for(int q=0; q<prodNkIn; q++)
-		{	diagMatrix E = bs.getStates(kInArr[q]);
+		for(size_t q=0; q<kInReduced.size(); q++)
+		{	diagMatrix E = bs.getStates(kInReduced[q]);
 			for(int b=0; b<nBands; b++)
-				fprintf(fp, "%+19.12le %19.12le\n", E[b], ImSigma[q][b]);
+				fprintf(fp, "%+19.12le %19.12le %19.12le\n", E[b], ImSigmaReduced[q][b], ImSigmaReducedP[q][b]);
 		}
 		if(prodNkIn>1) fclose(fp);
 	}
@@ -224,6 +243,7 @@ int main(int argc, char** argv)
 	
 	//Wannierized output:
 	Wannierizer(bs, ImSigma, kInArr).save("Wannier/wannier.mlwfImSigma_ePh");
+	Wannierizer(bs, ImSigmaP, kInArr).save("Wannier/wannier.mlwfImSigmaP_ePh");
 	
 	finalizeSystem();
 	return 0;
