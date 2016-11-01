@@ -103,7 +103,7 @@ int main(int argc, char** argv)
 	int nKptsMin = ceildiv(nKpts, nBlocks*mpiUtil->nProcesses()); //number of k points per block per process
 	double Omega = fabs(det(bs.R));
 	const double Emax = 10*T; //max energy from Fermi level to consider
-	double EconserveExpFac = -0.5/(T*T), EconservePrefac = 1./(sqrt(2*M_PI)*T); //energy conserving Gaussian parameters
+	double EconserveExpFac = -0.5/std::pow(EconserveWidth,2), EconservePrefac = 1./(sqrt(2*M_PI)*EconserveWidth); //energy conserving Gaussian parameters
 	for(int block=0; block<nBlocks; block++)
 	{	logPrintf("Working on block %d of %d\n", block+1, nBlocks); logFlush();
 		matrix3<> Tcur, Gamma;
@@ -168,7 +168,9 @@ int main(int argc, char** argv)
 								{	double nPh = 1./(exp(omegaPh[ik2][alpha]/T) - 1.);
 									double gePhSq = gePh[ik2][alpha](c,v).norm();
 									for(int ae=-1; ae<=+1; ae+=2)
-									{	double delta = EconservePrefac * exp(EconserveExpFac * std::pow(Earr[ik2][c]-Earr[ik1][v] - ae*omegaPh[ik2][alpha],2));
+									{	double deltaExp = EconserveExpFac * std::pow(Earr[ik2][c]-Earr[ik1][v] - ae*omegaPh[ik2][alpha],2);
+										if(deltaExp < -15.) continue; //delta will be negligible
+										double delta = EconservePrefac * exp(deltaExp);
 										double occFactors = (-dFdEi) * (nPh+0.5 - ae*(0.5-fj));
 										Gamma += (viDotvi -  viDotvj) * (occFactors * delta * gePhSq);
 										tauInv += occFactors * delta * gePhSq;
