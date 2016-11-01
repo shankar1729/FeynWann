@@ -3,6 +3,8 @@
 #include <cmath>
 #include "InputMap.h"
 
+extern void environmentSubstitute(string& s); //defined in jdftx/commands/parser.cpp
+
 InputMap::InputMap(string filename)
 {	std::ifstream ifs(filename.c_str());
 	if(!ifs.is_open())
@@ -13,7 +15,12 @@ InputMap::InputMap(string filename)
 		istringstream iss(line);
 		string name; string val;
 		if(iss >> name >> val)
+		{	//Substitute enviornment variables:
+			if(mpiUtil->isHead())
+				environmentSubstitute(val);
+			mpiUtil->bcast(val);
 			(*this)[name] = val;
+		}
 	}
 	ifs.close();
 }
