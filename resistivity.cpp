@@ -53,14 +53,18 @@ int main(int argc, char** argv)
 	const int nBlocks = inputMap.get("nBlocks"); assert(nBlocks>0);
 	const double T = inputMap.get("T") * Kelvin;
 	const double EconserveWidth = inputMap.get("EconserveWidth", T/eV) * eV; //energy conservation width (default to T)
-	const double dmu = inputMap.get("dmu", 0.) * eV; //optional shift in chemical potential from neutral value (default to 0)
+	const double dmuMin = inputMap.get("dmuMin", 0.) * eV; //optional shift in chemical potential from neutral value; start of range (default to 0)
+	const double dmuMax = inputMap.get("dmuMax", 0.) * eV; //optional shift in chemical potential from neutral value; end of range (default to 0)
+	const int dmuCount = inputMap.get("dmuCount", 1); assert(dmuCount>0); //number of chemical potential shifts
 	
 	logPrintf("\nInputs after conversion to atomic units:\n");
 	logPrintf("nKpts = %d\n", nKpts);
 	logPrintf("nBlocks = %d\n", nBlocks);
 	logPrintf("T = %lg\n", T);
 	logPrintf("EconserveWidth = %lg\n", EconserveWidth);
-	logPrintf("dmu = %lg\n", dmu);
+	logPrintf("dmuMin = %lg\n", dmuMin);
+	logPrintf("dmuMax = %lg\n", dmuMax);
+	logPrintf("dmuCount = %d\n", dmuCount);
 	
 	//Initialize Wannier bandstructure:
 	const int bunchSize = 32;
@@ -74,7 +78,7 @@ int main(int argc, char** argv)
 	}
 	logPrintf("\n");
 
-	/* //HACK: check translation invariance of e-ph matrix elements:
+	/* //DEBUG: check translation invariance of e-ph matrix elements:
 	if(mpiUtil->isHead())
 	{	FILE* fp = fopen("test_gePh.dat", "w");
 		for(int block=0; block<200; block++)
@@ -99,17 +103,25 @@ int main(int argc, char** argv)
 	}
 	die("Testing.\n"); */
 	
-	// Compute T and Gamma
-	std::vector<matrix3<>> Tarr(nBlocks), GammaArr(nBlocks), rhoArr(nBlocks); //results per block
-	std::vector<double> rhoBarArr(nBlocks), tauArr(nBlocks), tauDrudeArr(nBlocks), vFarr(nBlocks), gArr(nBlocks);
+	//dmu array:
+	std::vector<double> dmu(dmuCount, dmuMin); //set first value here
+	for(int iMu=1; iMu<dmuCount; iMu++) //set remaining values (if any)
+		dmu[iMu] = dmuMin + iMu*(dmuMax-dmuMin)/(dmuCount-1);
+	
+	//Compute resistivity:
+	#define DeclareArray2D(type, name) std::vector<std::vector<type>> name(dmuCount, std::vector<type>(nBlocks))
+	DeclareArray2D(matrix3<>, Tarr); DeclareArray2D(matrix3<>, GammaArr); DeclareArray2D(matrix3<>, rhoArr);
+	DeclareArray2D(double, rhoBarArr); DeclareArray2D(double, tauArr); DeclareArray2D(double, tauDrudeArr);
+	DeclareArray2D(double, vFarr); DeclareArray2D(double, gArr); 
+	#undef DeclareArray2D
 	int nKptsMin = ceildiv(nKpts, nBlocks*mpiUtil->nProcesses()); //number of k points per block per process
 	double Omega = fabs(det(bs.R));
-	const double Emax = fabs(dmu) + 10*T + 5*EconserveWidth; //max energy from Fermi level to consider
+	const double Emax = std::max(fabs(dmuMin), fabs(dmuMax)) + 10*T + 5*EconserveWidth; //max energy from Fermi level to consider
 	double EconserveExpFac = -0.5/std::pow(EconserveWidth,2), EconservePrefac = 1./(sqrt(2*M_PI)*EconserveWidth); //energy conserving Gaussian parameters
 	for(int block=0; block<nBlocks; block++)
 	{	logPrintf("Working on block %d of %d ... ", block+1, nBlocks); logFlush();
-		matrix3<> Tcur, Gamma;
-		double g = 0., tauInv=0.;
+		std::vector<matrix3<>> Tcur(dmuCount), Gamma(dmuCount);
+		std::vector<double> g(dmuCount), tauInv(dmuCount);
 		double nKpts = 0.; int nBunches = 0;
 		while(nKpts < nKptsMin)
 		{	//Get a bunch of k-points with states near the Fermi level:
@@ -157,68 +169,78 @@ int main(int argc, char** argv)
 					omegaPh[ik2] = bs.getPhononModes(kArr[ik1] - kArr[ik2]);
 				
 				for(int v=0; v<Earr[ik1].nRows(); v++)
-				{	double dFdEi = -1/(T*std::pow(2*cosh((Earr[ik1][v]-dmu)/(2*T)),2));
-					matrix3<> viDotvi = outer(vArr[ik1][v], vArr[ik1][v]);
-					Tcur += viDotvi*(-dFdEi);
-					g += (-dFdEi);
-					for(int ik2=0; ik2<bunchSize; ik2++)
-						if(ik2 != ik1)
-							for(int c=0; c<Earr[ik2].nRows(); c++)
-							{	matrix3<> viDotvj = outer(vArr[ik1][v], vArr[ik2][c]);
-								double fj = 1./(exp((Earr[ik2][c]-dmu)/T)+1);
-								for(int alpha=0; alpha<omegaPh[ik2].nRows(); alpha++)
-								{	double nPh = 1./(exp(omegaPh[ik2][alpha]/T) - 1.);
-									double gePhSq = gePh[ik2][alpha](c,v).norm();
-									for(int ae=-1; ae<=+1; ae+=2)
-									{	double deltaExp = EconserveExpFac * std::pow(Earr[ik2][c]-Earr[ik1][v] - ae*omegaPh[ik2][alpha],2);
-										if(deltaExp < -15.) continue; //delta will be negligible
-										double delta = EconservePrefac * exp(deltaExp);
-										double occFactors = (-dFdEi) * (nPh+0.5 - ae*(0.5-fj));
-										Gamma += (viDotvi -  viDotvj) * (occFactors * delta * gePhSq);
-										tauInv += occFactors * delta * gePhSq;
+				{	matrix3<> viDotvi = outer(vArr[ik1][v], vArr[ik1][v]);
+					std::vector<double> dFdEi(dmuCount);
+					for(int iMu=0; iMu<dmuCount; iMu++)
+					{	double dFdEi = -1/(T*std::pow(2*cosh((Earr[ik1][v]-dmu[iMu])/(2*T)),2));
+						Tcur[iMu] += viDotvi*(-dFdEi);
+						g[iMu] += (-dFdEi);
+						for(int ik2=0; ik2<bunchSize; ik2++)
+							if(ik2 != ik1)
+								for(int c=0; c<Earr[ik2].nRows(); c++)
+								{	matrix3<> viDotvj = outer(vArr[ik1][v], vArr[ik2][c]);
+									double fj = 1./(exp((Earr[ik2][c]-dmu[iMu])/T)+1);
+									for(int alpha=0; alpha<omegaPh[ik2].nRows(); alpha++)
+									{	double nPh = 1./(exp(omegaPh[ik2][alpha]/T) - 1.);
+										double gePhSq = gePh[ik2][alpha](c,v).norm();
+										for(int ae=-1; ae<=+1; ae+=2)
+										{	double deltaExp = EconserveExpFac * std::pow(Earr[ik2][c]-Earr[ik1][v] - ae*omegaPh[ik2][alpha],2);
+											if(deltaExp < -15.) continue; //delta will be negligible
+											double delta = EconservePrefac * exp(deltaExp);
+											double occFactors = (-dFdEi) * (nPh+0.5 - ae*(0.5-fj));
+											Gamma[iMu] += (viDotvi -  viDotvj) * (occFactors * delta * gePhSq);
+											tauInv[iMu] += occFactors * delta * gePhSq;
+										}
 									}
 								}
-							}
+					}
 				}
 			}
 		}
 		
 		//Accumulate between processes:
-		mpiUtil->allReduce(&Tcur(0,0), 3*3, MPIUtil::ReduceSum);
-		mpiUtil->allReduce(&Gamma(0,0), 3*3, MPIUtil::ReduceSum);
-		mpiUtil->allReduce(g, MPIUtil::ReduceSum);
-		mpiUtil->allReduce(tauInv, MPIUtil::ReduceSum);
+		for(int iMu=0; iMu<dmuCount; iMu++)
+		{	mpiUtil->allReduce(&Tcur[iMu](0,0), 3*3, MPIUtil::ReduceSum);
+			mpiUtil->allReduce(&Gamma[iMu](0,0), 3*3, MPIUtil::ReduceSum);
+			mpiUtil->allReduce(g[iMu], MPIUtil::ReduceSum);
+			mpiUtil->allReduce(tauInv[iMu], MPIUtil::ReduceSum);
+		}
 		mpiUtil->allReduce(nKpts, MPIUtil::ReduceSum);
 		mpiUtil->allReduce(nBunches, MPIUtil::ReduceSum);
 		logPrintf("useFraction: %lg\n", (bunchSize*nBunches)/nKpts); logFlush();
 		
-		//Apply normalizing factors:
 		double prefacT = bs.spinWeight/(nKpts);
 		double prefacGamma = bs.spinWeight*(2*M_PI)/(nKpts*nKpts*1./nBunches);
-		Tcur *= prefacT;
-		g *= prefacT;
-		Gamma *= prefacGamma; Gamma = 0.5*(Gamma + (~Gamma)); //symmetrize
-		tauInv *= prefacGamma;
-		//Store relevant quantities:
-		Tarr[block] = Tcur;
-		GammaArr[block] = Gamma;
-		rhoArr[block] = Omega * (inv(Tcur) * Gamma * inv(Tcur));
-		rhoBarArr[block] = trace(rhoArr[block])/3.;
-		tauArr[block] = g / tauInv;
-		tauDrudeArr[block] = trace(Tcur) / trace(Gamma);
-		vFarr[block] = sqrt(trace(Tcur)/g);
-		gArr[block] = g;
+		//Apply normalizing factors:
+		for(int iMu=0; iMu<dmuCount; iMu++)
+		{	Tcur[iMu] *= prefacT;
+			g[iMu] *= prefacT;
+			Gamma[iMu] *= prefacGamma; Gamma[iMu] = 0.5*(Gamma[iMu] + (~Gamma[iMu])); //symmetrize
+			tauInv[iMu] *= prefacGamma;
+			//Store relevant quantities:
+			Tarr[iMu][block] = Tcur[iMu];
+			GammaArr[iMu][block] = Gamma[iMu];
+			rhoArr[iMu][block] = Omega * (inv(Tcur[iMu]) * Gamma[iMu] * inv(Tcur[iMu]));
+			rhoBarArr[iMu][block] = trace(rhoArr[iMu][block])/3.;
+			tauArr[iMu][block] = g[iMu] / tauInv[iMu];
+			tauDrudeArr[iMu][block] = trace(Tcur[iMu]) / trace(Gamma[iMu]);
+			vFarr[iMu][block] = sqrt(trace(Tcur[iMu])/g[iMu]);
+			gArr[iMu][block] = g[iMu];
+		}
 	}
 	logPrintf("Done.\n\n");
 
-	reportResult(Tarr, "T", 1, "");
-	reportResult(GammaArr, "Gamma", 1, "");
-	reportResult(rhoArr, "Resistivity", 1e-9*Ohm*meter, "nOhm-m");
-	reportResult(rhoBarArr, "Resistivity", 1e-9*Ohm*meter, "nOhm-m");
-	reportResult(tauDrudeArr, "tauDrude", fs, "fs");
-	reportResult(tauArr, "tau", fs, "fs");
-	reportResult(vFarr, "vF", 1, "");
-	reportResult(gArr, "g(eF)", 1, "");
+	for(int iMu=0; iMu<dmuCount; iMu++)
+	{	logPrintf("\nResults for dmu = %lg eV:\n", dmu[iMu]);
+		reportResult(Tarr[iMu], "T", 1, "");
+		reportResult(GammaArr[iMu], "Gamma", 1, "");
+		reportResult(rhoArr[iMu], "Resistivity", 1e-9*Ohm*meter, "nOhm-m");
+		reportResult(rhoBarArr[iMu], "Resistivity", 1e-9*Ohm*meter, "nOhm-m");
+		reportResult(tauDrudeArr[iMu], "tauDrude", fs, "fs");
+		reportResult(tauArr[iMu], "tau", fs, "fs");
+		reportResult(vFarr[iMu], "vF", 1, "");
+		reportResult(gArr[iMu], "g(eF)", 1, "");
+	}
 	
 	finalizeSystem();
 }
