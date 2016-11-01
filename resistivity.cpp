@@ -231,7 +231,7 @@ int main(int argc, char** argv)
 	logPrintf("Done.\n\n");
 
 	for(int iMu=0; iMu<dmuCount; iMu++)
-	{	logPrintf("\nResults for dmu = %lg eV:\n", dmu[iMu]);
+	{	logPrintf("\nResults for dmu = %lg eV:\n", dmu[iMu]/eV);
 		reportResult(Tarr[iMu], "T", 1, "");
 		reportResult(GammaArr[iMu], "Gamma", 1, "");
 		reportResult(rhoArr[iMu], "Resistivity", 1e-9*Ohm*meter, "nOhm-m");
