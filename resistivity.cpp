@@ -8,19 +8,16 @@
 #include "InputMap.h"
 #include "Units.h"
 
-void reportResult(const std::vector<matrix3<>>& result, string resultName, double unit, string unitName, int blockStart, int blockStop)
+void reportResult(const std::vector<matrix3<>>& result, string resultName, double unit, string unitName)
 {	matrix3<> resultMean, resultStd;
 	for(int i=0; i<3; i++)
 	{	for(int j=0; j<3; j++)
 		{	double sum = 0., sumSq = 0.; int N = 0;
-			for(int block=blockStart; block<blockStop; block++)
+			for(size_t block=0; block<result.size(); block++)
 			{	N++;
 				sum += result[block](i,j);
 				sumSq += std::pow(result[block](i,j), 2);
 			}
-			mpiUtil->allReduce(N, MPIUtil::ReduceSum);
-			mpiUtil->allReduce(sum, MPIUtil::ReduceSum);
-			mpiUtil->allReduce(sumSq, MPIUtil::ReduceSum);
 			resultMean(i,j) = sum/N;
 			resultStd(i,j) = sqrt(sumSq/N - std::pow(sum/N,2));
 		}
@@ -33,16 +30,13 @@ void reportResult(const std::vector<matrix3<>>& result, string resultName, doubl
 	}
 	logPrintf("\n");
 }
-void reportResult(const std::vector<double>& result, string resultName, double unit, string unitName, int blockStart, int blockStop)
+void reportResult(const std::vector<double>& result, string resultName, double unit, string unitName)
 {	double sum = 0., sumSq = 0.; int N = 0;
-	for(int block=blockStart; block<blockStop; block++)
+	for(size_t block=0; block<result.size(); block++)
 	{	N++;
 		sum += result[block];
 		sumSq += std::pow(result[block], 2);
 	}
-	mpiUtil->allReduce(N, MPIUtil::ReduceSum);
-	mpiUtil->allReduce(sum, MPIUtil::ReduceSum);
-	mpiUtil->allReduce(sumSq, MPIUtil::ReduceSum);
 	double resultMean = sum/N;
 	double resultStd = sqrt(sumSq/N - std::pow(sum/N,2));
 	logPrintf("%17s = %12lg +/- %12lg %s\n", resultName.c_str(), resultMean/unit, resultStd/unit, unitName.c_str());
@@ -56,13 +50,15 @@ int main(int argc, char** argv)
 	//Read input file:
 	InputMap inputMap(inputFilename);
 	const int nKpts = inputMap.get("nKpts");
-	const int totalBlocks = inputMap.get("totalBlocks"); assert(totalBlocks>0);
+	const int nBlocks = inputMap.get("nBlocks"); assert(nBlocks>0);
 	const double T = inputMap.get("T") * Kelvin;
-
+	const double EconserveWidth = inputMap.get("EconserveWidth", T/eV) * eV; //energy conservation width (default to T)
+	
 	logPrintf("\nInputs after conversion to atomic units:\n");
 	logPrintf("nKpts = %d\n", nKpts);
-	logPrintf("totalBlocks = %d\n", totalBlocks);
+	logPrintf("nBlocks = %d\n", nBlocks);
 	logPrintf("T = %lg\n", T);
+	logPrintf("EconserveWidth = %lg\n", EconserveWidth);
 	
 	//Initialize Wannier bandstructure:
 	const int bunchSize = 32;
@@ -102,17 +98,14 @@ int main(int argc, char** argv)
 	die("Testing.\n"); */
 	
 	// Compute T and Gamma
-	std::vector<matrix3<>> Tarr(totalBlocks), GammaArr(totalBlocks), rhoArr(totalBlocks); //results per block
-	std::vector<double> rhoBarArr(totalBlocks), tauArr(totalBlocks), tauDrudeArr(totalBlocks), vFarr(totalBlocks), gArr(totalBlocks);
-	logPrintf("Calculating T and Gamma... "); logFlush();
-	int blockStart = (totalBlocks * (mpiUtil->iProcess())) / mpiUtil->nProcesses(); //MPI division
-	int blockStop = (totalBlocks * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
-	int nKptsMin = nKpts/totalBlocks;
+	std::vector<matrix3<>> Tarr(nBlocks), GammaArr(nBlocks), rhoArr(nBlocks); //results per block
+	std::vector<double> rhoBarArr(nBlocks), tauArr(nBlocks), tauDrudeArr(nBlocks), vFarr(nBlocks), gArr(nBlocks);
+	int nKptsMin = ceildiv(nKpts, nBlocks*mpiUtil->nProcesses()); //number of k points per block per process
 	double Omega = fabs(det(bs.R));
 	const double Emax = 10*T; //max energy from Fermi level to consider
 	double EconserveExpFac = -0.5/(T*T), EconservePrefac = 1./(sqrt(2*M_PI)*T); //energy conserving Gaussian parameters
-	for(int block=blockStart; block<blockStop; block++)
-	{	Random::seed(block);
+	for(int block=0; block<nBlocks; block++)
+	{	logPrintf("Working on block %d of %d\n", block+1, nBlocks); logFlush();
 		matrix3<> Tcur, Gamma;
 		double g = 0., tauInv=0.;
 		double nKpts = 0.; int nBunches = 0;
@@ -185,6 +178,15 @@ int main(int argc, char** argv)
 				}
 			}
 		}
+		
+		//Accumulate between processes:
+		mpiUtil->allReduce(&Tcur(0,0), 3*3, MPIUtil::ReduceSum);
+		mpiUtil->allReduce(&Gamma(0,0), 3*3, MPIUtil::ReduceSum);
+		mpiUtil->allReduce(g, MPIUtil::ReduceSum);
+		mpiUtil->allReduce(tauInv, MPIUtil::ReduceSum);
+		mpiUtil->allReduce(nKpts, MPIUtil::ReduceSum);
+		mpiUtil->allReduce(nBunches, MPIUtil::ReduceSum);
+		
 		//Apply normalizing factors:
 		double prefacT = bs.spinWeight/(nKpts);
 		double prefacGamma = bs.spinWeight*(2*M_PI)/(nKpts*nKpts*1./nBunches);
@@ -202,16 +204,16 @@ int main(int argc, char** argv)
 		vFarr[block] = sqrt(trace(Tcur)/g);
 		gArr[block] = g;
 	}
-	logPrintf("done.\n\n");
+	logPrintf("Done.\n\n");
 
-	reportResult(Tarr, "T", 1, "", blockStart, blockStop);
-	reportResult(GammaArr, "Gamma", 1, "", blockStart, blockStop);
-	reportResult(rhoArr, "Resistivity", 1e-9*Ohm*meter, "nOhm-m", blockStart, blockStop);
-	reportResult(rhoBarArr, "Resistivity", 1e-9*Ohm*meter, "nOhm-m", blockStart, blockStop);
-	reportResult(tauDrudeArr, "tauDrude", fs, "fs", blockStart, blockStop);
-	reportResult(tauArr, "tau", fs, "fs", blockStart, blockStop);
-	reportResult(vFarr, "vF", 1, "", blockStart, blockStop);
-	reportResult(gArr, "g(eF)", 1, "", blockStart, blockStop);
+	reportResult(Tarr, "T", 1, "");
+	reportResult(GammaArr, "Gamma", 1, "");
+	reportResult(rhoArr, "Resistivity", 1e-9*Ohm*meter, "nOhm-m");
+	reportResult(rhoBarArr, "Resistivity", 1e-9*Ohm*meter, "nOhm-m");
+	reportResult(tauDrudeArr, "tauDrude", fs, "fs");
+	reportResult(tauArr, "tau", fs, "fs");
+	reportResult(vFarr, "vF", 1, "");
+	reportResult(gArr, "g(eF)", 1, "");
 	
 	finalizeSystem();
 }
