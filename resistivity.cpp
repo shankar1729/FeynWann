@@ -53,12 +53,14 @@ int main(int argc, char** argv)
 	const int nBlocks = inputMap.get("nBlocks"); assert(nBlocks>0);
 	const double T = inputMap.get("T") * Kelvin;
 	const double EconserveWidth = inputMap.get("EconserveWidth", T/eV) * eV; //energy conservation width (default to T)
+	const double dmu = inputMap.get("dmu", 0.) * eV; //optional shift in chemical potential from neutral value (default to 0)
 	
 	logPrintf("\nInputs after conversion to atomic units:\n");
 	logPrintf("nKpts = %d\n", nKpts);
 	logPrintf("nBlocks = %d\n", nBlocks);
 	logPrintf("T = %lg\n", T);
 	logPrintf("EconserveWidth = %lg\n", EconserveWidth);
+	logPrintf("dmu = %lg\n", dmu);
 	
 	//Initialize Wannier bandstructure:
 	const int bunchSize = 32;
@@ -102,17 +104,17 @@ int main(int argc, char** argv)
 	std::vector<double> rhoBarArr(nBlocks), tauArr(nBlocks), tauDrudeArr(nBlocks), vFarr(nBlocks), gArr(nBlocks);
 	int nKptsMin = ceildiv(nKpts, nBlocks*mpiUtil->nProcesses()); //number of k points per block per process
 	double Omega = fabs(det(bs.R));
-	const double Emax = 10*T; //max energy from Fermi level to consider
+	const double Emax = fabs(dmu) + 10*T + 5*EconserveWidth; //max energy from Fermi level to consider
 	double EconserveExpFac = -0.5/std::pow(EconserveWidth,2), EconservePrefac = 1./(sqrt(2*M_PI)*EconserveWidth); //energy conserving Gaussian parameters
 	for(int block=0; block<nBlocks; block++)
-	{	logPrintf("Working on block %d of %d\n", block+1, nBlocks); logFlush();
+	{	logPrintf("Working on block %d of %d ... ", block+1, nBlocks); logFlush();
 		matrix3<> Tcur, Gamma;
 		double g = 0., tauInv=0.;
 		double nKpts = 0.; int nBunches = 0;
 		while(nKpts < nKptsMin)
 		{	//Get a bunch of k-points with states near the Fermi level:
 			std::vector< vector3<> > kArr; kArr.reserve(bunchSize);
-			while(kArr.size() < bunchSize)
+			while(kArr.size() < size_t(bunchSize))
 			{	//Diagonalize Hamiltonians at a set of random k-points:
 				std::vector< vector3<> > kTmp(bunchSize);
 				for(vector3<>& k: kTmp)
@@ -130,7 +132,7 @@ int main(int argc, char** argv)
 						}
 					if(worthwhile)
 					{	nFound++;
-						if(kArr.size() < bunchSize)
+						if(kArr.size() < size_t(bunchSize))
 						{	kArr.push_back(kTmp[ik]);
 							nAdded++;
 						}
@@ -155,7 +157,7 @@ int main(int argc, char** argv)
 					omegaPh[ik2] = bs.getPhononModes(kArr[ik1] - kArr[ik2]);
 				
 				for(int v=0; v<Earr[ik1].nRows(); v++)
-				{	double dFdEi = -1/(T*std::pow(2*cosh(Earr[ik1][v]/(2*T)),2));
+				{	double dFdEi = -1/(T*std::pow(2*cosh((Earr[ik1][v]-dmu)/(2*T)),2));
 					matrix3<> viDotvi = outer(vArr[ik1][v], vArr[ik1][v]);
 					Tcur += viDotvi*(-dFdEi);
 					g += (-dFdEi);
@@ -163,7 +165,7 @@ int main(int argc, char** argv)
 						if(ik2 != ik1)
 							for(int c=0; c<Earr[ik2].nRows(); c++)
 							{	matrix3<> viDotvj = outer(vArr[ik1][v], vArr[ik2][c]);
-								double fj = 1./(exp(Earr[ik2][c]/T)+1);
+								double fj = 1./(exp((Earr[ik2][c]-dmu)/T)+1);
 								for(int alpha=0; alpha<omegaPh[ik2].nRows(); alpha++)
 								{	double nPh = 1./(exp(omegaPh[ik2][alpha]/T) - 1.);
 									double gePhSq = gePh[ik2][alpha](c,v).norm();
@@ -188,6 +190,7 @@ int main(int argc, char** argv)
 		mpiUtil->allReduce(tauInv, MPIUtil::ReduceSum);
 		mpiUtil->allReduce(nKpts, MPIUtil::ReduceSum);
 		mpiUtil->allReduce(nBunches, MPIUtil::ReduceSum);
+		logPrintf("useFraction: %lg\n", (bunchSize*nBunches)/nKpts); logFlush();
 		
 		//Apply normalizing factors:
 		double prefacT = bs.spinWeight/(nKpts);
