@@ -19,7 +19,7 @@ endif
 inFile = arg_list{1};
 outFile = arg_list{2};
 
-nSmooth = 5;
+nSmooth = 0;
 
 printf("Converting ImEps from '%s' to ReEps in '%s'.\n", inFile, outFile);
 
@@ -47,7 +47,7 @@ imEpsSmooth = smoothColumns(imEps .* sWeight, nSmooth) ./ sWeight;
 #Check frequency grid:
 nOmega = length(omega)-1;
 omegaUniform = linspace(0, max(omega), nOmega+1)';
-if norm(omegaUniform-omega) > 1e-6*norm(omega)
+if norm(omegaUniform-omega) > 1e-4*norm(omega)
 	error("Frequency grid is not a uniform one starting at zero frequency.\n");
 endif
 
@@ -70,6 +70,7 @@ reEps = reEpsFT(1:nOmega+1,:);
 
 outDat = [ omega reEps ];
 save("-ascii", outFile, "outDat");
+exit(0);
 
 outImDat = [ omega imEpsSmooth];
 save("-ascii", 'ImEps_dirPhSmooth.dat', "outImDat");
