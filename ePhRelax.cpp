@@ -13,9 +13,11 @@ struct ePhRelax
 {
 	Interp1 dos, dosPh;
 	diagMatrix f0, fPert; //Initial Fermi and photon-perturbed distributions
+	double Z, detR; //electrons and volume per unit cell
 	double T, dos0; //initial temperature and density of states at the Fermi level
 	double De, scaledDe; //De, and De scaled by g(eF)**-3
 	diagMatrix hInt; //energy resolved electron-phonon coupling
+	string runName;
 	
 	//Energy grid:
 	int nE; double Emin, dE;
@@ -31,13 +33,14 @@ struct ePhRelax
 
 		//Get the system parameters (mu, T, lattice vectors etc.)
 		InputMap inputMap(inputFilename);	
-		const double Z = inputMap.get("Z"); //number of electrons per unit cell
+		Z = inputMap.get("Z"); //number of electrons per unit cell
 		T = inputMap.get("T") * Kelvin; //initial temperature in Kelvin (electron and lattice)
 		const double Uabs = inputMap.get("Uabs") * Joule/std::pow(meter,3); //absorbed laser energy per unit volume in Joule/meter^3
 		const double Eplasmon = inputMap.get("Eplasmon") * eV; //incident photon energy in eV
 		De = inputMap.get("De") / eV; //quadratic e-e lifetime coefficient in eV^-1
+		runName = inputMap.getString("runName"); //prefix to use for output files
 		const matrix3<> R = matrix3<>(0,1,1, 1,0,1, 1,1,0) * (0.5*inputMap.get("aCubic")*Angstrom);
-		double detR = fabs(det(R));
+		detR = fabs(det(R));
 		
 		logPrintf("\nInputs after conversion to atomic units:\n");
 		logPrintf("Z = %lg\n", Z);
@@ -45,6 +48,7 @@ struct ePhRelax
 		logPrintf("Uabs = %lg\n", Uabs);
 		logPrintf("Eplasmon = %lg\n", Eplasmon);
 		logPrintf("De = %lg\n", De);
+		logPrintf("runName = %s\n", runName.c_str());
 		logPrintf("R:\n");
 		R.print(globalLog, " %lg ");
 		if(dryRun)
@@ -59,25 +63,29 @@ struct ePhRelax
 		dosPh.init("phononDOS.dat", eV, 1./(detR*eV));
 		nE = dos.xGrid.size();
 		dE = dos.dx;
+		f0.resize(nE);
+		
+		//Calculate maximum electron temperature after absorption (asymptote without e-ph):
+		double Umax = get_Uthermal(T) + Uabs;
+		//--- find bracketing interval:
+		double Tmin = T, deltaT = 100*Kelvin;
+		double Tmax = T + deltaT;
+		while(get_Uthermal(Tmax) < Umax)
+		{	Tmin = Tmax;
+			Tmax = Tmin + deltaT;
+		}
+		//--- bisect:
+		const double tol = 1e-2*Kelvin;
+		double Tmid = 0.5*(Tmin+Tmax);
+		while(Tmax-Tmin > tol)
+		{	double Umid = get_Uthermal(Tmid);
+			((Umid>Umax) ? Tmax : Tmin) = Tmid;
+			Tmid = 0.5*(Tmin + Tmax);
+		}
+		logPrintf("Asymptotic electron temperature without e-ph, TeMax = %.2lf K\n", Tmid/Kelvin);
 		
 		//Determine initial Fermi distribution:
-		f0.resize(nE);
-		//--- Bisect for chemical potential:
-		double dmuMin = dos.xGrid.front() - 10*T;
-		double dmuMax = dos.xGrid.back() + 10*T;
-		double dmu = 0.5*(dmuMin + dmuMax);
-		const double tol = 1e-9*T;
-		while(dmuMax-dmuMin > tol)
-		{	//calculate number of electrons at current Z:
-			double nElectrons = 0.;
-			for(int ie=0; ie<nE; ie++)
-			{	double& fi = f0[ie];
-				fi = fermi((Egrid(ie) - dmu)/T);
-				nElectrons += dE * dos.yGrid[0][ie] * fi * detR;
-			}
-			((nElectrons>Z) ? dmuMax : dmuMin) = dmu;
-			dmu = 0.5*(dmuMin + dmuMax);
-		}
+		double dmu = get_dmu(T);
 		logPrintf("Initial Fermi distribution: dmu = %le eV\n", dmu/eV);
 		//--- calculate density of states at the Fermi level:
 		dos0 = 0.;
@@ -121,6 +129,35 @@ struct ePhRelax
 		ieStart += ieMin;
 		ieStop += ieMin;
 		logPrintf("Active energy grid: [%d,%d) of total %d points, with [%d,%d) on current process.\n", ieMin, ieMax, nE, ieStart, ieStop);
+	}
+	
+	//Bisect for chemical potential:
+	double get_dmu(double T)
+	{	double dmuMin = dos.xGrid.front() - 10*T;
+		double dmuMax = dos.xGrid.back() + 10*T;
+		double dmu = 0.5*(dmuMin + dmuMax);
+		const double tol = 1e-9*T;
+		while(dmuMax-dmuMin > tol)
+		{	//calculate number of electrons at current Z:
+			double nElectrons = 0.;
+			for(int ie=0; ie<nE; ie++)
+			{	double& fi = f0[ie];
+				fi = fermi((Egrid(ie) - dmu)/T);
+				nElectrons += dE * dos.yGrid[0][ie] * fi * detR;
+			}
+			((nElectrons>Z) ? dmuMax : dmuMin) = dmu;
+			dmu = 0.5*(dmuMin + dmuMax);
+		}
+		return dmu;
+	}
+	
+	//Get thermal energy at a given chemical potential:
+	double get_Uthermal(double T)
+	{	get_dmu(T); //this sets the Fermi distribution in f0
+		double U = 0.;
+		for(int ie=0; ie<nE; ie++)
+			U += dE * dos.yGrid[0][ie] * f0[ie] * Egrid(ie);
+		return U;
 	}
 	
 	//Evaluate e-e and e-Ph collision integrals (nonlinear):
@@ -237,7 +274,7 @@ int main(int argc, char** argv)
 	std::vector<diagMatrix> fArr;
 	fArr.push_back(f);
 	logPrintf("\nSolving boltzmann eqn:\n");
-	logPrintf("%19s  %19s  %19s  %7s  %s\n", "Ee[J/m^3]", "El[J/m^3]", "(El+Ee)[J/m^3]", "Tl[K]", "Progress");
+	logPrintf("%5s  %19s  %19s  %19s  %7s  %s\n", "t[fs]",  "Ee[J/m^3]", "El[J/m^3]", "(El+Ee)[J/m^3]", "Tl[K]", "Progress");
 	logFlush();
 	while(t < tMax)
 	{	int status = gsl_odeiv2_driver_apply(odeDriver, &t, t+dt, f.data());
@@ -247,7 +284,7 @@ int main(int argc, char** argv)
 		//Print progress:
 		const double Eunits = Joule/pow(meter,3);
 		double dEe = e.Ee(f)-Ee0, dEl = e.El(f.back())-El0;
-		logPrintf("%19.13le  %19.13le  %19.13le  %7.2lf  %.1f%%\n", dEe/Eunits, dEl/Eunits, (dEe+dEl)/Eunits, f.back()/Kelvin, 100.*t/tMax);
+		logPrintf("%5g  %19.13le  %19.13le  %19.13le  %7.2lf  %.1f%%\n", t/fs, dEe/Eunits, dEl/Eunits, (dEe+dEl)/Eunits, f.back()/Kelvin, 100.*t/tMax);
 		logFlush();
 	}
 	logPrintf("done.\n"); logFlush();
@@ -268,7 +305,7 @@ int main(int argc, char** argv)
 	{	std::ofstream ofs;
 		
 		//Lattice temperature:
-		ofs.open("temp.Tl");
+		ofs.open((e.runName+".Tl").c_str());
 		ofs.precision(10);
 		ofs << "#t[fs] Tl[K]\n";
 		for(size_t it=0; it<fArr.size(); it++)
@@ -276,8 +313,7 @@ int main(int argc, char** argv)
 		ofs.close();
 		
 		//Distributions [dimensionless]
-		//ofs.open((e.runName+".f").c_str());
-		ofs.open("temp.f");
+		ofs.open((e.runName+".f").c_str());
 		ofs.precision(10);
 		//--- Header
 		ofs << "#E[ev]\\t[fs]";
@@ -294,7 +330,7 @@ int main(int argc, char** argv)
 		ofs.close();
 		
 		//Linewidth corrections [eV]
-		ofs.open("temp.lwDelta");
+		ofs.open((e.runName+".lwDelta").c_str());
 		ofs.precision(10);
 		//--- Header
 		ofs << "#E[ev]\\t[fs]";
