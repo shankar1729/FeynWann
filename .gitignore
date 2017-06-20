@@ -1,0 +1,9 @@
+.kdev*
+build
+testBandStruct
+plasmonDecayMetropolis
+plasmonPhononDecay
+Run*
+EventLists
+.directory
+
