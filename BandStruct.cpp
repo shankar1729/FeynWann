@@ -167,25 +167,35 @@ BandStruct::BandStruct(string totalEprefix, string wannierPrefix, bool needPhono
 	
 	if(needPhonons)
 	{	//Read phonon cell map
-		ifs.open((totalEprefix + ".phononCellMap").c_str());
+		string fname = wannierPrefix + ".mlwfCellMapPh";
+		if(fileSize(fname.c_str()) <= 0) fname = totalEprefix + ".phononCellMap";
+		logPrintf("Reading '%s' ... ", fname.c_str()); logFlush();
+		ifs.open(fname.c_str());
 		getline(ifs, headerLine); //read and ignore header line
 		while(ifs >> cm[0] >> cm[1] >> cm[2] >> x >> y >> z)
 			phononCellMap.push_back(cm);
 		ifs.close();
-
+		logPrintf("done.\n"); logFlush();
+		
 		//Read phonon force matrix
-		string phFile = totalEprefix + ".phononOmegaSq";
-		nModes = sqrt(fileSize(phFile.c_str())/(sizeof(double)*phononCellMap.size())); //phonon omegaSq is always real
+		fname = wannierPrefix + ".mlwfOmegaSqPh";
+		if(fileSize(fname.c_str()) <= 0) fname = totalEprefix + ".phononOmegaSq";
+		logPrintf("Reading '%s' ... ", fname.c_str()); logFlush();
+		nModes = sqrt(fileSize(fname.c_str())/(sizeof(double)*phononCellMap.size())); //phonon omegaSq is always real
 		omegaSqPh.init(nModes*nModes, phononCellMap.size());
-		omegaSqPh.read_real(phFile.c_str());
+		omegaSqPh.read_real(fname.c_str());
+		logPrintf("done.\n"); logFlush();
 		
 		//Read phononCellMapSqPh
-		ifs.open((wannierPrefix + ".mlwfCellMapSqPh").c_str());
+		fname = wannierPrefix + ".mlwfCellMapSqPh";
+		logPrintf("Reading '%s' ... ", fname.c_str()); logFlush();
+		ifs.open(fname.c_str());
 		getline(ifs, headerLine); // read and ignore header line
 		CellPair cp;
 		while(ifs >> cp.iR1[0] >> cp.iR1[1] >> cp.iR1[2] >> cp.iR2[0] >> cp.iR2[1] >> cp.iR2[2])
 			phononCellMapSq.push_back(cp);
 		ifs.close();
+		logPrintf("done.\n"); logFlush();
 		
 		//Check the order of pairs in phononCellMapSqPh:
 		auto pairIter = phononCellMapSq.begin();
