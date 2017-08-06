@@ -6,7 +6,7 @@
 #include <core/WignerSeitz.h>
 #include "BandStruct.h"
 #include "InputMap.h"
-#include "Units.h"
+#include <core/Units.h>
 
 void reportResult(const std::vector<matrix3<>>& result, string resultName, double unit, string unitName)
 {	matrix3<> resultMean, resultStd;

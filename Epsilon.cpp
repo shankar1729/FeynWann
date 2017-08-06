@@ -6,7 +6,7 @@
 #include <vector>
 #include <math.h>
 #include "Epsilon.h"
-#include "Units.h"
+#include <core/Units.h>
 
 Epsilon::Epsilon(string filename)
 {	logPrintf("\n---- Initializing dielectric model ----\n");

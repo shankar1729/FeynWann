@@ -6,7 +6,7 @@
 #include <vector>
 #include <math.h>
 #include <algorithm>
-#include "Units.h"
+#include <core/Units.h>
 
 void readMatrix(matrix& m, string fname, int spinWeight); //declared in BandStruct.cpp
 

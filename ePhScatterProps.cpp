@@ -4,7 +4,7 @@
 #include <core/Random.h>
 #include "BandStruct.h"
 #include "InputMap.h"
-#include "Units.h"
+#include <core/Units.h>
 #include "Histogram.h"
 
 int main(int argc, char** argv)

@@ -6,7 +6,7 @@
 #include <core/WignerSeitz.h>
 #include "BandStruct.h"
 #include "InputMap.h"
-#include "Units.h"
+#include <core/Units.h>
 #include "Histogram.h"
 #include "Epsilon.h"
 
@@ -21,8 +21,8 @@ int main(int argc, char** argv)
 	//Get the system parameters (mu, T, lattice vectors etc.)
 	InputMap inputMap(inputFilename);
 	int nKpts = inputMap.get("nKpts");
-	const double vL = inputMap.get("vL") * meter*invSeconds; //longitudinal speed of sound
-	const double vT = inputMap.get("vT") * meter*invSeconds; //transverse speed of sound (assumed x2)
+	const double vL = inputMap.get("vL") * meter/sec; //longitudinal speed of sound
+	const double vT = inputMap.get("vT") * meter/sec; //transverse speed of sound (assumed x2)
 	const double domegaPh = inputMap.get("domegaPh") * eV; //phonon energy resolution (should be much smaller than TD)
 	const double TlMin = inputMap.get("TlMin") * Kelvin; //lattice temperature grid start
 	const double TlMax = inputMap.get("TlMax") * Kelvin; //lattice temperature grid stop

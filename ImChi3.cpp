@@ -8,7 +8,7 @@
 #include "Epsilon.h"
 #include "LineWidth.h"
 #include "InputMap.h"
-#include "Units.h"
+#include <core/Units.h>
 
 //Lorentzian kernel for an odd function stored on postive frequencies alone:
 inline double lorentzianOdd(double omega, double omega0, double breadth)

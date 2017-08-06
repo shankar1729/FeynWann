@@ -7,7 +7,7 @@
 #include "BandStruct.h"
 #include "LineWidth.h"
 #include "InputMap.h"
-#include "Units.h"
+#include <core/Units.h>
 #include "Histogram.h"
 #include "Epsilon.h"
 
@@ -403,7 +403,7 @@ int main(int argc, char** argv)
 	if(mpiUtil->isHead())
 	{	const double Omega = fabs(det(bs.R));
 		const double CeSI = Joule/(Kelvin*pow(meter,3));
-		const double GePhSI = Joule*invSeconds/(Kelvin*pow(meter,3));
+		const double GePhSI = Joule/(Kelvin*pow(meter,3)*sec);
 		ofstream ofs("TAparameters.dat");
 		ofs << "#T[K] dmu[eV] Ce[J/m^3K] GePh[W/m^3K]\n";
 		for(size_t iT=0; iT<TeArr.size(); iT++)

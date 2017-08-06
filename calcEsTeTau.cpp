@@ -5,7 +5,7 @@
 #include <core/string.h>
 #include <core/WignerSeitz.h>
 #include "InputMap.h"
-#include "Units.h"
+#include <core/Units.h>
 
 inline double fermi(double x) { return x>30. ? exp(-x) : 1./(1.+exp(x)); } //avoid overflow issues
 inline double argLW(double E,double Es) { return sqrt(E)/(E+Es) + atan(sqrt(E/Es))/sqrt(Es); }
@@ -140,7 +140,7 @@ int main(int argc, char** argv)
 	for(size_t iT=0; iT<TeArr.size(); iT++)
 	{	ofs << TeArr[iT]/Kelvin;
 		for(size_t iE=0; iE<EArr.size(); iE++)
-			ofs << '\t' << invTauTe[iT][iE]/invSeconds;
+			ofs << '\t' << invTauTe[iT][iE]/invSec;
 		ofs << '\n';
 	}
 
@@ -149,7 +149,7 @@ int main(int argc, char** argv)
 	{	double E = EArr[iE];
 		double invTauT0 = std::pow(E-Ef, 2) / (64*std::pow(M_PI,3)*std::pow(epsB/(4*M_PI),2)*std::pow(Es,1.5)*sqrt(Ef))
 			* (2.*sqrt(Ef*Es)/(4*Ef+Es) + atan(sqrt(4*Ef/Es)));
-		of << E/eV << '\t' << invTauT0/invSeconds << '\n';
+		of << E/eV << '\t' << invTauT0/invSec << '\n';
 	}
 
 	finalizeSystem();

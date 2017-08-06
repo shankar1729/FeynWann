@@ -7,7 +7,7 @@
 #include <vector>
 #include <math.h>
 #include <set>
-#include "Units.h"
+#include <core/Units.h>
 
 //Read matrix from file accounting for real-only or complex storage based on spinWeight
 void readMatrix(matrix& m, string fname, int spinWeight)

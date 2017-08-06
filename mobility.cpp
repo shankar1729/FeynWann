@@ -6,7 +6,7 @@
 #include <core/WignerSeitz.h>
 #include "BandStruct.h"
 #include "InputMap.h"
-#include "Units.h"
+#include <core/Units.h>
 #include "LineWidth.h"
 #include "Histogram.h"
 
@@ -120,7 +120,7 @@ int main(int argc, char** argv)
 			eMobilityDen += denWeight * g.out[ie] * dE;
 		}
 	}
-	double mobUnit = std::pow(1e-2*meter,2)*invSeconds/Volt;
+	double mobUnit = std::pow(1e-2*meter,2)/(Volt*sec);
 	logPrintf("hMobility = %lg cm^2/(V.s)\n", (hMobilityNum/hMobilityDen)/mobUnit);
 	logPrintf("eMobility = %lg cm^2/(V.s)\n", (eMobilityNum/eMobilityDen)/mobUnit);
 

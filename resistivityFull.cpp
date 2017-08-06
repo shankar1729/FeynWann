@@ -2,7 +2,7 @@
 #include <core/Thread.h>
 #include "BandStruct.h"
 #include "InputMap.h"
-#include "Units.h"
+#include <core/Units.h>
 #include <deque>
 
 struct SparseMatrix
