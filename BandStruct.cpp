@@ -1,7 +1,7 @@
 #include "BandStruct.h"
 #include <core/Util.h>
 #include <core/BlasExtra.h>
-#include <electronic/matrix.h>
+#include <core/matrix.h>
 #include <iostream>
 #include <fstream>
 #include <vector>

@@ -4,7 +4,7 @@
 #include "Histogram.h"
 #include <core/Util.h>
 #include <core/Operators.h>
-#include <electronic/matrix.h>
+#include <core/matrix.h>
 #include <gsl/gsl_errno.h>
 #include <gsl/gsl_odeiv2.h>
 #include <fstream>

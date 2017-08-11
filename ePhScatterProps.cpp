@@ -1,5 +1,5 @@
 #include <core/Util.h>
-#include <electronic/matrix.h>
+#include <core/matrix.h>
 #include <core/scalar.h>
 #include <core/Random.h>
 #include "BandStruct.h"

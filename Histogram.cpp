@@ -1,6 +1,6 @@
 #include "Histogram.h"
 #include <core/Util.h>
-#include <electronic/matrix.h>
+#include <core/matrix.h>
 #include <iostream>
 #include <fstream>
 #include <vector>

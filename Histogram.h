@@ -2,7 +2,7 @@
 #define WANNIERMETROPOLIS_HISTOGRAM_H
 
 #include <core/Util.h>
-#include <electronic/matrix.h>
+#include <core/matrix.h>
 #include <vector>
 #include <math.h>
 #include <algorithm>

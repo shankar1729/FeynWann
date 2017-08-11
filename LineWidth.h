@@ -1,7 +1,7 @@
 #ifndef WANNIERMETROPOLIS_LINEWIDTH_H
 #define WANNIERMETROPOLIS_LINEWIDTH_H
 
-#include <electronic/matrix.h>
+#include <core/matrix.h>
 #include <core/string.h>
 #include <vector>
 #include "BandStruct.h"

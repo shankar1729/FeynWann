@@ -2,7 +2,7 @@
 #define WANNIERMETROPOLIS_BANDSTRUCT_H
 
 #include <core/Util.h>
-#include <electronic/matrix.h>
+#include <core/matrix.h>
 #include <vector>
 #include <memory>
 #include <math.h>

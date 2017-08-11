@@ -1,6 +1,6 @@
 #include <core/Util.h>
 #include <core/Spline.h>
-#include <electronic/matrix.h>
+#include <core/matrix.h>
 #include <iostream>
 #include <fstream>
 #include <vector>

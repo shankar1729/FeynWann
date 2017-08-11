@@ -1,5 +1,5 @@
 #include <core/Util.h>
-#include <electronic/matrix.h>
+#include <core/matrix.h>
 #include <electronic/ColumnBundle.h>
 #include <electronic/Everything.h>
 #include <core/scalar.h>

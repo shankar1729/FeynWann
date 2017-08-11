@@ -2,7 +2,7 @@
 #include <core/scalar.h>
 #include <core/string.h>
 #include <core/Util.h>
-#include <electronic/matrix.h>
+#include <core/matrix.h>
 #include <fstream>
 #include <vector>
 #include <math.h>
