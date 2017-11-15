@@ -98,18 +98,18 @@ int main(int argc, char** argv)
 			Emax = std::max(Emax, E.back());
 		}
 	}
-	mpiUtil->allReduce(Emin, MPIUtil::ReduceMin);
-	mpiUtil->allReduce(Emax, MPIUtil::ReduceMax);
+	mpiWorld->allReduce(Emin, MPIUtil::ReduceMin);
+	mpiWorld->allReduce(Emax, MPIUtil::ReduceMax);
 	Emin -= 10*dE; //add some margin
 	Emax += 10*dE;
 	Histogram dos(Emin, dE, Emax); //density of states
 	logPrintf("Initialized energy grid: %lg to %lg eV with %lu points.\n", Emin/eV, (Emin+dE*(dos.out.size()-1))/eV, dos.out.size());
 	
 	//Initialize sampling parameters:
-	int ikStart, ikStop; TaskDivision(nKpts, mpiUtil).myRange(ikStart, ikStop);
+	int ikStart, ikStop; TaskDivision(nKpts, mpiWorld).myRange(ikStart, ikStop);
 	int nBunchesMine = ceil((ikStop-ikStart)*1./bunchSize); //number of bunches on current process
 	int iBunchInterval = std::max(1, int(round(nBunchesMine/50.))); //interval for reporting progress
-	nKpts = nBunchesMine * bunchSize; mpiUtil->allReduce(nKpts, MPIUtil::ReduceSum); //total number of sampled k-points
+	nKpts = nBunchesMine * bunchSize; mpiWorld->allReduce(nKpts, MPIUtil::ReduceSum); //total number of sampled k-points
 	long nKpairs = nKpts * (bunchSize-1); //total number of sampled k-point pairs for phonon-assisted transitions
 	int nBands = Egamma.nRows();
 	int nModes = bs.getPhononModes(vector3<>()).nRows();
@@ -162,7 +162,7 @@ int main(int argc, char** argv)
 		Zmax += dE * g;
 	if(Zmax < bs.nElectrons)
 		die("Current DOS can only support %lg electrons > %lg electrons specified.\n", Zmax, bs.nElectrons);
-	int iTstart, iTstop; TaskDivision(TeArr.size(), mpiUtil).myRange(iTstart, iTstop);
+	int iTstart, iTstop; TaskDivision(TeArr.size(), mpiWorld).myRange(iTstart, iTstop);
 	for(int iT=iTstart; iT<iTstop; iT++)
 	{	const double Te = TeArr[iT], invTe = 1./Te;
 		//Bisect for chemical potential:
@@ -353,7 +353,7 @@ int main(int argc, char** argv)
 	//Matrix element statistics:
 	MepNum.allReduce(MPIUtil::ReduceSum);
 	MepDen.allReduce(MPIUtil::ReduceSum);
-	if(mpiUtil->isHead())
+	if(mpiWorld->isHead())
 	{	ofstream ofs("Mep.dat");
 		for(size_t i=0; i<MepNum.out.size(); i++)
 			ofs << (MepNum.Emin + i*MepNum.dE)/eV << '\t' << MepNum.out[i]/MepDen.out[i] << '\n';
@@ -380,7 +380,7 @@ int main(int argc, char** argv)
 	//Apply Broadening
 	std::vector<Histogram> ImEpsDirectBroad(TeArr.size(), Histogram(0, dE, omegaMax));
 	std::vector<Histogram> ImEpsPhononBroad(TeArr.size(), Histogram(0, dE, omegaMax));
-	int iomegaStart, iomegaStop; TaskDivision(nomega, mpiUtil).myRange(iomegaStart, iomegaStop);
+	int iomegaStart, iomegaStop; TaskDivision(nomega, mpiWorld).myRange(iomegaStart, iomegaStop);
 	logPrintf("Applying broadening ... "); logFlush();
 	for(size_t iT=0; iT<TeArr.size(); iT++)
 	{	for(int iomega=iomegaStart; iomega<iomegaStop; iomega++) //input frequency grid split over MPI
@@ -400,7 +400,7 @@ int main(int argc, char** argv)
         for(Histogram& h: ImEpsDirectBroad) h.allReduce(MPIUtil::ReduceSum);
         for(Histogram& h: ImEpsPhononBroad) h.allReduce(MPIUtil::ReduceSum);
 
-	if(mpiUtil->isHead())
+	if(mpiWorld->isHead())
 	{	const double Omega = fabs(det(bs.R));
 		const double CeSI = Joule/(Kelvin*pow(meter,3));
 		const double GePhSI = Joule/(Kelvin*pow(meter,3)*sec);

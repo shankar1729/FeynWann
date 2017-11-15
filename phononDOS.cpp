@@ -66,16 +66,16 @@ int main(int argc, char** argv)
 			k[j] = Random::uniform();
 		omegaPhMax = std::max(omegaPhMax, bs.getPhononModes(k).back());
 	}
-	mpiUtil->allReduce(omegaPhMax, MPIUtil::ReduceMax);
+	mpiWorld->allReduce(omegaPhMax, MPIUtil::ReduceMax);
 	omegaPhMax *= 1.25; //add some margin
 	Histogram dos(0, domegaPh, omegaPhMax); //phonon density of states
 	logPrintf("Initialized phonon energy grid: 0 to %lg eV with %lu points.\n", (domegaPh*(dos.out.size()-1))/eV, dos.out.size());
 	
 	//Initialize sampling parameters:
-	int ikStart, ikStop; TaskDivision(nKpts, mpiUtil).myRange(ikStart, ikStop);
+	int ikStart, ikStop; TaskDivision(nKpts, mpiWorld).myRange(ikStart, ikStop);
 	int nkMine = (ikStop-ikStart); //number of k's on current process
 	int ikInterval = std::max(1, int(round(nkMine/50.))); //interval for reporting progress
-	nKpts = nkMine; mpiUtil->allReduce(nKpts, MPIUtil::ReduceSum); //total number of sampled k-points
+	nKpts = nkMine; mpiWorld->allReduce(nKpts, MPIUtil::ReduceSum); //total number of sampled k-points
 	int nModes = bs.getPhononModes(vector3<>()).nRows();
 	if(nModes != 3) logPrintf("WARNING: the Debye estimates are only valid if nModes = 3.\n");
 	
@@ -107,7 +107,7 @@ int main(int argc, char** argv)
 	
 	//Calculate Cl at each temperature:
 	diagMatrix Cl(TlArr.size(), 0.), ClDebye(TlArr.size(), 0.);
-	int iTstart, iTstop; TaskDivision(TlArr.size(), mpiUtil).myRange(iTstart, iTstop);
+	int iTstart, iTstop; TaskDivision(TlArr.size(), mpiWorld).myRange(iTstart, iTstop);
 	const double dosPrefacDebyeL = fabs(det(bs.R)) / (2*M_PI*M_PI * std::pow(vL,3)); 
 	const double dosPrefacDebyeT = fabs(det(bs.R)) / (2*M_PI*M_PI * std::pow(vT,3)); 
 	std::vector<double> dosDebyeArr(dos.out.size());
@@ -134,7 +134,7 @@ int main(int argc, char** argv)
 	Cl.allReduce(MPIUtil::ReduceSum);
 	ClDebye.allReduce(MPIUtil::ReduceSum);
 
-	if(mpiUtil->isHead())
+	if(mpiWorld->isHead())
         {        ofstream ofs("phononDOSDebye.dat");
 	        ofs << "#omega[eV] phononDOSDebye[eV^-1]\n";
 		for(size_t ie=1; ie<dos.out.size(); ie++)
@@ -143,7 +143,7 @@ int main(int argc, char** argv)
         }
 
 
-	if(mpiUtil->isHead())
+	if(mpiWorld->isHead())
 	{	const double Omega = fabs(det(bs.R));
 		const double ClSI = Joule/(Kelvin*pow(meter,3));
 		ofstream ofs("phononCl.dat");

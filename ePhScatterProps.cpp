@@ -35,9 +35,9 @@ int main(int argc, char** argv)
 	logPrintf("\n");
 	
 	//Initialize sampling parameters:
-	int ikStart, ikStop; TaskDivision(nKpts, mpiUtil).myRange(ikStart, ikStop);
+	int ikStart, ikStop; TaskDivision(nKpts, mpiWorld).myRange(ikStart, ikStop);
 	int nBunchesMine = ceil((ikStop-ikStart)*1./bunchSize); //number of bunches on current process
-	nKpts = nBunchesMine * bunchSize; mpiUtil->allReduce(nKpts, MPIUtil::ReduceSum); //total number of sampled k-points
+	nKpts = nBunchesMine * bunchSize; mpiWorld->allReduce(nKpts, MPIUtil::ReduceSum); //total number of sampled k-points
 	long nKpairs = nKpts * (bunchSize-1); //total number of sampled k-point pairs for phonon-scattering events
 	int nBands = bs.getStates(vector3<>()).nRows();
 	int nModes = bs.getPhononModes(vector3<>()).nRows();
@@ -50,7 +50,7 @@ int main(int argc, char** argv)
 			k[j] = Random::uniform();
 		EphMax = std::max(EphMax, bs.getPhononModes(k).back());
 	}
-	mpiUtil->allReduce(EphMax, MPIUtil::ReduceMax);
+	mpiWorld->allReduce(EphMax, MPIUtil::ReduceMax);
 	logPrintf("Maximum phonon energy = %lg eV\n", EphMax/eV);
 	
 	//Binning:

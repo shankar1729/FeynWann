@@ -15,7 +15,7 @@ struct SparseMatrix
 	std::vector<Entry> entries; //MPI divided; each process has a subset
 	
 	SparseMatrix(int nRows, int nCols, int nNZestimate=0) : nRows(nRows), nCols(nCols)
-	{	if(nNZestimate) entries.reserve(nNZestimate / mpiUtil->nProcesses());
+	{	if(nNZestimate) entries.reserve(nNZestimate / mpiWorld->nProcesses());
 	}
 	
 	//Matrix multiply:
@@ -42,7 +42,7 @@ struct SparseMatrix
 	
 	complex safe_dot(const matrix& A, const matrix& B) const
 	{	complex result = trace(dagger(A) * B);
-		mpiUtil->bcast(&result.real(), 2);
+		mpiWorld->bcast(&result.real(), 2);
 		return result;
 	}
 	
@@ -128,7 +128,7 @@ struct SparseMatrix
 				if(Ad_r.abs() < threshold * sqrt(Ad_Ad * r_r))
 				{	//Need to try a new search direction (try random):
 					logPrintf("DIIS: Singularity in subspace expansion, randomizing search direction.\n");
-					if(mpiUtil->isHead())
+					if(mpiWorld->isHead())
 						randomize(d);
 					d.bcast();
 					continue;
@@ -166,8 +166,8 @@ int main(int argc, char** argv)
 	//Compile list of k-points and bands within fermi level:
 	vector3<int> Nk(1,1,1); Nk *= 32;
 	int NkProd = Nk[0]*Nk[1]*Nk[2];
-	int ik0start = (Nk[0] * mpiUtil->iProcess()) / mpiUtil->nProcesses();
-	int ik0stop = (Nk[0] * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
+	int ik0start = (Nk[0] * mpiWorld->iProcess()) / mpiWorld->nProcesses();
+	int ik0stop = (Nk[0] * (mpiWorld->iProcess()+1)) / mpiWorld->nProcesses();
 	vector3<int> ikStride(Nk[1]*Nk[2], Nk[2], 1);
 	struct State
 	{	vector3<int> ik; //integer kmesh coordinates
@@ -204,15 +204,15 @@ int main(int argc, char** argv)
 	}
 	//--- synchronize states:
 	int nStatesCur = statesCur.size();
-	int nStates = nStatesCur; mpiUtil->allReduce(nStates, MPIUtil::ReduceSum);
+	int nStates = nStatesCur; mpiWorld->allReduce(nStates, MPIUtil::ReduceSum);
 	std::vector<State> states(nStates);
 	char* statePtr = (char*)(&states[0]);
-	for(int jProcess=0; jProcess<mpiUtil->nProcesses(); jProcess++)
-	{	int nStates_j = nStatesCur; mpiUtil->bcast(nStates_j, jProcess);
+	for(int jProcess=0; jProcess<mpiWorld->nProcesses(); jProcess++)
+	{	int nStates_j = nStatesCur; mpiWorld->bcast(nStates_j, jProcess);
 		size_t nBytes_j = nStates_j * sizeof(State);
-		if(jProcess==mpiUtil->iProcess())
+		if(jProcess==mpiWorld->iProcess())
 			memcpy(statePtr, statesCur.data(), nBytes_j);
-		mpiUtil->bcast(statePtr, nBytes_j, jProcess);
+		mpiWorld->bcast(statePtr, nBytes_j, jProcess);
 		statePtr += nBytes_j;
 	}
 	logPrintf("nStates = %d\n", nStates);
@@ -306,8 +306,8 @@ int main(int argc, char** argv)
 	SparseMatrix S(nStates, nStates, (nPairs*1.*nStates*nStates)/nPairsTot);
 	double prefacS = 2*M_PI/NkProd;
 	double tauInvNum = 0.;
-	int pairSetStart = (kpairSets.size() * mpiUtil->iProcess()) / mpiUtil->nProcesses();
-	int pairSetStop = (kpairSets.size() * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
+	int pairSetStart = (kpairSets.size() * mpiWorld->iProcess()) / mpiWorld->nProcesses();
+	int pairSetStop = (kpairSets.size() * (mpiWorld->iProcess()+1)) / mpiWorld->nProcesses();
 	for(int pairSet=pairSetStart; pairSet<pairSetStop; pairSet++)
 	{	const KpairSet& kpairSet = kpairSets[pairSet];
 		int kIndex1 = kpairSet.kIndex1;
@@ -354,12 +354,12 @@ int main(int argc, char** argv)
 			}
 		}
 	}
-	mpiUtil->allReduce(tauInvNum, MPIUtil::ReduceSum);
+	mpiWorld->allReduce(tauInvNum, MPIUtil::ReduceSum);
 	
 	//Convert 'S' to matrix 'B' in the derivation:
 	diagMatrix DiagSsum = S.DiagSumRows();
-	int iStateStart = (nStates * mpiUtil->iProcess()) / mpiUtil->nProcesses();
-	int iStateStop = (nStates * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
+	int iStateStart = (nStates * mpiWorld->iProcess()) / mpiWorld->nProcesses();
+	int iStateStop = (nStates * (mpiWorld->iProcess()+1)) / mpiWorld->nProcesses();
 	for(int iState=iStateStart; iState<iStateStop; iState++)
 		S.entries.push_back(SparseMatrix::Entry(iState, iState, -DiagSsum[iState]));
 	const SparseMatrix& B = S; //call it B for clarity in the following

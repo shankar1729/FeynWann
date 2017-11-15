@@ -47,7 +47,7 @@ int main(int argc, char** argv)
 	
 	//Initialize sampling parameters:
 	const double qMax = sqrt(kF*kF + 2*EplasmonMax);
-	int ikStart, ikStop; TaskDivision(nKptsN1, mpiUtil).myRange(ikStart, ikStop);
+	int ikStart, ikStop; TaskDivision(nKptsN1, mpiWorld).myRange(ikStart, ikStop);
 	
 	//Initialize histograms:
 	Histogram GammaSurface(T, T, EplasmonMax-T);
@@ -91,7 +91,7 @@ int main(int argc, char** argv)
 	}
 	GammaSurface.allReduce(MPIUtil::ReduceSum);
 	
-	if(mpiUtil->isHead())
+	if(mpiWorld->isHead())
 	{	ofstream ofs("surfaceAssisted.dat");
 		ofs << "omega Numerical Khurgin Analytical Analytical2\n";
 		for(size_t i=0; i<GammaSurface.out.size(); i++)

@@ -41,7 +41,7 @@ public:
 			for(int iCell: cellSet)
 				cellWeights[iCell] = 1./(cellSet.size()*cellSets.size());
 		//Transform from Bloch to Wannier:
-		int qStart, qStop; TaskDivision(kArr.size(), mpiUtil).myRange(qStart, qStop);
+		int qStart, qStop; TaskDivision(kArr.size(), mpiWorld).myRange(qStart, qStop);
 		std::vector<vector3<>> kArrMine(kArr.begin()+qStart, kArr.begin()+qStop);
 		auto ceArr = bs.getElectronCache(kArrMine);
 		matrix ImSigmaRS(bs.nBands*bs.nBands, ceArr.size());
@@ -59,7 +59,7 @@ public:
 		}
 		matrix ImSigmaWannier = ceArr.size() ? ImSigmaRS * phase : zeroes(bs.nBands*bs.nBands, nCells);
 		ImSigmaWannier.allReduce(MPIUtil::ReduceSum);
-		if(mpiUtil->isHead())
+		if(mpiWorld->isHead())
 			ImSigmaWannier.dump(fname.c_str(), bs.spinWeight==2);
 	}
 };
@@ -162,8 +162,8 @@ int main(int argc, char** argv)
 	double prefacImSigma = 0.5 * 2*M_PI/(kOutArr.size()); //Note factor of 0.5 between decay rate and ImSigma due to squaring of wavefunctions to probability
 	double EconserveExpFac = -0.5/std::pow(EconserveWidth,2), EconservePrefac = 1./(sqrt(2.*M_PI)*EconserveWidth); //energy conserving Lorentzian parameters
 	//Loop over blocks of one dimension of second k-point
-	int ikOutStart = (kOutArr.size() * mpiUtil->iProcess()) / mpiUtil->nProcesses();
-	int ikOutStop = (kOutArr.size() * (mpiUtil->iProcess()+1)) / mpiUtil->nProcesses();
+	int ikOutStart = (kOutArr.size() * mpiWorld->iProcess()) / mpiWorld->nProcesses();
+	int ikOutStop = (kOutArr.size() * (mpiWorld->iProcess()+1)) / mpiWorld->nProcesses();
 	int nkOutBlocks = ceildiv(ikOutStop-ikOutStart, bunchSize);
 	int nkOutInterval = std::max(1, int(round(nkOutBlocks/50.))); //interval for reporting progress
 	std::vector<diagMatrix> ImSigmaReduced(kInReduced.size(), diagMatrix(nBands, 0.)); //imaginary part of self-energy on reduced mesh
@@ -229,7 +229,7 @@ int main(int argc, char** argv)
 		ImSigmaP[q] = ImSigmaReducedP[iReduced[q]];
 	}
 	
-	if(mpiUtil->isHead())
+	if(mpiWorld->isHead())
 	{	if(prodNkIn==1) logPrintf("\n#E ImSigma_ePh ImSigmaP_ePh\n");
 		FILE* fp = (prodNkIn==1) ? globalLog : fopen("ImSigma_ePh.dat", "w"); //for special k-point mode, only report in log file
 		for(size_t q=0; q<kInReduced.size(); q++)

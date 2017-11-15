@@ -23,7 +23,7 @@ int main(int argc, char** argv)
 	
 	//Calculate band energies and lifetimes:
 	int nBands = bs.getStates(vector3<>()).nRows();
-	int ik0start, ik0stop; TaskDivision(nk, mpiUtil).myRange(ik0start, ik0stop);
+	int ik0start, ik0stop; TaskDivision(nk, mpiWorld).myRange(ik0start, ik0stop);
 	int nk0mine = ik0stop - ik0start;
 	typedef std::pair<double,double> dpair;
 	std::vector<std::vector<dpair> > Epair(nBands, std::vector<dpair>(nk0mine*nk*nk));
@@ -49,16 +49,16 @@ int main(int argc, char** argv)
 	{	//Determine energy range:
 		double Emin = std::min_element(Epair[b].begin(), Epair[b].end())->first;
 		double Emax = std::max_element(Epair[b].begin(), Epair[b].end())->first;
-		mpiUtil->allReduce(Emin, MPIUtil::ReduceMin);
-		mpiUtil->allReduce(Emax, MPIUtil::ReduceMax);
+		mpiWorld->allReduce(Emin, MPIUtil::ReduceMin);
+		mpiWorld->allReduce(Emax, MPIUtil::ReduceMax);
 		if(Emin>=0. || Emax<=0.) continue; //band does not cross Fermi level
 		//Output binary file:
 		char fname[256]; MPIUtil::File fp;
 		sprintf(fname, "FermiSurface.%d.bin", b);
-		mpiUtil->fopenWrite(fp, fname);
-		mpiUtil->fseek(fp, ik0start*nk*nk*sizeof(dpair), SEEK_SET);
-		mpiUtil->fwrite(Epair[b].data(), sizeof(dpair), Epair[b].size(), fp);
-		mpiUtil->fclose(fp);
+		mpiWorld->fopenWrite(fp, fname);
+		mpiWorld->fseek(fp, ik0start*nk*nk*sizeof(dpair), SEEK_SET);
+		mpiWorld->fwrite(Epair[b].data(), sizeof(dpair), Epair[b].size(), fp);
+		mpiWorld->fclose(fp);
 	}
 	
 	finalizeSystem();

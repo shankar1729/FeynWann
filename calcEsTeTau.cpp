@@ -57,7 +57,7 @@ int main(int argc, char** argv)
 
 	// ============================ calculate mu(Te) ========================================================
 	diagMatrix dmu(TeArr.size(), 0.);
-	int iTstart, iTstop; TaskDivision(TeArr.size(), mpiUtil).myRange(iTstart, iTstop);
+	int iTstart, iTstop; TaskDivision(TeArr.size(), mpiWorld).myRange(iTstart, iTstop);
 	for(int iT=iTstart; iT<iTstop; iT++)
 	{	const double Te = TeArr[iT], invTe = 1./Te;
 		//Initialize energy grid:
@@ -83,7 +83,7 @@ int main(int argc, char** argv)
 	}
 	dmu.allReduce(MPIUtil::ReduceSum);
 
-	if(mpiUtil->isHead())
+	if(mpiWorld->isHead())
 	{	ofstream ofs("mu_Te_Jellium.dat");
 		ofs << "#T[K] dmu[eV] \n";
 		for(size_t iT=0; iT<TeArr.size(); iT++)

@@ -27,12 +27,12 @@ void Histogram::addEvent(double E, double weight)
 }
 
 void Histogram::allReduce(MPIUtil::ReduceOp op, bool safeMode)
-{	if(mpiUtil->nProcesses()>1)
-		mpiUtil->allReduce(out.data(), out.size(), op, safeMode);
+{	if(mpiWorld->nProcesses()>1)
+		mpiWorld->allReduce(out.data(), out.size(), op, safeMode);
 }
 
 void Histogram::print(string fname, double Escale, double histScale) const
-{	if(!mpiUtil->isHead()) return;
+{	if(!mpiWorld->isHead()) return;
 	ofstream ofs(fname.c_str());
 	for(size_t i=0; i<out.size(); i++)
 		ofs << (Emin+i*dE)*Escale << "\t" << out[i]*histScale << '\n';
@@ -69,12 +69,12 @@ void Histogram2D::addEvent(double E, double omega, double weight)
 }
 
 void Histogram2D::allReduce(MPIUtil::ReduceOp op, bool safeMode)
-{	if(mpiUtil->nProcesses()>1)
-		mpiUtil->allReduce(out.data(), out.size(), op, safeMode);
+{	if(mpiWorld->nProcesses()>1)
+		mpiWorld->allReduce(out.data(), out.size(), op, safeMode);
 }
 
 void Histogram2D::print(string fname, double Escale, double omegaScale, double histScale) const
-{	if(!mpiUtil->isHead()) return;
+{	if(!mpiWorld->isHead()) return;
 	ofstream ofs(fname.c_str());
 	//Print in octave/matlab mat format for ease:
 	//--- E grid:

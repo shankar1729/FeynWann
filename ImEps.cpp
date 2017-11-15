@@ -63,9 +63,9 @@ int main(int argc, char** argv)
 	LineWidth lineWidth("Wannier/wannier", bs);
 
 	//Initialize sampling parameters:
-	int ikStart, ikStop; TaskDivision(nKpts, mpiUtil).myRange(ikStart, ikStop);
+	int ikStart, ikStop; TaskDivision(nKpts, mpiWorld).myRange(ikStart, ikStop);
 	int nBunchesMine = ceil((ikStop-ikStart)*1./bunchSize); //number of bunches on current process
-	nKpts = nBunchesMine * bunchSize; mpiUtil->allReduce(nKpts, MPIUtil::ReduceSum); //total number of sampled k-points
+	nKpts = nBunchesMine * bunchSize; mpiWorld->allReduce(nKpts, MPIUtil::ReduceSum); //total number of sampled k-points
 	long nKpairs = nKpts * (bunchSize-1); //total number of sampled k-point pairs for phonon-assisted transitions
 	int nBands = bs.getStates(vector3<>()).nRows();
 	int nModes = bs.getPhononModes(vector3<>()).nRows();
@@ -88,7 +88,7 @@ int main(int argc, char** argv)
 		for(const diagMatrix& E: Earr)
 			omegaMax = std::max(omegaMax, E.back()-E.front());
 	}
-	mpiUtil->allReduce(omegaMax, MPIUtil::ReduceMax);
+	mpiWorld->allReduce(omegaMax, MPIUtil::ReduceMax);
 	
 	//dmu array:
 	std::vector<double> dmu(dmuCount, dmuMin); //set first value here
@@ -242,7 +242,7 @@ int main(int argc, char** argv)
 	std::vector<Histogram> ImEpsPhonon(dmuCount, Histogram(0, domega, omegaMax));
 	Histogram2D ImEpsDirect_E(-EplasmonMax, domega, EplasmonMax,  0, domega, EplasmonMax);
 	Histogram2D ImEpsPhonon_E(-EplasmonMax, domega, EplasmonMax,  0, domega, EplasmonMax);
-	int iomegaStart, iomegaStop; TaskDivision(nomega, mpiUtil).myRange(iomegaStart, iomegaStop);
+	int iomegaStart, iomegaStop; TaskDivision(nomega, mpiWorld).myRange(iomegaStart, iomegaStop);
 	logPrintf("Applying broadening ... "); logFlush();
 	for(int imu=0; imu<dmuCount; imu++)
 	{	for(int iomega=iomegaStart; iomega<iomegaStop; iomega++) //input frequency grid split over MPI
@@ -275,7 +275,7 @@ int main(int argc, char** argv)
 	logPrintf("done.\n"); logFlush();
 	
 	//Output ImEps:
-	if(mpiUtil->isHead())
+	if(mpiWorld->isHead())
 	{	ofstream ofs("ImEps.dat");
 		ofs << "#omega[eV]";
 		for(int imu=0; imu<dmuCount; imu++)

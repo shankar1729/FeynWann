@@ -92,18 +92,18 @@ int main(int argc, char** argv)
 			Emax = std::max(Emax, E.back());
 		}
 	}
-	mpiUtil->allReduce(Emin, MPIUtil::ReduceMin);
-	mpiUtil->allReduce(Emax, MPIUtil::ReduceMax);
+	mpiWorld->allReduce(Emin, MPIUtil::ReduceMin);
+	mpiWorld->allReduce(Emax, MPIUtil::ReduceMax);
 	Emin -= 10*dE; //add some margin
 	Emax += 10*dE;
 	int steps = (Emax-Emin)/dE;
 	logPrintf("Initialized energy grid: %lg to %lg eV with %d points.\n", Emin/eV, (Emin+dE*(steps))/eV, steps);
 	
 	//Initialize sampling parameters:
-	int ikStart, ikStop; TaskDivision(nKpts, mpiUtil).myRange(ikStart, ikStop);
+	int ikStart, ikStop; TaskDivision(nKpts, mpiWorld).myRange(ikStart, ikStop);
 	int nBunchesMine = ceil((ikStop-ikStart)*1./bunchSize); //number of bunches on current process
 	int iBunchInterval = std::max(1, int(round(nBunchesMine/50.))); //interval for reporting progress
-	nKpts = nBunchesMine * bunchSize; mpiUtil->allReduce(nKpts, MPIUtil::ReduceSum); //total number of sampled k-points
+	nKpts = nBunchesMine * bunchSize; mpiWorld->allReduce(nKpts, MPIUtil::ReduceSum); //total number of sampled k-points
 	long nKpairs = nKpts * (bunchSize-1); //total number of sampled k-point pairs for phonon-assisted transitions
 	int nBands = Egamma.nRows();
 	int nModes = bs.getPhononModes(vector3<>()).nRows();
@@ -269,7 +269,7 @@ int main(int argc, char** argv)
 	//Apply Broadening
 	std::vector<Histogram> ImEpsDirectBroad(numTimes, Histogram(0, dE, omegaMax));
 	std::vector<Histogram> ImEpsPhononBroad(numTimes, Histogram(0, dE, omegaMax));
-	int iomegaStart, iomegaStop; TaskDivision(nomega, mpiUtil).myRange(iomegaStart, iomegaStop);
+	int iomegaStart, iomegaStop; TaskDivision(nomega, mpiWorld).myRange(iomegaStart, iomegaStop);
 	logPrintf("Applying broadening ... "); logFlush();
 	for(int iT=0; iT<numTimes; iT++)
 	{	for(int iomega=iomegaStart; iomega<iomegaStop; iomega++) //input frequency grid split over MPI
@@ -289,7 +289,7 @@ int main(int argc, char** argv)
         for(Histogram& h: ImEpsDirectBroad) h.allReduce(MPIUtil::ReduceSum);
         for(Histogram& h: ImEpsPhononBroad) h.allReduce(MPIUtil::ReduceSum);
 
-	if(mpiUtil->isHead())
+	if(mpiWorld->isHead())
 	{	//Print calculated ImEps contributions:
 		writeImEps("ImEps_directNontherm.dat", ImEpsDirectBroad, fInterp.headerVals);
 		writeImEps("ImEps_phononNontherm.dat", ImEpsPhononBroad, fInterp.headerVals);

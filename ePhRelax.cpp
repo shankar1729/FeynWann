@@ -125,7 +125,7 @@ struct ePhRelax
 		ieMin = std::max(0, int(floor((-Eplasmon-10*T-dos.xMin)/dE)));
 		ieMax = std::min(nE, int(ceil((Eplasmon+10*T-dos.xMin)/dE)));
 		int neActive = ieMax - ieMin;
-		TaskDivision(neActive, mpiUtil).myRange(ieStart, ieStop);
+		TaskDivision(neActive, mpiWorld).myRange(ieStart, ieStop);
 		ieStart += ieMin;
 		ieStop += ieMin;
 		logPrintf("Active energy grid: [%d,%d) of total %d points, with [%d,%d) on current process.\n", ieMin, ieMax, nE, ieStart, ieStop);
@@ -301,7 +301,7 @@ int main(int argc, char** argv)
 	logPrintf("done.\n");
 
 	//File outputs:
-	if(mpiUtil->isHead())
+	if(mpiWorld->isHead())
 	{	std::ofstream ofs;
 		
 		//Lattice temperature:

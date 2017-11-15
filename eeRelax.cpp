@@ -46,7 +46,7 @@ struct eeRelax
 		Emin = -Eouter+0.5*dE;
 		Emax = Emin + (nE-1)*dE;
 		logPrintf("Energy grid: Emin = %lg eV to Emax = %lg eV with dE = %lg eV and nE = %d\n", Emin/eV, Emax/eV, dE/eV, nE);
-		TaskDivision(nE, mpiUtil).myRange(ieStart, ieStop);
+		TaskDivision(nE, mpiWorld).myRange(ieStart, ieStop);
 		
 		//Initial Fermi distribution:
 		f0.resize(nE);
@@ -174,7 +174,7 @@ int main(int argc, char** argv)
 	}
 	
 	//File outputs:
-	if(mpiUtil->isHead())
+	if(mpiWorld->isHead())
 	{	//Pulse shape and effective T:
 		std::ofstream ofs((ee.runName+".pulseShape").c_str());
 		ofs.precision(10);

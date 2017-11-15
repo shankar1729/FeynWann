@@ -54,15 +54,15 @@ int main(int argc, char** argv)
 			Emax = std::max(Emax, E.back());
 		}
 	}
-	mpiUtil->allReduce(Emin, MPIUtil::ReduceMin);
-	mpiUtil->allReduce(Emax, MPIUtil::ReduceMax);
+	mpiWorld->allReduce(Emin, MPIUtil::ReduceMin);
+	mpiWorld->allReduce(Emax, MPIUtil::ReduceMax);
 	double dE = 0.1*T;
 	
 	//Collect mobility integrand on energy grid:
 	if(bs.nValence >= bs.nBands)
 		die("Could not find Wannier bands for empty states: needed to calculate electron mobility.\n");
 	logPrintf("Collectinging mobility integrands ... "); logFlush();
-	int nBunches = nKpts/(bunchSize*mpiUtil->nProcesses());
+	int nBunches = nKpts/(bunchSize*mpiWorld->nProcesses());
 	int iBunchInterval = std::max(1, int(round(nBunches/50.))); //interval for reporting progress
 	Histogram vSqTau(Emin, dE, Emax), g(Emin, dE, Emax); //collect v^2*tau and DOS by energy
 	double EvMax = -DBL_MAX, EcMin = +DBL_MAX; //band edges
@@ -95,8 +95,8 @@ int main(int argc, char** argv)
 			logFlush();
 		}
 	}
-	mpiUtil->allReduce(EvMax, MPIUtil::ReduceMax);
-	mpiUtil->allReduce(EcMin, MPIUtil::ReduceMin);
+	mpiWorld->allReduce(EvMax, MPIUtil::ReduceMax);
+	mpiWorld->allReduce(EcMin, MPIUtil::ReduceMin);
 	vSqTau.allReduce(MPIUtil::ReduceSum);
 	g.allReduce(MPIUtil::ReduceSum);
 	logPrintf("done.\n\n"); logFlush();

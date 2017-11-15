@@ -88,7 +88,7 @@ int main(int argc, char** argv)
 	//Monte-Carlo loop over k-points:
 	const double mhlfByTsq = -0.5/(T*T), EconservePrefac = (0.5*bs.spinWeight)/(T*sqrt(2*M_PI));
 	const double weightCut = 1e-2 * EconservePrefac;
-	size_t ieStart, ieStop; TaskDivision(nKpts, mpiUtil).myRange(ieStart, ieStop);
+	size_t ieStart, ieStop; TaskDivision(nKpts, mpiWorld).myRange(ieStart, ieStop);
 	size_t neMine = ieStop-ieStart;
 	size_t ieInterval = std::max(1, int(round(neMine/50.))); //interval for reporting progress
 	logPrintf("\nProgress: "); logFlush();
@@ -202,8 +202,8 @@ int main(int argc, char** argv)
 	logPrintf("done.\n"); logFlush();
 	
 	//Normalize events based on the total k-points explored:
-	mpiUtil->allReduce(nkDirect, MPIUtil::ReduceSum);
-	mpiUtil->allReduce(nkPhonon, MPIUtil::ReduceSum);
+	mpiWorld->allReduce(nkDirect, MPIUtil::ReduceSum);
+	mpiWorld->allReduce(nkPhonon, MPIUtil::ReduceSum);
 	double directPrefac = 4 * std::pow(M_PI,2) * bs.spinWeight / (nkDirect*fabs(det(bs.R)) * omega*omega); //prefactor that yields Im(eps)
 	double phononPrefac = 4 * std::pow(M_PI,2) * bs.spinWeight / (nkPhonon*fabs(det(bs.R)) * omega*omega); //prefactor that yields Im(eps)
 	for(Event& e: events) e.PcvSq *= directPrefac;
@@ -211,20 +211,20 @@ int main(int argc, char** argv)
 
 	//Print collected event / k-point info:
 	unsigned long nEventsTot = events.size(), nEventsPhTot = eventsPh.size();
-	mpiUtil->allReduce(neRaw, MPIUtil::ReduceSum);
-	mpiUtil->allReduce(nEventsTot, MPIUtil::ReduceSum);
-	mpiUtil->allReduce(nEventsPhTot, MPIUtil::ReduceSum);
+	mpiWorld->allReduce(neRaw, MPIUtil::ReduceSum);
+	mpiWorld->allReduce(nEventsTot, MPIUtil::ReduceSum);
+	mpiWorld->allReduce(nEventsPhTot, MPIUtil::ReduceSum);
 	logPrintf("Obtained %lu direct events from %lu k-points.\n", nEventsTot, nkDirect);
 	logPrintf("Obtained %lu phonon events from %lu k-pairs.\n", nEventsPhTot, nkPhonon);
 	logPrintf("Event compression ratio: %lg (due to spinorial degeneracies, if any)\n", neRaw*1./(nEventsTot+nEventsPhTot));
 	
 	//Determine offsets for events from each process:
 	unsigned long nEventsPrev = 0, nEventsPhPrev = 0; //number of events from previous processes
-	for(int jProcess=0; jProcess<mpiUtil->nProcesses(); jProcess++)
+	for(int jProcess=0; jProcess<mpiWorld->nProcesses(); jProcess++)
 	{	unsigned long nEvents = events.size(), nEventsPh = eventsPh.size();
-		mpiUtil->bcast(nEvents, jProcess); //nEvents is now the number of events on jProcess
-		mpiUtil->bcast(nEventsPh, jProcess); //nEventsPh is now the number of eventsPh on jProcess
-		if(jProcess < mpiUtil->iProcess())
+		mpiWorld->bcast(nEvents, jProcess); //nEvents is now the number of events on jProcess
+		mpiWorld->bcast(nEventsPh, jProcess); //nEventsPh is now the number of eventsPh on jProcess
+		if(jProcess < mpiWorld->iProcess())
 		{	nEventsPrev += nEvents;
 			nEventsPhPrev += nEventsPh;
 		}
@@ -235,16 +235,16 @@ int main(int argc, char** argv)
 	MPIUtil::File fpEvent;
 	//--- direct
 	sprintf(fname, "events-%.1lfeV.dat", Eplasmon/eV);
-	mpiUtil->fopenWrite(fpEvent, fname);
-	mpiUtil->fseek(fpEvent, nEventsPrev*sizeof(Event), SEEK_SET);
-	mpiUtil->fwrite(events.data(), sizeof(Event), events.size(), fpEvent);
-	mpiUtil->fclose(fpEvent);
+	mpiWorld->fopenWrite(fpEvent, fname);
+	mpiWorld->fseek(fpEvent, nEventsPrev*sizeof(Event), SEEK_SET);
+	mpiWorld->fwrite(events.data(), sizeof(Event), events.size(), fpEvent);
+	mpiWorld->fclose(fpEvent);
 	//--- phonon
 	sprintf(fname, "eventsPh-%.1lfeV.dat", Eplasmon/eV);
-	mpiUtil->fopenWrite(fpEvent, fname);
-	mpiUtil->fseek(fpEvent, nEventsPhPrev*sizeof(Event), SEEK_SET);
-	mpiUtil->fwrite(eventsPh.data(), sizeof(Event), eventsPh.size(), fpEvent);
-	mpiUtil->fclose(fpEvent);
+	mpiWorld->fopenWrite(fpEvent, fname);
+	mpiWorld->fseek(fpEvent, nEventsPhPrev*sizeof(Event), SEEK_SET);
+	mpiWorld->fwrite(eventsPh.data(), sizeof(Event), eventsPh.size(), fpEvent);
+	mpiWorld->fclose(fpEvent);
 	
 	finalizeSystem();
 }

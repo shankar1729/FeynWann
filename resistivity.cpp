@@ -100,7 +100,7 @@ int main(int argc, char** argv)
 	logPrintf("\n");
 
 	/* //DEBUG: check translation invariance of e-ph matrix elements:
-	if(mpiUtil->isHead())
+	if(mpiWorld->isHead())
 	{	FILE* fp = fopen("test_gePh.dat", "w");
 		for(int block=0; block<200; block++)
 		{	vector3<> k1; for(int j=0; j<3; j++) k1[j] = Random::uniform();
@@ -147,7 +147,7 @@ int main(int argc, char** argv)
 	DeclareArray2D(double, rhoBarArr); DeclareArray2D(double, tauArr); DeclareArray2D(double, tauDrudeArr);
 	DeclareArray2D(double, vFarr); DeclareArray2D(double, gArr); 
 	#undef DeclareArray2D
-	int nKptsMin = ceildiv(nKpts, nBlocks*mpiUtil->nProcesses()); //number of k points per block per process
+	int nKptsMin = ceildiv(nKpts, nBlocks*mpiWorld->nProcesses()); //number of k points per block per process
 	const double Emax = std::max(fabs(dmuMin), fabs(dmuMax)) + 10*T + 5*EconserveWidth; //max energy from Fermi level to consider
 	double EconserveExpFac = -0.5/std::pow(EconserveWidth,2), EconservePrefac = 1./(sqrt(2*M_PI)*EconserveWidth); //energy conserving Gaussian parameters
 	for(int block=0; block<nBlocks; block++)
@@ -232,13 +232,13 @@ int main(int argc, char** argv)
 		
 		//Accumulate between processes:
 		for(int iMu=0; iMu<dmuCount; iMu++)
-		{	mpiUtil->allReduce(&Tcur[iMu](0,0), 3*3, MPIUtil::ReduceSum);
-			mpiUtil->allReduce(&Gamma[iMu](0,0), 3*3, MPIUtil::ReduceSum);
-			mpiUtil->allReduce(g[iMu], MPIUtil::ReduceSum);
-			mpiUtil->allReduce(tauInv[iMu], MPIUtil::ReduceSum);
+		{	mpiWorld->allReduce(&Tcur[iMu](0,0), 3*3, MPIUtil::ReduceSum);
+			mpiWorld->allReduce(&Gamma[iMu](0,0), 3*3, MPIUtil::ReduceSum);
+			mpiWorld->allReduce(g[iMu], MPIUtil::ReduceSum);
+			mpiWorld->allReduce(tauInv[iMu], MPIUtil::ReduceSum);
 		}
-		mpiUtil->allReduce(nKpts, MPIUtil::ReduceSum);
-		mpiUtil->allReduce(nBunches, MPIUtil::ReduceSum);
+		mpiWorld->allReduce(nKpts, MPIUtil::ReduceSum);
+		mpiWorld->allReduce(nBunches, MPIUtil::ReduceSum);
 		logPrintf("useFraction: %lg\n", (bunchSize*nBunches)/nKpts); logFlush();
 		
 		double prefacT = bs.spinWeight/(nKpts);

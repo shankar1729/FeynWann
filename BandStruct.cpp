@@ -211,7 +211,7 @@ BandStruct::BandStruct(string totalEprefix, string wannierPrefix, bool needPhono
 	nPacked = nMain*nMain + 2*nMain*(nBands-nMain);
 	//--- momentum matrix elements
 	if(nPol)
-	{	if(mpiUtil->isHead())
+	{	if(mpiWorld->isHead())
 		{	pWannier.init(nBands*nBands*3, cellMap.size());
 			readMatrix(pWannier, wannierPrefix + ".mlwfP", spinWeight);
 			compressMatElemArr(pWannier);
@@ -227,7 +227,7 @@ BandStruct::BandStruct(string totalEprefix, string wannierPrefix, bool needPhono
 	}
 	//--- electron-phonon matrix elements
 	if(omegaSqPh)
-	{	if(mpiUtil->isHead())
+	{	if(mpiWorld->isHead())
 		{	wannierHePh.init(nModes*nBands*nBands * phononCellMap.size(), phononCellMap.size());
 			readMatrix(wannierHePh, wannierPrefix + ".mlwfHePh", spinWeight);
 			compressMatElemArr(wannierHePh);
@@ -304,7 +304,7 @@ void BandStruct::setPhononMatElemArray(vector3<> k1, const std::vector< vector3<
 	matrix phase1(phononCellMap.size(), 1);
 	matrix phase2(phononCellMap.size(), nk2);
 	for(size_t iCell=0; iCell<phononCellMap.size(); iCell++)
-		phase1.set(iCell,0, cis(2*M_PI * dot(phononCellMap[iCell],k1)));
+		phase1.set(iCell,0, cis(-2*M_PI * dot(phononCellMap[iCell],k1)));
 	for(int ik2=0; ik2<nk2; ik2++)
 	{	vector3<> k2 = k2arr[ik2];
 		//Get bisecting k-point (within nearest image convention):
@@ -314,7 +314,7 @@ void BandStruct::setPhononMatElemArray(vector3<> k1, const std::vector< vector3<
 		kMeanArr[ik2] = kMean;
 		//Calculate Fourier transform phase:
 		for(size_t iCell=0; iCell<phononCellMap.size(); iCell++)
-			phase2.set(iCell,ik2, cis(-2*M_PI * dot(phononCellMap[iCell],k2)));
+			phase2.set(iCell,ik2, cis(2*M_PI * dot(phononCellMap[iCell],k2)));
 	}
 	matrix HePhArr = wannierHePh * phase1; //fourier transform for k1
 	HePhArr.reshape(0, phononCellMap.size());
@@ -485,7 +485,7 @@ std::vector< std::shared_ptr<const BandStruct::CacheEntry> > BandStruct::getCach
 	for(size_t ikNew=0; ikNew<kNew.size(); ikNew++)
 	{	const vector3<>& k = kNew[ikNew];
 		for(size_t ic=0; ic<cellMap.size(); ic++)
-			phase.set(ic,ikNew, cis(-2*M_PI*dot(cellMap[ic],k)));
+			phase.set(ic,ikNew, cis(2*M_PI*dot(cellMap[ic],k)));
 	}
 	matrix HkNew = hWannierEff * phase;
 	//--- need to do the remainder (diagonalization etc.) individually:

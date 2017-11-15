@@ -55,9 +55,9 @@ int main(int argc, char** argv)
 	LineWidth lineWidth("Wannier/wannier", bs);
 
 	//Initialize sampling parameters:
-	int ikStart, ikStop; TaskDivision(nKpts, mpiUtil).myRange(ikStart, ikStop);
+	int ikStart, ikStop; TaskDivision(nKpts, mpiWorld).myRange(ikStart, ikStop);
 	int nBunchesMine = ceil((ikStop-ikStart)*1./bunchSize); //number of bunches on current process
-	nKpts = nBunchesMine * bunchSize; mpiUtil->allReduce(nKpts, MPIUtil::ReduceSum); //total number of sampled k-points
+	nKpts = nBunchesMine * bunchSize; mpiWorld->allReduce(nKpts, MPIUtil::ReduceSum); //total number of sampled k-points
 	long nKpairs = nKpts * (bunchSize-1); //total number of sampled k-point pairs for phonon-assisted transitions
 	int nBands = bs.getStates(vector3<>()).nRows();
 	int nModes = bs.getPhononModes(vector3<>()).nRows();
@@ -83,7 +83,7 @@ int main(int argc, char** argv)
 		for(const diagMatrix& E: Earr)
 			omegaMax = std::max(omegaMax, E.back()-E.front());
 	}
-	mpiUtil->allReduce(omegaMax, MPIUtil::ReduceMax);
+	mpiWorld->allReduce(omegaMax, MPIUtil::ReduceMax);
 	
 	//Initialize unbroadened histograms
 	double EplasmonTotMax = 2*EplasmonMax; //max on sum of two plasmon energies
@@ -291,7 +291,7 @@ int main(int argc, char** argv)
 	Histogram2D Chi3_E(-EplasmonTotMax, domega, EplasmonTotMax,  0., domega, EplasmonMax);
 	Histogram2D Chi1ph_E(-EplasmonTotMax, domega, EplasmonTotMax,  0., domega, EplasmonMax);
 	Histogram2D Chi3ph_E(-EplasmonTotMax, domega, EplasmonTotMax,  0., domega, EplasmonMax);
-	int iomegaStart, iomegaStop; TaskDivision(nomega, mpiUtil).myRange(iomegaStart, iomegaStop);
+	int iomegaStart, iomegaStop; TaskDivision(nomega, mpiWorld).myRange(iomegaStart, iomegaStop);
 	logPrintf("Applying broadening ... "); logFlush();
 	for(int iomega=iomegaStart; iomega<iomegaStop; iomega++) //input frequency grid split over MPI
 	{	double omegaCur = iomega*domega;
@@ -332,7 +332,7 @@ int main(int argc, char** argv)
 	logPrintf("done.\n"); logFlush();
 	
 	//Output chi1 and chi3:
-	if(mpiUtil->isHead())
+	if(mpiWorld->isHead())
 	{	ofstream ofs("chi13.dat");
 		ofs << "#omega[eV] chi1 chi3[au] chi1ph chi3ph[au] ReEps ImEps modGammaMinus[au]\n";
 		for(size_t iOmega=0; iOmega<Chi1.out.size(); iOmega++)

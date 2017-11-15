@@ -16,9 +16,9 @@ InputMap::InputMap(string filename)
 		string name; string val;
 		if(iss >> name >> val)
 		{	//Substitute enviornment variables:
-			if(mpiUtil->isHead())
+			if(mpiWorld->isHead())
 				environmentSubstitute(val);
-			mpiUtil->bcast(val);
+			mpiWorld->bcast(val);
 			(*this)[name] = val;
 		}
 	}

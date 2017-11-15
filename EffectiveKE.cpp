@@ -51,17 +51,17 @@ int main(int argc, char** argv)
 			Emax = std::max(Emax, E.back());
 		}
 	}
-	mpiUtil->allReduce(Emin, MPIUtil::ReduceMin);
-	mpiUtil->allReduce(Emax, MPIUtil::ReduceMax);
+	mpiWorld->allReduce(Emin, MPIUtil::ReduceMin);
+	mpiWorld->allReduce(Emax, MPIUtil::ReduceMax);
 	Histogram dos(Emin, dE, Emax); //density of states
 	Histogram KEeff(Emin, dE, Emax); //effective KE (calculated as p^2/2)
 	logPrintf("Initialized energy grid: %lg to %lg eV with %lu points.\n", Emin/eV, (Emin+dE*(dos.out.size()-1))/eV, dos.out.size());
 	
 	//Initialize sampling parameters:
-	int ikStart, ikStop; TaskDivision(nKpts, mpiUtil).myRange(ikStart, ikStop);
+	int ikStart, ikStop; TaskDivision(nKpts, mpiWorld).myRange(ikStart, ikStop);
 	int nBunchesMine = ceil((ikStop-ikStart)*1./bunchSize); //number of bunches on current process
 	int iBunchInterval = std::max(1, int(round(nBunchesMine/50.))); //interval for reporting progress
-	nKpts = nBunchesMine * bunchSize; mpiUtil->allReduce(nKpts, MPIUtil::ReduceSum); //total number of sampled k-points
+	nKpts = nBunchesMine * bunchSize; mpiWorld->allReduce(nKpts, MPIUtil::ReduceSum); //total number of sampled k-points
 	int nBands = Egamma.nRows();
 
 	logPrintf("\nCollecting DOS and KE: "); logFlush();
@@ -101,7 +101,7 @@ int main(int argc, char** argv)
 	const double kF = std::pow(3*M_PI*M_PI*nJellium, 1./3);
 	const double eF = 0.5*kF*kF;
 
-	if(mpiUtil->isHead())
+	if(mpiWorld->isHead())
 	{	ofstream ofs("EffectiveKE.dat");
 		ofs << "#E-Ef[eV] KEff[eV] KEfree[eV] DOS[1/eV]\n";
 		for(size_t iE=0; iE<KEeff.out.size(); iE++)

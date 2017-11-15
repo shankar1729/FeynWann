@@ -57,8 +57,8 @@ int main(int argc, char** argv)
 			Emax = std::max(Emax, E.back());
 		}
 	}
-	mpiUtil->allReduce(Emin, MPIUtil::ReduceMin);
-	mpiUtil->allReduce(Emax, MPIUtil::ReduceMax);
+	mpiWorld->allReduce(Emin, MPIUtil::ReduceMin);
+	mpiWorld->allReduce(Emax, MPIUtil::ReduceMax);
 	Emin -= 10*dE; //add some margin
 	Emax += 10*dE;
 	Histogram dos(Emin, dE, Emax); //density of states
@@ -66,10 +66,10 @@ int main(int argc, char** argv)
 	logPrintf("Initialized energy grid: %lg to %lg eV with %lu points.\n", Emin/eV, (Emin+dE*(dos.out.size()-1))/eV, dos.out.size());
 	
 	//Initialize sampling parameters:
-	int ikStart, ikStop; TaskDivision(nKpts, mpiUtil).myRange(ikStart, ikStop);
+	int ikStart, ikStop; TaskDivision(nKpts, mpiWorld).myRange(ikStart, ikStop);
 	int nBunchesMine = ceil((ikStop-ikStart)*1./bunchSize); //number of bunches on current process
 	int iBunchInterval = std::max(1, int(round(nBunchesMine/50.))); //interval for reporting progress
-	nKpts = nBunchesMine * bunchSize; mpiUtil->allReduce(nKpts, MPIUtil::ReduceSum); //total number of sampled k-points
+	nKpts = nBunchesMine * bunchSize; mpiWorld->allReduce(nKpts, MPIUtil::ReduceSum); //total number of sampled k-points
 	long nKpairs = nKpts * (bunchSize-1); //total number of sampled k-point pairs for phonon-assisted transitions
 	int nBands = Egamma.nRows();
 	int nModes = bs.getPhononModes(vector3<>()).nRows();
@@ -135,7 +135,7 @@ int main(int argc, char** argv)
 	hInt.allReduce(MPIUtil::ReduceSum);
 	
 	//Output:
-	if(mpiUtil->isHead())
+	if(mpiWorld->isHead())
 	{	//Fermi level DOS:
 		double gF = 0.;
 		for(size_t i=0; i<dos.out.size(); i++)
