@@ -17,7 +17,7 @@ void readMatrix(matrix& m, string fname, int spinWeight)
 }
 
 BandStruct::BandStruct(string totalEprefix, string wannierPrefix, bool needPhonons, std::vector< vector3<complex> > Ahat)
-: spinWeight(0), mu(NAN), nElectrons(0), nValence(0), nPol(Ahat.size()), cacheSize(6)
+: spinWeight(0), mu(NAN), nElectrons(0), nValence(0), nPol(Ahat.size())
 {	
 	//Read relevant parameters from totalE.out:
 	logPrintf("\nReading '%s.out' ... ", totalEprefix.c_str()); logFlush();
@@ -110,7 +110,7 @@ BandStruct::BandStruct(string totalEprefix, string wannierPrefix, bool needPhono
 	while(ifs >> cm[0] >> cm[1] >> cm[2] >> x >> y >> z)
 		cellMap.push_back(cm);
 	ifs.close();
-
+	/*
 	//Read wannier hamiltonian
 	string fnameH = wannierPrefix + ".mlwfH";
 	nBands = sqrt(fileSize(fnameH.c_str()) / ((spinWeight==1 ? sizeof(complex) : sizeof(double)) * cellMap.size()));
@@ -235,8 +235,10 @@ BandStruct::BandStruct(string totalEprefix, string wannierPrefix, bool needPhono
 		else wannierHePh.init(nModes*nPacked * phononCellMap.size(), phononCellMap.size());
 		wannierHePh.bcast();
 	}
+	*/
 }
 
+/*
 diagMatrix BandStruct::getStates(vector3<> k, double omegaMax, matrix* evecs) const
 {	return getStates(std::vector< vector3<> >(1, k), omegaMax, evecs)[0];
 }
@@ -526,3 +528,4 @@ std::vector< std::shared_ptr<const BandStruct::CacheEntry> > BandStruct::getCach
 	watch.stop();
 	return ceArr;
 }
+*/

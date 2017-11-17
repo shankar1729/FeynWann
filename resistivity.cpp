@@ -7,7 +7,7 @@
 #include "BandStruct.h"
 #include "InputMap.h"
 #include <core/Units.h>
-
+/*
 void reportResult(const std::vector<matrix3<>>& result, string resultName, double unit, string unitName)
 {	matrix3<> resultMean, resultStd;
 	for(int i=0; i<3; i++)
@@ -61,6 +61,7 @@ inline double trace(const matrix3<>& M, int slabDir)
 			result += M(jDir,jDir);
 	return result;
 }
+*/
 
 int main(int argc, char** argv)
 {	string inputFilename; bool dryRun, printDefaults;
@@ -87,6 +88,7 @@ int main(int argc, char** argv)
 	logPrintf("dmuCount = %d\n", dmuCount);
 	logPrintf("slabDir = %d\n", slabDir);
 	
+	/*
 	//Initialize Wannier bandstructure:
 	const int bunchSize = 32;
 	BandStruct bs("Wannier/totalE", "Wannier/wannier", true);
@@ -98,7 +100,8 @@ int main(int argc, char** argv)
 		return 0;
 	}
 	logPrintf("\n");
-
+	*/
+	
 	/* //DEBUG: check translation invariance of e-ph matrix elements:
 	if(mpiWorld->isHead())
 	{	FILE* fp = fopen("test_gePh.dat", "w");
@@ -123,7 +126,7 @@ int main(int argc, char** argv)
 		fclose(fp);
 	}
 	die("Testing.\n"); */
-	
+	/*
 	//dmu array:
 	std::vector<double> dmu(dmuCount, dmuMin); //set first value here
 	for(int iMu=1; iMu<dmuCount; iMu++) //set remaining values (if any)
@@ -281,6 +284,6 @@ int main(int argc, char** argv)
 		reportResult(vFarr[iMu], "vF", 1, "");
 		reportResult(gArr[iMu], "g(eF)", 1, "");
 	}
-	
+	*/
 	finalizeSystem();
 }

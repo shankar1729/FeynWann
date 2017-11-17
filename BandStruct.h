@@ -39,8 +39,6 @@ public:
 	{	return (x>30.) ? -x : -log(1+exp(x)); //avoid overflow issues
 	}
 	
-	void setCacheSize(int cacheSize) { this->cacheSize = std::max(6, cacheSize); } //control cache size for electron and phonon states
-	
 	//DFT / Wannier / Phonon parameters:
 	matrix3<> R; //!< lattice vectors
 	vector3<int> kfold; //!< k-point folding in original calculation
@@ -73,34 +71,6 @@ private:
 	struct CellPair { vector3<int> iR1, iR2; };
 	std::vector<CellPair> phononCellMapSq; //pairs of cells for which electron-phonon matrix elements are stored
 	
-	//Caching of unitary rotations and eigenvalues (electrons as well as  phonons):
-	struct CacheEntry
-	{	size_t rank; //Rank for the cache entry used to find the oldest entries to delete
-		matrix phase; //Fourier transform phase
-		matrix evecs; //discrete unitary rotation
-		diagMatrix eigs; //eigenvalues
-		int nBands() const { return eigs.nRows(); }
-	};
-	std::map<vector3<>, std::shared_ptr<const CacheEntry> > electronCache, mainCache, phononCache;
-	size_t rankElectron, rankMain, rankPhonon;
-	//Note that the cache functions may update the cache, but are functionally const (henced marked as such). However they are NOT thread safe.
-	std::shared_ptr<const CacheEntry> getElectronCache(vector3<> k, double omegaMax=DBL_MAX) const;
-	std::shared_ptr<const CacheEntry> getPhononCache(vector3<> q) const;
-	std::vector< std::shared_ptr<const CacheEntry> > getElectronCache(const std::vector< vector3<> >& kArr, double omegaMax=DBL_MAX) const;
-	std::vector< std::shared_ptr<const CacheEntry> > getPhononCache(const std::vector< vector3<> >& qArr) const;
-	//--- Most of the implementation of caching mechanism collected here, and called by above:
-	std::vector< std::shared_ptr<const CacheEntry> > getCache(
-		const std::vector< vector3<> >& kArr, //!< array of k/q-points
-		const std::map<vector3<>, std::shared_ptr<const CacheEntry> >& cache, //!< relevant cache
-		const std::vector< vector3<int> >& cellMap, //!< relevant cell map
-		const matrix& hWannierEff, //!< relevant Hamiltonian
-		const size_t& rank, //!< relevant rank counter
-		bool shouldSqrt //!< whether to take square-root of eigenvalues (needed for phonons)
-	) const;
-	size_t cacheSize;
-	
-	friend class LineWidth; //Needs access to cache and other Wannier properties
-	friend class Wannierizer; //Used by electronPhononLinewidth to transform back to Wannier
 };
 
 #endif //WANNIERMETROPOLIS_BANDSTRUCT_H

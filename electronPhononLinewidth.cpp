@@ -11,6 +11,7 @@
 #include "InputMap.h"
 #include <core/Units.h>
 
+/*
 class Wannierizer
 {	const BandStruct& bs; const std::vector<diagMatrix>& ImSigma; const std::vector<vector3<>>& kArr;
 public:
@@ -72,6 +73,7 @@ inline bool eigsEqual(const diagMatrix& E1, const diagMatrix& E2, double Emin, d
 	}
 	return true;
 }
+*/
 
 int main(int argc, char** argv)
 {   string inputFilename; bool dryRun, printDefaults;
@@ -98,6 +100,8 @@ int main(int argc, char** argv)
 	{	logPrintf("k0 = ");
 		k0.print(globalLog, " %lf ");
 	}
+
+	/*
 	//Initialize Wannier bandstructure:
 	const int bunchSize = 32;
 	BandStruct bs("Wannier/totalE", "Wannier/wannier", true);
@@ -244,7 +248,7 @@ int main(int argc, char** argv)
 	//Wannierized output:
 	Wannierizer(bs, ImSigma, kInArr).save("Wannier/wannier.mlwfImSigma_ePh");
 	Wannierizer(bs, ImSigmaP, kInArr).save("Wannier/wannier.mlwfImSigmaP_ePh");
-	
+	*/
 	finalizeSystem();
 	return 0;
 }
