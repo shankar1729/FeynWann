@@ -1,21 +1,21 @@
-#ifndef WANNIERMETROPOLIS_LINEWIDTH_H
-#define WANNIERMETROPOLIS_LINEWIDTH_H
+#ifndef WANNIERMC_LINEWIDTH_H
+#define WANNIERMC_LINEWIDTH_H
 
 #include <core/matrix.h>
 #include <core/string.h>
 #include <vector>
-#include "BandStruct.h"
+#include "WannierMC.h"
 
 class LineWidth
 {
 public:
-	LineWidth(string prefix, const BandStruct& bs);
+	LineWidth(string prefix, const WannierMC& wmc);
 	diagMatrix operator()(vector3<> k, double eeWeight=1., double ePhWeight=1.) const; //returns total ImSigma (e-e + e-ph) by default (and optionally get a weighted combination)
 	std::vector<diagMatrix> operator()(const std::vector< vector3<> >& k, double eeWeight=1., double ePhWeight=1.) const; //array version
 private:
 	int nBandsSq, nCells;
-	const BandStruct& bs;
+	const WannierMC& wmc;
 	matrix ImSigmaWannier; //Wannierized e-e and e-Ph contributions to ImSigma (combined columneiwse for efficient multiply)
 };
 
-#endif //WANNIERMETROPOLIS_LINEWIDTH_H
+#endif //WANNIERMC_LINEWIDTH_H

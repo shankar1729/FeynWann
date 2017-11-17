@@ -1,4 +1,3 @@
-#include <core/Util.h>
 #include <core/matrix.h>
 #include <electronic/ColumnBundle.h>
 #include <electronic/Everything.h>
@@ -7,7 +6,7 @@
 #include <core/string.h>
 #include <core/LatticeUtils.h>
 #include <commands/parser.h>
-#include "BandStruct.h"
+#include "WannierMC.h"
 #include "InputMap.h"
 #include <core/Units.h>
 
@@ -20,14 +19,14 @@ public:
 	
 	void save(string fname) const
 	{	//Calculate cell weights:
-		int nCells = bs.cellMap.size();
+		int nCells = wmc.cellMap.size();
 		std::vector<std::vector<int>> cellSets; cellSets.reserve(nCells); //cells grouped by translatinal equivalence
 		std::vector<vector3<>> cellSupArr; cellSupArr.reserve(nCells); //unique cells in supercell coordinates
-		PeriodicLookup<vector3<>> plook(cellSupArr, (~bs.R)*bs.R, nCells);
+		PeriodicLookup<vector3<>> plook(cellSupArr, (~wmc.R)*wmc.R, nCells);
 		for(int iCell=0; iCell<nCells; iCell++)
 		{	vector3<> cellSup;
 			for(int j=0; j<3; j++)
-				cellSup[j] = bs.cellMap[iCell][j] * (1./bs.kfold[j]);
+				cellSup[j] = wmc.cellMap[iCell][j] * (1./wmc.kfold[j]);
 			size_t setIndex = plook.find(cellSup);
 			if(setIndex == string::npos) //not yet found, create new set:
 			{	plook.addPoint(cellSets.size(), cellSup);
@@ -36,7 +35,7 @@ public:
 			}
 			else cellSets[setIndex].push_back(iCell);
 		}
-		assert(int(cellSets.size()) == bs.kfold[0]*bs.kfold[1]*bs.kfold[2]);
+		assert(int(cellSets.size()) == wmc.kfold[0]*wmc.kfold[1]*wmc.kfold[2]);
 		diagMatrix cellWeights(nCells);
 		for(const std::vector<int>& cellSet: cellSets)
 			for(int iCell: cellSet)
@@ -44,24 +43,24 @@ public:
 		//Transform from Bloch to Wannier:
 		int qStart, qStop; TaskDivision(kArr.size(), mpiWorld).myRange(qStart, qStop);
 		std::vector<vector3<>> kArrMine(kArr.begin()+qStart, kArr.begin()+qStop);
-		auto ceArr = bs.getElectronCache(kArrMine);
-		matrix ImSigmaRS(bs.nBands*bs.nBands, ceArr.size());
+		auto ceArr = wmc.getElectronCache(kArrMine);
+		matrix ImSigmaRS(wmc.nBands*wmc.nBands, ceArr.size());
 		matrix phase(ceArr.size(), nCells);
 		for(int q=qStart; q<qStop; q++)
 		{	int dq = q - qStart;
 			std::shared_ptr<const BandStruct::CacheEntry> ce = ceArr[dq];
-			diagMatrix logImSigma_q(bs.nBands);
-			for(int b=0; b<bs.nBands; b++)
+			diagMatrix logImSigma_q(wmc.nBands);
+			for(int b=0; b<wmc.nBands; b++)
 				logImSigma_q[b] = log(ImSigma[q][b]);
 			matrix ImSigma_q = ce->evecs * logImSigma_q * dagger(ce->evecs);
-			ImSigma_q.reshape(bs.nBands*bs.nBands, 1);
+			ImSigma_q.reshape(wmc.nBands*wmc.nBands, 1);
 			ImSigmaRS.set(0,ImSigmaRS.nRows(), dq,dq+1, ImSigma_q);
 			phase.set(dq,dq+1, 0,nCells, dagger(ce->phase) * cellWeights);
 		}
-		matrix ImSigmaWannier = ceArr.size() ? ImSigmaRS * phase : zeroes(bs.nBands*bs.nBands, nCells);
+		matrix ImSigmaWannier = ceArr.size() ? ImSigmaRS * phase : zeroes(wmc.nBands*wmc.nBands, nCells);
 		ImSigmaWannier.allReduce(MPIUtil::ReduceSum);
 		if(mpiWorld->isHead())
-			ImSigmaWannier.dump(fname.c_str(), bs.spinWeight==2);
+			ImSigmaWannier.dump(fname.c_str(), wmc.spinWeight==2);
 	}
 };
 
@@ -76,11 +75,11 @@ inline bool eigsEqual(const diagMatrix& E1, const diagMatrix& E2, double Emin, d
 */
 
 int main(int argc, char** argv)
-{   string inputFilename; bool dryRun, printDefaults;
-	initSystemCmdline(argc, argv, "Electron-phonon scattering contribution to electron linewidth", inputFilename, dryRun, printDefaults);
+{   InitParams ip = WannierMC::getPackageInfo("Calculate electron-phonon scattering contribution to electron linewidth.");
+	initSystemCmdline(argc, argv, ip);
 
 	//Read input file:
-	InputMap inputMap(inputFilename);
+	InputMap inputMap(ip.inputFilename);
 	const double T = inputMap.get("T") * Kelvin;
 	const double EconserveWidth = inputMap.get("EconserveWidth") * eV;
 	const int NkMultAll = int(round(inputMap.get("NkMult"))); //increase in number of k-points for phonon mesh
@@ -104,12 +103,11 @@ int main(int argc, char** argv)
 	/*
 	//Initialize Wannier bandstructure:
 	const int bunchSize = 32;
-	BandStruct bs("Wannier/totalE", "Wannier/wannier", true);
-	bs.setCacheSize(2*bunchSize);
+	WannierMC wmc("Wannier/totalE", "Wannier/wannier", true);
 	
-	vector3<int> NkIn = bs.kfold, NkOut;
+	vector3<int> NkIn = wmc.kfold, NkOut;
 	for(int j=0; j<3; j++)
-		NkOut[j] = NkIn[j] * (bs.isTruncated[j] ? 1 : NkMult[j]); //multiply k-points in periodic directions
+		NkOut[j] = NkIn[j] * (wmc.isTruncated[j] ? 1 : NkMult[j]); //multiply k-points in periodic directions
 	logPrintf("NkFine = "); NkOut.print(globalLog, " %d ");
 	vector3<> kInOff; //extra offset for k-point meshes (none for mesh mode)
 	if(std::isfinite(k0.length_squared()))
@@ -119,7 +117,7 @@ int main(int argc, char** argv)
 	vector3<int> strideIn(NkIn[1]*NkIn[2], NkIn[2], 1);
 	int prodNkIn = NkIn[0]*NkIn[1]*NkIn[2];
 	
-	if(dryRun)
+	if(ip.dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
 		finalizeSystem();
 		return 0;
@@ -127,7 +125,7 @@ int main(int argc, char** argv)
 	logPrintf("\n");
 
 	//Calculate lifetimes for states in input k-point mesh:
-	int nBands = bs.nBands;
+	int nBands = wmc.nBands;
 	std::vector<vector3<>> kInArr(prodNkIn), kInReduced;
 	std::vector<int> iReduced(prodNkIn, -1);
 	{	vector3<> ikIn;
@@ -139,14 +137,14 @@ int main(int argc, char** argv)
 			vector3<>& kIn = kInArr[iIn];
 			for(int j=0; j<3; j++)
 				kIn[j] = kInOff[j] + ikIn[j] * (1./NkIn[j]); //use Gamma-centered mesh for in
-			Earr[iIn] = bs.getStates(kIn);
+			Earr[iIn] = wmc.getStates(kIn);
 		}
 		//Reduce k-points based on degeneracies:
 		for(int i1=0; i1<prodNkIn; i1++)
 			if(iReduced[i1]<0)
 			{	iReduced[i1] = kInReduced.size();
 				for(int i2=i1+1; i2<prodNkIn; i2++)
-					if(eigsEqual(Earr[i1], Earr[i2], bs.eMinMain, bs.eMaxMain, 1e-5))
+					if(eigsEqual(Earr[i1], Earr[i2], wmc.eMinMain, wmc.eMaxMain, 1e-5))
 						iReduced[i2] = kInReduced.size();
 				kInReduced.push_back(kInArr[i1]);
 			}
@@ -160,7 +158,7 @@ int main(int argc, char** argv)
 		for(ikOut[2]=0; ikOut[2]<NkOut[2]; ikOut[2]++)
 		{	vector3<>& kOut = kOutArr[dot(ikOut,strideOut)];
 			for(int j=0; j<3; j++)
-				kOut[j] = kInOff[j] + (ikOut[j] + (bs.isTruncated[j] ? 0.0 : 0.5)) / NkOut[j]; //use Gamma-offset mesh for out (offset along periodic directions alone)
+				kOut[j] = kInOff[j] + (ikOut[j] + (wmc.isTruncated[j] ? 0.0 : 0.5)) / NkOut[j]; //use Gamma-offset mesh for out (offset along periodic directions alone)
 		}
 	}
 	double prefacImSigma = 0.5 * 2*M_PI/(kOutArr.size()); //Note factor of 0.5 between decay rate and ImSigma due to squaring of wavefunctions to probability
@@ -187,20 +185,20 @@ int main(int argc, char** argv)
 		//Loop over first k-point (irreducible wedge):
 		for(size_t q=0; q<kInReduced.size(); q++)
 		{	const vector3<>& kIn = kInReduced[q];
-			const diagMatrix& Ein = bs.getStates(kIn);
-			std::vector<vector3<>> vIn = bs.getVelocity(kIn);
-			bs.setPhononMatElemArray(kIn, kOutCur, gePhArr.data());
+			const diagMatrix& Ein = wmc.getStates(kIn);
+			std::vector<vector3<>> vIn = wmc.getVelocity(kIn);
+			wmc.setPhononMatElemArray(kIn, kOutCur, gePhArr.data());
 			for(int ik2=0; ik2<bunchSizeCur; ik2++)
 			{	const vector3<>& kOut = kOutCur[ik2];
-				diagMatrix Eout = bs.getStates(kOut);
-				std::vector<vector3<>> vOut = bs.getVelocity(kOut);
-				diagMatrix omegaPh = bs.getPhononModes(kIn - kOut);
+				diagMatrix Eout = wmc.getStates(kOut);
+				std::vector<vector3<>> vOut = wmc.getVelocity(kOut);
+				diagMatrix omegaPh = wmc.getPhononModes(kIn - kOut);
 				const std::vector<matrix>& gePh = gePhArr[ik2];
 				
 				for(int bIn=0; bIn<Ein.nRows(); bIn++)
 				{	for(int bOut=0; bOut<Eout.nRows(); bOut++)
-					{	double fOut = bs.nValence
-							? (bOut<bs.nValence ? 1. : 0.) //insulator/semiconductor
+					{	double fOut = wmc.nValence
+							? (bOut<wmc.nValence ? 1. : 0.) //insulator/semiconductor
 							: 1./(exp(Eout[bOut]/T)+1); //metal (energies referenced to mu)
 						double cosThetaScatter = dot(vIn[bIn], vOut[bOut])
 							/ sqrt(std::max(1e-16, vIn[bIn].length_squared() * vOut[bOut].length_squared()));
@@ -237,7 +235,7 @@ int main(int argc, char** argv)
 	{	if(prodNkIn==1) logPrintf("\n#E ImSigma_ePh ImSigmaP_ePh\n");
 		FILE* fp = (prodNkIn==1) ? globalLog : fopen("ImSigma_ePh.dat", "w"); //for special k-point mode, only report in log file
 		for(size_t q=0; q<kInReduced.size(); q++)
-		{	diagMatrix E = bs.getStates(kInReduced[q]);
+		{	diagMatrix E = wmc.getStates(kInReduced[q]);
 			for(int b=0; b<nBands; b++)
 				fprintf(fp, "%+19.12le %19.12le %19.12le\n", E[b], ImSigmaReduced[q][b], ImSigmaReducedP[q][b]);
 		}

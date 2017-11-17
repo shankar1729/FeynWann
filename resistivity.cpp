@@ -1,10 +1,9 @@
-#include <core/Util.h>
 #include <core/matrix.h>
 #include <core/scalar.h>
 #include <core/Random.h>
 #include <core/string.h>
 #include <core/WignerSeitz.h>
-#include "BandStruct.h"
+#include "WannierMC.h"
 #include "InputMap.h"
 #include <core/Units.h>
 /*
@@ -64,11 +63,11 @@ inline double trace(const matrix3<>& M, int slabDir)
 */
 
 int main(int argc, char** argv)
-{	string inputFilename; bool dryRun, printDefaults;
-	initSystemCmdline(argc, argv, "Monte Carlo estimate of resistivity", inputFilename, dryRun, printDefaults);
+{	InitParams ip = WannierMC::getPackageInfo("Monte Carlo estimate of resistivity");
+	initSystemCmdline(argc, argv, ip);
 
 	//Read input file:
-	InputMap inputMap(inputFilename);
+	InputMap inputMap(ip.inputFilename);
 	const int nKpts = inputMap.get("nKpts");
 	const int nBlocks = inputMap.get("nBlocks"); assert(nBlocks>0);
 	const double T = inputMap.get("T") * Kelvin;
@@ -91,10 +90,9 @@ int main(int argc, char** argv)
 	/*
 	//Initialize Wannier bandstructure:
 	const int bunchSize = 32;
-	BandStruct bs("Wannier/totalE", "Wannier/wannier", true);
-	bs.setCacheSize(2*bunchSize);
+	WannierMC wmc("Wannier/totalE", "Wannier/wannier", true);
 	
-	if(dryRun)
+	if(ip.dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
 		finalizeSystem();
 		return 0;
@@ -111,14 +109,14 @@ int main(int argc, char** argv)
 			for(vector3<>& k2: k2arr) for(int j=0; j<3; j++) k2[j] = k1[j] + Random::normal(0., 0.05, 2);
 			k2arr[0] = k1;
 			std::vector<matrix> gePh[bunchSize];
-			bs.setPhononMatElemArray(k1, k2arr, gePh);
+			wmc.setPhononMatElemArray(k1, k2arr, gePh);
 			for(int ik2=0; ik2<bunchSize; ik2++)
 			{	vector3<> dk = k2arr[ik2] - k1;
 				for(int j=0; j<3; j++) dk[j] -= floor(0.5+dk[j]);
-				double dkMag = (dk * inv(bs.R)).length();
+				double dkMag = (dk * inv(wmc.R)).length();
 				fprintf(fp, "%lf", dkMag);
 				for(int mode=0; mode<3; mode++) //pick only acoustic-like modes
-					for(int b=0; b<bs.nBands; b++)
+					for(int b=0; b<wmc.nBands; b++)
 						fprintf(fp, " %le", gePh[ik2][mode](b,b).abs());
 				fprintf(fp, "\n");
 			}
@@ -133,12 +131,12 @@ int main(int argc, char** argv)
 		dmu[iMu] = dmuMin + iMu*(dmuMax-dmuMin)/(dmuCount-1);
 	
 	//Handle dimensionality:
-	double Omega = fabs(det(bs.R));
+	double Omega = fabs(det(wmc.R));
 	double rhoUnit = 1e-9*Ohm*meter;
 	string rhoUnitName="nOhm-m";
 	string rhoName = "Resistivity";
 	if(slabDir>=0)
-	{	Omega /= bs.R.column(slabDir).length(); //convert to area excluding this dimension
+	{	Omega /= wmc.R.column(slabDir).length(); //convert to area excluding this dimension
 		rhoUnit = Ohm;
 		rhoUnitName = "Ohm";
 		rhoName = "SheetResistance";
@@ -167,7 +165,7 @@ int main(int argc, char** argv)
 				for(vector3<>& k: kTmp)
 					for(int j=0; j<3; j++)
 						k[j] = Random::uniform();
-				std::vector<diagMatrix> Etmp = bs.getStates(kTmp, Emax);
+				std::vector<diagMatrix> Etmp = wmc.getStates(kTmp, Emax);
 				//Add k-points with appropriate states:
 				int nFound = 0, nAdded = 0;
 				for(int ik=0; ik<bunchSize; ik++)
@@ -190,18 +188,18 @@ int main(int argc, char** argv)
 			nBunches++;
 			
 			//Get energies and velocities for selected bunch:
-			std::vector<diagMatrix> Earr = bs.getStates(kArr, Emax);
+			std::vector<diagMatrix> Earr = wmc.getStates(kArr, Emax);
 			std::vector< vector3<> > vArr[bunchSize];
 			for(int ik=0; ik<bunchSize; ik++)
-				vArr[ik] = bs.getVelocity(kArr[ik], Emax);
+				vArr[ik] = wmc.getVelocity(kArr[ik], Emax);
 			
 			diagMatrix omegaPh[bunchSize];
 			std::vector<matrix> gePh[bunchSize];
 			for(int ik1=0; ik1<bunchSize; ik1++)
 			{	//Calculate phonon stuff for each pair of k-points involving ik1
-				bs.setPhononMatElemArray(kArr[ik1], kArr, gePh);
+				wmc.setPhononMatElemArray(kArr[ik1], kArr, gePh);
 				for(int ik2=0; ik2<bunchSize; ik2++)
-					omegaPh[ik2] = bs.getPhononModes(kArr[ik1] - kArr[ik2]);
+					omegaPh[ik2] = wmc.getPhononModes(kArr[ik1] - kArr[ik2]);
 				
 				for(int v=0; v<Earr[ik1].nRows(); v++)
 				{	matrix3<> viDotvi = outer(vArr[ik1][v], vArr[ik1][v]);
@@ -244,8 +242,8 @@ int main(int argc, char** argv)
 		mpiWorld->allReduce(nBunches, MPIUtil::ReduceSum);
 		logPrintf("useFraction: %lg\n", (bunchSize*nBunches)/nKpts); logFlush();
 		
-		double prefacT = bs.spinWeight/(nKpts);
-		double prefacGamma = bs.spinWeight*(2*M_PI)/(nKpts*nKpts*1./nBunches);
+		double prefacT = wmc.spinWeight/(nKpts);
+		double prefacGamma = wmc.spinWeight*(2*M_PI)/(nKpts*nKpts*1./nBunches);
 		//Apply normalizing factors:
 		for(int iMu=0; iMu<dmuCount; iMu++)
 		{	Tcur[iMu] *= prefacT;

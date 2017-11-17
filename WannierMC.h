@@ -1,5 +1,5 @@
-#ifndef WANNIERMETROPOLIS_BANDSTRUCT_H
-#define WANNIERMETROPOLIS_BANDSTRUCT_H
+#ifndef WANNIERMC_WANNIERMC_H
+#define WANNIERMC_WANNIERMC_H
 
 #include <core/Util.h>
 #include <core/matrix.h>
@@ -8,10 +8,12 @@
 #include <math.h>
 #include <float.h>
 
-class BandStruct
-{	
+class WannierMC
+{
 public:
-	BandStruct(
+	static InitParams getPackageInfo(const char* description);
+	
+	WannierMC(
 		string totalEprefix, //!< filename prefix for DFT outputs
 		string wannierPrefix, //!< filename prefix for wannier outputs
 		bool needPhonons, //!< whether to initialize phonon-related quantities
@@ -73,4 +75,4 @@ private:
 	
 };
 
-#endif //WANNIERMETROPOLIS_BANDSTRUCT_H
+#endif //WANNIERMC_WANNIERMC_H

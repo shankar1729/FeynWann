@@ -1,5 +1,4 @@
-#include "BandStruct.h"
-#include <core/Util.h>
+#include "WannierMC.h"
 #include <core/BlasExtra.h>
 #include <core/matrix.h>
 #include <iostream>
@@ -8,6 +7,16 @@
 #include <math.h>
 #include <set>
 #include <core/Units.h>
+#include "config.h"
+
+InitParams WannierMC::getPackageInfo(const char* description)
+{	InitParams ip;
+	ip.packageName = PACKAGE_NAME;
+	ip.versionString = VERSION_STRING;
+	ip.versionHash = GIT_HASH;
+	ip.description = description;
+	return ip;
+}
 
 //Read matrix from file accounting for real-only or complex storage based on spinWeight
 void readMatrix(matrix& m, string fname, int spinWeight)
@@ -16,7 +25,7 @@ void readMatrix(matrix& m, string fname, int spinWeight)
 	logPrintf("done.\n"); logFlush();
 }
 
-BandStruct::BandStruct(string totalEprefix, string wannierPrefix, bool needPhonons, std::vector< vector3<complex> > Ahat)
+WannierMC::WannierMC(string totalEprefix, string wannierPrefix, bool needPhonons, std::vector< vector3<complex> > Ahat)
 : spinWeight(0), mu(NAN), nElectrons(0), nValence(0), nPol(Ahat.size())
 {	
 	//Read relevant parameters from totalE.out:
@@ -239,12 +248,12 @@ BandStruct::BandStruct(string totalEprefix, string wannierPrefix, bool needPhono
 }
 
 /*
-diagMatrix BandStruct::getStates(vector3<> k, double omegaMax, matrix* evecs) const
+diagMatrix WannierMC::getStates(vector3<> k, double omegaMax, matrix* evecs) const
 {	return getStates(std::vector< vector3<> >(1, k), omegaMax, evecs)[0];
 }
 
-std::vector<diagMatrix> BandStruct::getStates(const std::vector< vector3<> >& kArr, double omegaMax, matrix* evecs) const
-{	static StopWatch watch("BandStruct::getStates"); watch.start();
+std::vector<diagMatrix> WannierMC::getStates(const std::vector< vector3<> >& kArr, double omegaMax, matrix* evecs) const
+{	static StopWatch watch("WannierMC::getStates"); watch.start();
 	std::vector< std::shared_ptr<const CacheEntry> > ceArr = getElectronCache(kArr, omegaMax);
 	std::vector< diagMatrix > eigs(kArr.size());
 	for(size_t ik=0; ik<kArr.size(); ik++)
@@ -256,21 +265,21 @@ std::vector<diagMatrix> BandStruct::getStates(const std::vector< vector3<> >& kA
 }
 
 
-diagMatrix BandStruct::getPhononModes(vector3<> q) const
-{	static StopWatch watch("BandStruct::getPhononModes"); watch.start();
+diagMatrix WannierMC::getPhononModes(vector3<> q) const
+{	static StopWatch watch("WannierMC::getPhononModes"); watch.start();
 	std::shared_ptr<const CacheEntry> ce = getPhononCache(q);
 	watch.stop();
 	return ce->eigs;
 }
 
-std::vector<matrix> BandStruct::getDipoleMatElem(vector3<> k) const
+std::vector<matrix> WannierMC::getDipoleMatElem(vector3<> k) const
 {	return getDipoleMatElem(std::vector<vector3<>>(1, k))[0];
 }
 
-std::vector< std::vector<matrix> > BandStruct::getDipoleMatElem(const std::vector< vector3<> >& kArr) const
-{	static StopWatch watch("BandStruct::getDipoleMatElem"); watch.start();
+std::vector< std::vector<matrix> > WannierMC::getDipoleMatElem(const std::vector< vector3<> >& kArr) const
+{	static StopWatch watch("WannierMC::getDipoleMatElem"); watch.start();
 	assert(nPol);
-	std::vector< std::shared_ptr<const BandStruct::CacheEntry> > ceArr = getElectronCache(kArr);
+	std::vector< std::shared_ptr<const WannierMC::CacheEntry> > ceArr = getElectronCache(kArr);
 	//Collect phases:
 	matrix phase(cellMap.size(), kArr.size());
 	for(size_t ik=0; ik<kArr.size(); ik++)
@@ -291,14 +300,14 @@ std::vector< std::vector<matrix> > BandStruct::getDipoleMatElem(const std::vecto
 	return out;
 }
 
-std::vector<matrix> BandStruct::getPhononMatElem(vector3<> k1, vector3<> k2) const
+std::vector<matrix> WannierMC::getPhononMatElem(vector3<> k1, vector3<> k2) const
 {	std::vector<matrix> result;
 	setPhononMatElemArray(k1, std::vector< vector3<> >(1, k2), &result);
 	return result;
 }
 
-void BandStruct::setPhononMatElemArray(vector3<> k1, const std::vector< vector3<> >& k2arr, std::vector<matrix>* result) const
-{	static StopWatch watch("BandStruct::getPhononMatElem"), watchFT("BandStruct::getPhononMatEl_FT"); watch.start();
+void WannierMC::setPhononMatElemArray(vector3<> k1, const std::vector< vector3<> >& k2arr, std::vector<matrix>* result) const
+{	static StopWatch watch("WannierMC::getPhononMatElem"), watchFT("WannierMC::getPhononMatEl_FT"); watch.start();
 	int nk2 = k2arr.size();
 	//Compute double Fourier transform for fixed k1 and all k2 together:
 	watchFT.start();
@@ -347,7 +356,7 @@ void BandStruct::setPhononMatElemArray(vector3<> k1, const std::vector< vector3<
 	watch.stop();
 }
 
-double BandStruct::get_mk(vector3<> k, double omega, double T) const
+double WannierMC::get_mk(vector3<> k, double omega, double T) const
 {	diagMatrix E = getStates(k, omega);
 	double mk = INFINITY;
 	for(int v=0; v<E.nRows(); v++) if(E[v]<10.*T)
@@ -356,7 +365,7 @@ double BandStruct::get_mk(vector3<> k, double omega, double T) const
 	return mk;
 }
 
-double BandStruct::get_mk1k2(vector3<> k1, vector3<> k2, double omega, double T) const
+double WannierMC::get_mk1k2(vector3<> k1, vector3<> k2, double omega, double T) const
 {	diagMatrix E1 = getStates(k1, omega);
 	diagMatrix E2 = getStates(k2, omega);
 	diagMatrix P = getPhononModes(k1-k2);
@@ -369,8 +378,8 @@ double BandStruct::get_mk1k2(vector3<> k1, vector3<> k2, double omega, double T)
 	return mk1k2;
 }
 
-std::vector< vector3<> > BandStruct::getVelocity(vector3<> k, double omegaMax) const
-{	static StopWatch watch("BandStruct::getVelocity"); watch.start();
+std::vector< vector3<> > WannierMC::getVelocity(vector3<> k, double omegaMax) const
+{	static StopWatch watch("WannierMC::getVelocity"); watch.start();
 	std::shared_ptr<const CacheEntry> ce = getElectronCache(k, omegaMax);
 	int nBandsEff = ce->nBands();
 	const matrix& hWannierEff = nBandsEff==nBands ? hWannier : hWannierMain;
@@ -390,7 +399,7 @@ std::vector< vector3<> > BandStruct::getVelocity(vector3<> k, double omegaMax) c
 	return v;
 }
 
-void BandStruct::compressMatElemArr(matrix& mArr) const
+void WannierMC::compressMatElemArr(matrix& mArr) const
 {	if(nMain == nBands) return; //no compression possible
 	assert(mArr.nRows() % (nBands*nBands) == 0);
 	int nMatsPerCol = mArr.nRows() / (nBands*nBands);
@@ -404,7 +413,7 @@ void BandStruct::compressMatElemArr(matrix& mArr) const
 	std::swap(mPacked, mArr);
 }
 
-void BandStruct::transformMatElemArr(matrix& mArr, const matrix& rot) const
+void WannierMC::transformMatElemArr(matrix& mArr, const matrix& rot) const
 {	assert(mArr.nRows() % nPacked == 0); //must be in packed form
 	int nMatsPerCol = mArr.nRows() / nPacked;
 	assert(nMatsPerCol % rot.nRows() == 0);
@@ -423,7 +432,7 @@ void BandStruct::transformMatElemArr(matrix& mArr, const matrix& rot) const
 	std::swap(mArrOut, mArr);
 }
 
-void BandStruct::packMatElem(const matrix& m, matrix& mArr, int iCol) const
+void WannierMC::packMatElem(const matrix& m, matrix& mArr, int iCol) const
 {	const complex* src = m.dataPref();
 	complex* dest = mArr.dataPref() + iCol*nPacked;
 	callPref(eblas_copy)(dest, src+mainFirst*nBands, nMain*nBands); dest += nMain*nBands;
@@ -433,7 +442,7 @@ void BandStruct::packMatElem(const matrix& m, matrix& mArr, int iCol) const
 		}
 }
 
-matrix BandStruct::unpackMatElem(const matrix& mArr, int iCol) const
+matrix WannierMC::unpackMatElem(const matrix& mArr, int iCol) const
 {	matrix m = zeroes(nBands, nBands);
 	const complex* src = mArr.dataPref() + iCol*nPacked;
 	complex* dest = m.dataPref();
@@ -447,30 +456,30 @@ matrix BandStruct::unpackMatElem(const matrix& mArr, int iCol) const
 
 //------------ Cache functions -------------
 
-std::shared_ptr<const BandStruct::CacheEntry> BandStruct::getElectronCache(vector3<> k, double omegaMax) const
+std::shared_ptr<const WannierMC::CacheEntry> WannierMC::getElectronCache(vector3<> k, double omegaMax) const
 {	return getElectronCache(std::vector< vector3<> >(1, k), omegaMax)[0];
 }
 
-std::shared_ptr<const BandStruct::CacheEntry> BandStruct::getPhononCache(vector3<> q) const
+std::shared_ptr<const WannierMC::CacheEntry> WannierMC::getPhononCache(vector3<> q) const
 {	return getPhononCache(std::vector< vector3<> >(1, q))[0];
 }
 
-std::vector< std::shared_ptr<const BandStruct::CacheEntry> > BandStruct::getElectronCache(const std::vector< vector3<> >& kArr, double omegaMax) const
+std::vector< std::shared_ptr<const WannierMC::CacheEntry> > WannierMC::getElectronCache(const std::vector< vector3<> >& kArr, double omegaMax) const
 {	if(omegaMax<omegaMain)
 		return getCache(kArr, mainCache, cellMap, hWannierMain, rankMain, false);
 	else
 		return getCache(kArr, electronCache, cellMap, hWannier, rankElectron, false);
 }
 
-std::vector< std::shared_ptr<const BandStruct::CacheEntry> > BandStruct::getPhononCache(const std::vector< vector3<> >& qArr) const
+std::vector< std::shared_ptr<const WannierMC::CacheEntry> > WannierMC::getPhononCache(const std::vector< vector3<> >& qArr) const
 {	return getCache(qArr, phononCache, phononCellMap, omegaSqPh, rankPhonon, true);
 }
 
-std::vector< std::shared_ptr<const BandStruct::CacheEntry> > BandStruct::getCache( const std::vector< vector3<> >& kArr, 
+std::vector< std::shared_ptr<const WannierMC::CacheEntry> > WannierMC::getCache( const std::vector< vector3<> >& kArr, 
 		const std::map<vector3<>, std::shared_ptr<const CacheEntry> >& cache, const std::vector< vector3<int> >& cellMap,
 		const matrix& hWannierEff, const size_t& rank, bool shouldSqrt) const
-{	static StopWatch watch("BandStruct::getCache");
-	std::vector< std::shared_ptr<const BandStruct::CacheEntry> > ceArr(kArr.size());
+{	static StopWatch watch("WannierMC::getCache");
+	std::vector< std::shared_ptr<const WannierMC::CacheEntry> > ceArr(kArr.size());
 	std::vector< vector3<> > kNew; //k's for which results not yet available in cache
 	//Check cache first:
 	for(size_t ik=0; ik<kArr.size(); ik++)

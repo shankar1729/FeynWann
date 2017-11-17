@@ -8,19 +8,19 @@
 #include <algorithm>
 #include <core/Units.h>
 
-LineWidth::LineWidth(string prefix, const BandStruct& bs) : bs(bs)
+LineWidth::LineWidth(string prefix, const WannierMC& wmc) : wmc(wmc)
 {
 /*
-	nBandsSq = bs.nBands*bs.nBands;
-	nCells = bs.cellMap.size();
+	nBandsSq = wmc.nBands*wmc.nBands;
+	nCells = wmc.cellMap.size();
 	
 	//Read e-e scattering:
 	matrix eeWannier(nBandsSq, nCells);
-	readMatrix(eeWannier, prefix + ".mlwfImSigma_ee", bs.spinWeight);
+	readMatrix(eeWannier, prefix + ".mlwfImSigma_ee", wmc.spinWeight);
 	
 	//Read e-ph scattering:
 	matrix ePhWannier(nBandsSq, nCells);
-	readMatrix(ePhWannier, prefix + ".mlwfImSigma_ePh", bs.spinWeight);
+	readMatrix(ePhWannier, prefix + ".mlwfImSigma_ePh", wmc.spinWeight);
 	
 	//Combine into longer oclumsn for efficient matrix multiply:
 	ImSigmaWannier.init(2*nBandsSq, nCells);
@@ -36,7 +36,7 @@ diagMatrix LineWidth::operator()(vector3< double > k, double eeWeight, double eP
 std::vector< diagMatrix > LineWidth::operator()(const std::vector< vector3<> >& kArr, double eeWeight, double ePhWeight) const
 {	static StopWatch watch("LineWidth::operator()"); watch.start();
 /*
-	std::vector< std::shared_ptr<const BandStruct::CacheEntry> > ceArr = bs.getElectronCache(kArr);
+	std::vector< std::shared_ptr<const BandStruct::CacheEntry> > ceArr = wmc.getElectronCache(kArr);
 	//Collect phases:
 	matrix phase(nCells, kArr.size());
 	for(size_t ik=0; ik<kArr.size(); ik++)
@@ -49,10 +49,10 @@ std::vector< diagMatrix > LineWidth::operator()(const std::vector< vector3<> >& 
 	{	const matrix& evecs = ceArr[ik]->evecs;
 		matrix ee_k = ImSigma_k(0,nBandsSq, ik,ik+1); 
 		matrix ePh_k = ImSigma_k(nBandsSq,2*nBandsSq, ik,ik+1);
-		ee_k.reshape(bs.nBands, bs.nBands); ee_k = dagger(evecs) * ee_k * evecs; //switch to eigenbasis of Hk
-		ePh_k.reshape(bs.nBands, bs.nBands); ePh_k = dagger(evecs) * ePh_k * evecs; //switch to eigenbasis of Hk
-		out[ik].resize(bs.nBands);
-		for(int b=0; b<bs.nBands; b++)
+		ee_k.reshape(wmc.nBands, wmc.nBands); ee_k = dagger(evecs) * ee_k * evecs; //switch to eigenbasis of Hk
+		ePh_k.reshape(wmc.nBands, wmc.nBands); ePh_k = dagger(evecs) * ePh_k * evecs; //switch to eigenbasis of Hk
+		out[ik].resize(wmc.nBands);
+		for(int b=0; b<wmc.nBands; b++)
 			out[ik][b] = std::max(0.,eeWeight * ee_k(b,b).real()) + ePhWeight * exp(ePh_k(b,b).real()); //e-ph is interpolated logarithmically
 	}
 */

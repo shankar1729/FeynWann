@@ -1,5 +1,5 @@
-#ifndef WANNIERMETROPOLIS_INPUTMAP_H
-#define WANNIERMETROPOLIS_INPUTMAP_H
+#ifndef WANNIERMC_INPUTMAP_H
+#define WANNIERMC_INPUTMAP_H
 
 #include <core/string.h>
 #include <map>
@@ -13,4 +13,4 @@ public:
 	string getString(string key) const;
 };
 
-#endif //WANNIERMETROPOLIS_INPUTMAP_H
+#endif //WANNIERMC_INPUTMAP_H
