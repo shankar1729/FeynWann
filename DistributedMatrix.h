@@ -18,6 +18,7 @@ public:
 	int nElems; //!< local number of matrix elements (per cell/k) [if packed, only counts packed]
 	int iElemStart; //!< starting element on current process
 	int nCellsTot; //!< size of cell map or its square, depending on squared
+	int kfoldProd; //!< prod(kfold)
 	int nkTot; //!< prod(kfold) or its square, depending on squared
 	int nk; //!< number of k-points (or pairs, if squared) on current process
 	int ikStart; //!< starting k-point (or pair, if squared) on current process
@@ -28,13 +29,14 @@ public:
 		const std::vector<vector3<int>>& cellMap, const vector3<int>& kfold, bool squared);
 	~DistributedMatrix();
 	
-	void transform(vector3<int> k0); //!< prepare results for k-point mesh offset by k0 (squared=false only)
-	void transform(vector3<int> k01, vector3<int> k02); //!< prepare results for k-point mesh offsets k01 and k02 (squared=true only)
+	void transform(vector3<> k0); //!< prepare results for k-point mesh offset by k0 (squared=false only)
+	void transform(vector3<> k01, vector3<> k02); //!< prepare results for k-point mesh offsets k01 and k02 (squared=true only)
 	const complex* getResult(int ik) const; //!< get pointer to result for k-point (or pair) index ik
 private:
 	ManagedArray<complex> mat; //!< input matrix elements
 	ManagedArray<complex> buf; //!< buffer in which transformations happen and result is produced
 	std::shared_ptr<struct PlanSet> planSet; //!< opaque pointer to required set of FFT plans
+	std::vector<int> cellIndex; //!< index of cell or cell-pair in nkTot array
 };
 
 #endif //WANNIERMC_DISTRIBUTEDMATRIX_H

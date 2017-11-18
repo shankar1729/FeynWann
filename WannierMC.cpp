@@ -231,6 +231,21 @@ WannierMC::WannierMC(const WannierMCParams& wmcp)
 	}
 	
 	logPrintf("\n");
+	
+	//Test Hamiltonian eigenvalues:
+	Hw->transform(vector3<>(0.01,0.12,-0.13));
+	matrix Hk(nBands, nBands), Vk; diagMatrix Ek;
+	ostringstream oss; oss << "debug." << mpiWorld->iProcess();
+	FILE* fp = fopen(oss.str().c_str(), "w");
+	for(int ik=Hw->ikStart; ik<Hw->ikStart+Hw->nk; ik++)
+	{	eblas_copy(Hk.data(), Hw->getResult(ik), Hk.nData());
+		Hk.diagonalize(Vk, Ek);
+		fprintf(fp, "%3d:", ik);
+		for(const double& E: Ek)
+			fprintf(fp, " %+6.3f", E);
+		fprintf(fp, "\n");
+	}
+	fclose(fp);
 }
 
 void WannierMC::free()
