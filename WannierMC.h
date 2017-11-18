@@ -28,6 +28,7 @@ public:
 	//DFT / Wannier / Phonon parameters:
 	matrix3<> R; //!< lattice vectors
 	vector3<int> kfold; //!< k-point folding in original calculation
+	vector3<int> phononSup; //!< phonon supercell in original calculation
 	vector3<bool> isTruncated; //!< whether each direction is truncated
 	int nBands, spinWeight; //!< number of Wannier bands for the electrons and weight per spin channel
 	double mu, nElectrons, nValence; //!< chemical potential (if a metal), number of electrons per unit cell and number of valence bands (if insulator)

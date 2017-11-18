@@ -127,6 +127,29 @@ WannierMC::WannierMC(const WannierMCParams& wmcp)
 	logPrintf("R:\n");
 	R.print(globalLog, " %lg ");
 	
+	//Read relevant parameters from phonon.out:
+	logPrintf("\nReading '%s.out' ... ", wmcp.phononPrefix.c_str()); logFlush();
+	ifs.open(wmcp.phononPrefix + ".out");
+	if(!ifs.is_open()) die("could not open file.\n");
+	initDone = false; //whether finished reading the initialization part of totalE.out
+	while(!ifs.eof())
+	{	string line; getline(ifs, line);
+		if(line.find("phonon  \\") != string::npos)
+		{	//at start of phonon command print
+			string key;
+			while(key!="supercell" && (!ifs.eof()))
+				ifs >> key; //search for supercell keyword
+			ifs >> phononSup[0] >> phononSup[1] >> phononSup[2];
+			if(!ifs.good()) die("Failed to read phonon supercell dimensions.\n");
+			break; //don't need anything else from phonon.out
+		}
+	}
+	ifs.close();
+	if(!phononSup.length_squared()) die("Failed to read phonon supercell dimensions.\n");
+	logPrintf("done.\n"); logFlush();
+	logPrintf("\nParameters extracted from phonon calculation:\n");
+	logPrintf("phononSup = "); phononSup.print(globalLog, " %d ");
+	
 	//Read cell map
 	ifs.open(wmcp.wannierPrefix + ".mlwfCellMap");
 	string headerLine; getline(ifs, headerLine); //read and ignore header line
