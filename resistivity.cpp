@@ -89,6 +89,7 @@ int main(int argc, char** argv)
 	//Initialize Wannier bandstructure:
 	WannierMCParams wmcp;
 	wmcp.needPhonons = true;
+	wmcp.needVelocity = true;
 	WannierMC wmc(wmcp);
 	
 	if(ip.dryRun)

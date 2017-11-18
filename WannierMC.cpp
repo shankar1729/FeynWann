@@ -180,24 +180,18 @@ WannierMC::WannierMC(const WannierMCParams& wmcp)
 		assert(nBands <= nBandsDFT);
 	}
 	logPrintf("nBands = %d\n", nBands);
+	logPrintf("\n");
 	
-	/*
 	//Read wannier hamiltonian
-	string fnameH = wmcp.wannierPrefix + ".mlwfH";
-	hWannier.init(nBands*nBands, cellMap.size());
-	readMatrix(hWannier, fnameH, spinWeight);
+	bool realOnly = (spinWeight==2);
+	string fname = wmcp.wannierPrefix + ".mlwfH";
+	Hw = std::make_shared<DistributedMatrix>(fname, realOnly,
+		mpiGroup, nBands*nBands, cellMap, kfold, false);
 	
-	//Offset wannier Hamiltonian by mu:
-	for(size_t ic=0; ic<cellMap.size(); ic++)
-		if(!cellMap[ic].length_squared()) //diagonal element
-		{	matrix id = eye(nBands); id.reshape(nBands*nBands, 1);
-			hWannier.set(0,nBands*nBands, ic,ic+1, hWannier(0,nBands*nBands, ic,ic+1) - mu * id);
-		}
-
-	if(needPhonons)
+	
+	if(wmcp.needPhonons)
 	{	//Read phonon cell map
 		string fname = wmcp.wannierPrefix + ".mlwfCellMapPh";
-		if(fileSize(fname.c_str()) <= 0) fname = wmcp.totalEprefix + ".phononCellMap";
 		logPrintf("Reading '%s' ... ", fname.c_str()); logFlush();
 		ifs.open(fname.c_str());
 		getline(ifs, headerLine); //read and ignore header line
@@ -208,63 +202,21 @@ WannierMC::WannierMC(const WannierMCParams& wmcp)
 		
 		//Read phonon force matrix
 		fname = wmcp.wannierPrefix + ".mlwfOmegaSqPh";
-		if(fileSize(fname.c_str()) <= 0) fname = wmcp.totalEprefix + ".phononOmegaSq";
-		logPrintf("Reading '%s' ... ", fname.c_str()); logFlush();
-		nModes = sqrt(fileSize(fname.c_str())/(sizeof(double)*phononCellMap.size())); //phonon omegaSq is always real
-		omegaSqPh.init(nModes*nModes, phononCellMap.size());
-		omegaSqPh.read_real(fname.c_str());
-		logPrintf("done.\n"); logFlush();
+		OsqW = std::make_shared<DistributedMatrix>(fname, true, //phonon omegaSq is always real
+			mpiGroup, nModes*nModes, phononCellMap, phononSup, false);
 		
-		//Read phononCellMapSqPh
-		fname = wmcp.wannierPrefix + ".mlwfCellMapSqPh";
-		logPrintf("Reading '%s' ... ", fname.c_str()); logFlush();
-		ifs.open(fname.c_str());
-		getline(ifs, headerLine); // read and ignore header line
-		CellPair cp;
-		while(ifs >> cp.iR1[0] >> cp.iR1[1] >> cp.iR1[2] >> cp.iR2[0] >> cp.iR2[1] >> cp.iR2[2])
-			phononCellMapSq.push_back(cp);
-		ifs.close();
-		logPrintf("done.\n"); logFlush();
-		
-		//Check the order of pairs in phononCellMapSqPh:
-		auto pairIter = phononCellMapSq.begin();
-		for(const vector3<int>& iR1: phononCellMap)
-		for(const vector3<int>& iR2: phononCellMap)
-		{	if(not (pairIter->iR1==iR1 and pairIter->iR2==iR2))
-				die("Phonon cell map squared is not in required order (with outer index iR1 and inner index iR2)\n");
-			pairIter++;
-		}
+		//Read electron-phonon matrix elements
+		fname = wmcp.wannierPrefix + ".mlwfHePh";
+		HePhW = std::make_shared<DistributedMatrix>(fname, realOnly,
+			mpiGroup, nModes*nBands*nBands, phononCellMap, phononSup, true);
 	}
 	
-	//Read and compress matrix elements if necessary:
-	nPacked = nMain*nMain + 2*nMain*(nBands-nMain);
-	//--- momentum matrix elements
-	if(nPol)
-	{	if(mpiWorld->isHead())
-		{	pWannier.init(nBands*nBands*3, cellMap.size());
-			readMatrix(pWannier, wmcp.wannierPrefix + ".mlwfP", spinWeight);
-			compressMatElemArr(pWannier);
-			//Pre-contract photon polarizations:
-			matrix rot(3, nPol);
-			for(int iPol=0; iPol<nPol; iPol++)
-				for(int iDir=0; iDir<3; iDir++)
-					rot.set(iDir, iPol, Ahat[iPol][iDir]);
-			transformMatElemArr(pWannier, rot);
-		}
-		else pWannier.init(nPacked*nPol, cellMap.size());
-		pWannier.bcast();
+	//Velocity matrix elements
+	if(wmcp.needVelocity)
+	{	fname = wmcp.wannierPrefix + ".mlwfP";
+		Pw = std::make_shared<DistributedMatrix>(fname, realOnly,
+			mpiGroup, 3*nBands*nBands, cellMap, kfold, false);
 	}
-	//--- electron-phonon matrix elements
-	if(omegaSqPh)
-	{	if(mpiWorld->isHead())
-		{	wannierHePh.init(nModes*nBands*nBands * phononCellMap.size(), phononCellMap.size());
-			readMatrix(wannierHePh, wmcp.wannierPrefix + ".mlwfHePh", spinWeight);
-			compressMatElemArr(wannierHePh);
-		}
-		else wannierHePh.init(nModes*nPacked * phononCellMap.size(), phononCellMap.size());
-		wannierHePh.bcast();
-	}
-	*/
 }
 
 /*

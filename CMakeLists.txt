@@ -91,7 +91,7 @@ else()
 endif()
 
 #Main library for WannierMC containing all the auxiliary functionality
-add_library(WannierMC ${LINK_TYPE} WannierMC.cpp LineWidth.cpp InputMap.cpp)
+add_library(WannierMC ${LINK_TYPE} WannierMC.cpp DistributedMatrix.cpp LineWidth.cpp InputMap.cpp)
 find_library(JDFTX_LIBRARY jdftx PATHS ${JDFTX_BUILD})
 target_link_libraries(WannierMC ${JDFTX_LIBRARY} ${MPI_CXX_LIBRARIES} ${EXTRA_LIBRARIES} ${FFTW3_MPI_LIBRARY} ${FFTW3_THREADS_LIBRARY} ${FFTW3_LIBRARY})
 

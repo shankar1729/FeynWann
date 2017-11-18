@@ -37,16 +37,14 @@ public:
 private:
 	//Electrons:
 	std::vector< vector3<int> > cellMap; //electron Wannier cell map
-	matrix hWannier, pWannier; //Wannier hamiltonian and dipole matrix elements
+	std::shared_ptr<DistributedMatrix> Hw, Pw; //Wannier hamiltonian and dipole matrix elements
 	
 	//Phonons:
 	std::vector< vector3<int> > phononCellMap; //cell map for phonon force matrix
-	matrix omegaSqPh; //phonon force matrix
+	std::shared_ptr<DistributedMatrix> OsqW; //phonon omega-squared matrix
 	
 	//Electron-phonon interaction:
-	matrix wannierHePh; //electron-phonon matrix elements in Wannier basis
-	struct CellPair { vector3<int> iR1, iR2; };
-	std::vector<CellPair> phononCellMapSq; //pairs of cells for which electron-phonon matrix elements are stored
+	std::shared_ptr<DistributedMatrix> HePhW; //electron-phonon matrix elements in Wannier basis
 };
 
 #endif //WANNIERMC_WANNIERMC_H
