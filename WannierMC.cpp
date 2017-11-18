@@ -49,6 +49,7 @@ WannierMC::WannierMC(const WannierMCParams& wmcp)
 	ifstream ifs(wmcp.totalEprefix + ".out");
 	if(!ifs.is_open()) die("could not open file.\n");
 	bool initDone = false; //whether finished reading the initialization part of totalE.out
+	int nBandsDFT = 0; //number of DFT bands (>= this->nBands = # Wannier bands)
 	while(!ifs.eof())
 	{	string line; getline(ifs, line);
 		if(line.find("Initializing the grid") != string::npos)
@@ -106,7 +107,7 @@ WannierMC::WannierMC(const WannierMCParams& wmcp)
 		}
 		else if(line.find("nElectrons:") == 0) //nElectrons, nBands, nStates line
 		{	istringstream iss(line); string buf;
-			iss >> buf >> nElectrons;
+			iss >> buf >> nElectrons >> buf >> nBandsDFT;
 		}
 	}
 	ifs.close();
@@ -118,9 +119,9 @@ WannierMC::WannierMC(const WannierMCParams& wmcp)
 		if(fabs(nValence*spinWeight-nElectrons > 1e-6))
 			die("Number of electrons incompatible with semiconductor / insulator.\n");
 	}
-	logPrintf("\nParameters extracted from DFT calculation:\n");
 	logPrintf("mu = %lg\n", mu);
 	logPrintf("nElectrons = %lg\n", nElectrons);
+	logPrintf("nBandsDFT = %d\n", nBandsDFT);
 	logPrintf("spinWeight = %d\n", spinWeight);
 	logPrintf("kfold = "); kfold.print(globalLog, " %d ");
 	logPrintf("isTruncated = "); isTruncated.print(globalLog, " %d ");
@@ -131,7 +132,7 @@ WannierMC::WannierMC(const WannierMCParams& wmcp)
 	logPrintf("\nReading '%s.out' ... ", wmcp.phononPrefix.c_str()); logFlush();
 	ifs.open(wmcp.phononPrefix + ".out");
 	if(!ifs.is_open()) die("could not open file.\n");
-	initDone = false; //whether finished reading the initialization part of totalE.out
+	nModes = 0;
 	while(!ifs.eof())
 	{	string line; getline(ifs, line);
 		if(line.find("phonon  \\") != string::npos)
@@ -141,13 +142,17 @@ WannierMC::WannierMC(const WannierMCParams& wmcp)
 				ifs >> key; //search for supercell keyword
 			ifs >> phononSup[0] >> phononSup[1] >> phononSup[2];
 			if(!ifs.good()) die("Failed to read phonon supercell dimensions.\n");
-			break; //don't need anything else from phonon.out
 		}
+		string cmdName; istringstream(line) >> cmdName;
+		if(cmdName == "ion")
+			nModes += 3; //3 modes per atom in unit cell
+		if(line.find("Unit cell calculation") != string::npos)
+			break; //don't need anything else after this from phonon.out
 	}
 	ifs.close();
 	if(!phononSup.length_squared()) die("Failed to read phonon supercell dimensions.\n");
 	logPrintf("done.\n"); logFlush();
-	logPrintf("\nParameters extracted from phonon calculation:\n");
+	logPrintf("nModes = %d\n", nModes);
 	logPrintf("phononSup = "); phononSup.print(globalLog, " %d ");
 	
 	//Read cell map
@@ -158,32 +163,22 @@ WannierMC::WannierMC(const WannierMCParams& wmcp)
 	while(ifs >> cm[0] >> cm[1] >> cm[2] >> x >> y >> z)
 		cellMap.push_back(cm);
 	ifs.close();
-	/*
-	//Read wannier hamiltonian
-	string fnameH = wmcp.wannierPrefix + ".mlwfH";
-	nBands = sqrt(fileSize(fnameH.c_str()) / ((spinWeight==1 ? sizeof(complex) : sizeof(double)) * cellMap.size()));
-	hWannier.init(nBands*nBands, cellMap.size());
-	readMatrix(hWannier, fnameH, spinWeight);
-
-	//Offset wannier Hamiltonian by mu:
-	for(size_t ic=0; ic<cellMap.size(); ic++)
-		if(!cellMap[ic].length_squared()) //diagonal element
-		{	matrix id = eye(nBands); id.reshape(nBands*nBands, 1);
-			hWannier.set(0,nBands*nBands, ic,ic+1, hWannier(0,nBands*nBands, ic,ic+1) - mu * id);
-		}
-
-	//Initialize main window (if available):
+	
+	//Find number of wannier centers and initialize main window (if available):
 	nMain = 0; mainFirst = 0; omegaMain = 0.;
 	{	//read Wannier band contrib file
 		string fname = wmcp.wannierPrefix + ".mlwfBandContrib";
+		logPrintf("\nReading '%s' ... ", fname.c_str()); logFlush();
 		FILE* fp = fopen(fname.c_str(), "r");
-		if(!fp) die("Could not open %s for reading.\n", fname.c_str());
+		if(!fp) die("could not open for reading.\n");
 		double eMin = INFINITY, eMax = -INFINITY;
 		mainFirst = 0;
-		int mainLast = nBands;
+		int mainLast = nBandsDFT;
+		nBands = 0; //number of Wannier centers
 		while(!feof(fp))
 		{	int nMin_b, nMax_b; double eMin_b, eMax_b;
 			if(fscanf(fp, "%d %d %lf %lf", &nMin_b, &nMax_b, &eMin_b, &eMax_b) != 4) break;
+			nBands = std::max(nBands, nMax_b+1); //number of Wannier centers
 			//select tightest possible range that contains Fermi level:
 			if(eMin_b<=mu && mu<=eMax_b && (nMax_b-nMin_b)<(mainLast-mainFirst))
 			{	eMin = eMin_b; eMax = eMax_b;
@@ -191,6 +186,8 @@ WannierMC::WannierMC(const WannierMCParams& wmcp)
 			}
 		}
 		fclose(fp);
+		logPrintf("done.\n");
+		assert(nBands <= nBandsDFT);
 		nMain = mainLast - mainFirst + 1;
 		if(nMain < nBands) //otherwise no point
 		{	omegaMain = std::min(mu-eMin, eMax-mu);
@@ -198,11 +195,22 @@ WannierMC::WannierMC(const WannierMCParams& wmcp)
 		}
 		eMinMain = eMin; eMaxMain = eMax;
 	}
+	logPrintf("nBands = %d\n", nBands);
 	if(omegaMain)
-	{	logPrintf("Initialized main window of half-width %lf eV with %d of %d Wannier centers.\n", omegaMain/eV, nMain, nBands);
-		assert(nMain > 0 && nMain < nBands); //this is checked by Wannier as well
+	{	logPrintf("nMain = %d\n", nMain);
+		logPrintf("omegaMain = %lg eV\n", omegaMain);
+		assert(nMain > 0 && nMain < nBands);
 		//Initialize compressed Hamiltonian:
-		hWannierMain.init(nMain*nMain, cellMap.size());
+	}
+	else nMain = nBands; //so that all Wannier centers are always used
+	
+	/*
+	//Read wannier hamiltonian
+	string fnameH = wmcp.wannierPrefix + ".mlwfH";
+	hWannier.init(nBands*nBands, cellMap.size());
+	readMatrix(hWannier, fnameH, spinWeight);
+	if(omegaMain)
+	{	hWannierMain.init(nMain*nMain, cellMap.size());
 		for(size_t ic=0; ic<cellMap.size(); ic++)
 		{	matrix H = hWannier(0,nBands*nBands, ic,ic+1);
 			H.reshape(nBands, nBands);
@@ -211,8 +219,14 @@ WannierMC::WannierMC(const WannierMCParams& wmcp)
 			hWannierMain.set(0,nMain*nMain, ic,ic+1, H);
 		}
 	}
-	else nMain = nBands; //so that all Wannier centers are always used
 	
+	//Offset wannier Hamiltonian by mu:
+	for(size_t ic=0; ic<cellMap.size(); ic++)
+		if(!cellMap[ic].length_squared()) //diagonal element
+		{	matrix id = eye(nBands); id.reshape(nBands*nBands, 1);
+			hWannier.set(0,nBands*nBands, ic,ic+1, hWannier(0,nBands*nBands, ic,ic+1) - mu * id);
+		}
+
 	if(needPhonons)
 	{	//Read phonon cell map
 		string fname = wmcp.wannierPrefix + ".mlwfCellMapPh";
