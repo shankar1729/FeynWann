@@ -94,6 +94,7 @@ int main(int argc, char** argv)
 	
 	if(ip.dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
+		wmc.free();
 		finalizeSystem();
 		return 0;
 	}
@@ -282,5 +283,7 @@ int main(int argc, char** argv)
 		reportResult(gArr[iMu], "g(eF)", 1, "");
 	}
 	*/
+	
+	wmc.free();
 	finalizeSystem();
 }

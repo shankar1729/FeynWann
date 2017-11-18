@@ -229,7 +229,19 @@ WannierMC::WannierMC(const WannierMCParams& wmcp)
 		ImSigma_ePhW = std::make_shared<DistributedMatrix>(fname, realOnly,
 			mpiGroup, nBands*nBands, cellMap, kfold, false);
 	}
+	
+	logPrintf("\n");
 }
+
+void WannierMC::free()
+{	Hw = 0;
+	Pw = 0;
+	ImSigma_eeW = 0;
+	ImSigma_ePhW = 0;
+	OsqW = 0;
+	HePhW = 0;
+}
+
 
 /*
 diagMatrix WannierMC::getStates(vector3<> k, double omegaMax, matrix* evecs) const
@@ -295,18 +307,12 @@ void WannierMC::setPhononMatElemArray(vector3<> k1, const std::vector< vector3<>
 	int nk2 = k2arr.size();
 	//Compute double Fourier transform for fixed k1 and all k2 together:
 	watchFT.start();
-	std::vector< vector3<> > kMeanArr(nk2);
 	matrix phase1(phononCellMap.size(), 1);
 	matrix phase2(phononCellMap.size(), nk2);
 	for(size_t iCell=0; iCell<phononCellMap.size(); iCell++)
 		phase1.set(iCell,0, cis(-2*M_PI * dot(phononCellMap[iCell],k1)));
 	for(int ik2=0; ik2<nk2; ik2++)
 	{	vector3<> k2 = k2arr[ik2];
-		//Get bisecting k-point (within nearest image convention):
-		vector3<> kDiff = k2 - k1;
-		for(int j=0; j<3; j++) kDiff[j] -= floor(kDiff[j]+0.5);
-		vector3<> kMean = k1 + 0.5*kDiff;
-		kMeanArr[ik2] = kMean;
 		//Calculate Fourier transform phase:
 		for(size_t iCell=0; iCell<phononCellMap.size(); iCell++)
 			phase2.set(iCell,ik2, cis(2*M_PI * dot(phononCellMap[iCell],k2)));

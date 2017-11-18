@@ -23,6 +23,7 @@ public:
 	
 	const WannierMCParams& wmcp;
 	WannierMC(const WannierMCParams& wmcp);
+	void free(); //!< free matrices
 	
 	//DFT / Wannier / Phonon parameters:
 	matrix3<> R; //!< lattice vectors

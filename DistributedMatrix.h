@@ -34,6 +34,7 @@ public:
 private:
 	ManagedArray<complex> mat; //!< input matrix elements
 	ManagedArray<complex> buf; //!< buffer in which transformations happen and result is produced
+	std::shared_ptr<struct PlanSet> planSet; //!< opaque pointer to required set of FFT plans
 };
 
 #endif //WANNIERMC_DISTRIBUTEDMATRIX_H
