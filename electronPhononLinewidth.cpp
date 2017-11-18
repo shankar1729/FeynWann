@@ -75,8 +75,7 @@ inline bool eigsEqual(const diagMatrix& E1, const diagMatrix& E2, double Emin, d
 */
 
 int main(int argc, char** argv)
-{   InitParams ip = WannierMC::getPackageInfo("Calculate electron-phonon scattering contribution to electron linewidth.");
-	initSystemCmdline(argc, argv, ip);
+{   InitParams ip =  WannierMC::initialize(argc, argv, "Calculate electron-phonon scattering contribution to electron linewidth.");
 
 	//Read input file:
 	InputMap inputMap(ip.inputFilename);

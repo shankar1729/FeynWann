@@ -63,12 +63,11 @@ inline double trace(const matrix3<>& M, int slabDir)
 */
 
 int main(int argc, char** argv)
-{	InitParams ip = WannierMC::getPackageInfo("Monte Carlo estimate of resistivity");
-	initSystemCmdline(argc, argv, ip);
+{	InitParams ip = WannierMC::initialize(argc, argv, "Monte Carlo estimate of resistivity");
 
 	//Read input file:
 	InputMap inputMap(ip.inputFilename);
-	const int nKpts = inputMap.get("nKpts");
+	const int nOffsets = inputMap.get("nOffsets"); assert(nOffsets>0);
 	const int nBlocks = inputMap.get("nBlocks"); assert(nBlocks>0);
 	const double T = inputMap.get("T") * Kelvin;
 	const double EconserveWidth = inputMap.get("EconserveWidth", T/eV) * eV; //energy conservation width (default to T)
@@ -78,7 +77,7 @@ int main(int argc, char** argv)
 	const int slabDir = inputMap.get("slabDir", -1); assert(slabDir<3); //0-based index of direction to eliminate; default -1 => don't eliminate any (keep 3D)
 	
 	logPrintf("\nInputs after conversion to atomic units:\n");
-	logPrintf("nKpts = %d\n", nKpts);
+	logPrintf("nOffsets = %d\n", nOffsets);
 	logPrintf("nBlocks = %d\n", nBlocks);
 	logPrintf("T = %lg\n", T);
 	logPrintf("EconserveWidth = %lg\n", EconserveWidth);
@@ -87,10 +86,10 @@ int main(int argc, char** argv)
 	logPrintf("dmuCount = %d\n", dmuCount);
 	logPrintf("slabDir = %d\n", slabDir);
 	
-	/*
 	//Initialize Wannier bandstructure:
-	const int bunchSize = 32;
-	WannierMC wmc("Wannier/totalE", "Wannier/wannier", true);
+	WannierMCParams wmcp;
+	wmcp.needPhonons = true;
+	WannierMC wmc(wmcp);
 	
 	if(ip.dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
@@ -98,7 +97,6 @@ int main(int argc, char** argv)
 		return 0;
 	}
 	logPrintf("\n");
-	*/
 	
 	/* //DEBUG: check translation invariance of e-ph matrix elements:
 	if(mpiWorld->isHead())

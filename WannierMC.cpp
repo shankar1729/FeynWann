@@ -7,16 +7,32 @@
 #include <math.h>
 #include <set>
 #include <core/Units.h>
+#include <fftw3-mpi.h>
 #include "config.h"
 
-InitParams WannierMC::getPackageInfo(const char* description)
+WannierMCParams::WannierMCParams()
+: totalEprefix("Wannier/totalE"), phononPrefix("Wannier/phonon"), wannierPrefix("Wannier/wannier"),
+needPhonons(false), needLinewidths(false)
+{
+	
+}
+
+InitParams WannierMC::initialize(int argc, char** argv, const char* description)
 {	InitParams ip;
 	ip.packageName = PACKAGE_NAME;
 	ip.versionString = VERSION_STRING;
 	ip.versionHash = GIT_HASH;
 	ip.description = description;
+	initSystemCmdline(argc, argv, ip);
+	fftw_mpi_init();
 	return ip;
 }
+
+void WannierMC::finalize()
+{	fftw_mpi_cleanup();
+	finalizeSystem();
+}
+
 
 //Read matrix from file accounting for real-only or complex storage based on spinWeight
 void readMatrix(matrix& m, string fname, int spinWeight)
@@ -25,12 +41,12 @@ void readMatrix(matrix& m, string fname, int spinWeight)
 	logPrintf("done.\n"); logFlush();
 }
 
-WannierMC::WannierMC(string totalEprefix, string wannierPrefix, bool needPhonons, std::vector< vector3<complex> > Ahat)
-: spinWeight(0), mu(NAN), nElectrons(0), nValence(0), nPol(Ahat.size())
+WannierMC::WannierMC(const WannierMCParams& wmcp)
+: wmcp(wmcp), spinWeight(0), mu(NAN), nElectrons(0), nValence(0), nPol(wmcp.Ahat.size())
 {	
 	//Read relevant parameters from totalE.out:
-	logPrintf("\nReading '%s.out' ... ", totalEprefix.c_str()); logFlush();
-	ifstream ifs(totalEprefix + ".out");
+	logPrintf("\nReading '%s.out' ... ", wmcp.totalEprefix.c_str()); logFlush();
+	ifstream ifs(wmcp.totalEprefix + ".out");
 	if(!ifs.is_open()) die("could not open file.\n");
 	bool initDone = false; //whether finished reading the initialization part of totalE.out
 	while(!ifs.eof())
@@ -112,7 +128,7 @@ WannierMC::WannierMC(string totalEprefix, string wannierPrefix, bool needPhonons
 	R.print(globalLog, " %lg ");
 	
 	//Read cell map
-	ifs.open(wannierPrefix + ".mlwfCellMap");
+	ifs.open(wmcp.wannierPrefix + ".mlwfCellMap");
 	string headerLine; getline(ifs, headerLine); //read and ignore header line
 	vector3<int> cm;
 	double x,y,z;
@@ -121,7 +137,7 @@ WannierMC::WannierMC(string totalEprefix, string wannierPrefix, bool needPhonons
 	ifs.close();
 	/*
 	//Read wannier hamiltonian
-	string fnameH = wannierPrefix + ".mlwfH";
+	string fnameH = wmcp.wannierPrefix + ".mlwfH";
 	nBands = sqrt(fileSize(fnameH.c_str()) / ((spinWeight==1 ? sizeof(complex) : sizeof(double)) * cellMap.size()));
 	hWannier.init(nBands*nBands, cellMap.size());
 	readMatrix(hWannier, fnameH, spinWeight);
@@ -136,7 +152,7 @@ WannierMC::WannierMC(string totalEprefix, string wannierPrefix, bool needPhonons
 	//Initialize main window (if available):
 	nMain = 0; mainFirst = 0; omegaMain = 0.;
 	{	//read Wannier band contrib file
-		string fname = wannierPrefix + ".mlwfBandContrib";
+		string fname = wmcp.wannierPrefix + ".mlwfBandContrib";
 		FILE* fp = fopen(fname.c_str(), "r");
 		if(!fp) die("Could not open %s for reading.\n", fname.c_str());
 		double eMin = INFINITY, eMax = -INFINITY;
@@ -176,8 +192,8 @@ WannierMC::WannierMC(string totalEprefix, string wannierPrefix, bool needPhonons
 	
 	if(needPhonons)
 	{	//Read phonon cell map
-		string fname = wannierPrefix + ".mlwfCellMapPh";
-		if(fileSize(fname.c_str()) <= 0) fname = totalEprefix + ".phononCellMap";
+		string fname = wmcp.wannierPrefix + ".mlwfCellMapPh";
+		if(fileSize(fname.c_str()) <= 0) fname = wmcp.totalEprefix + ".phononCellMap";
 		logPrintf("Reading '%s' ... ", fname.c_str()); logFlush();
 		ifs.open(fname.c_str());
 		getline(ifs, headerLine); //read and ignore header line
@@ -187,8 +203,8 @@ WannierMC::WannierMC(string totalEprefix, string wannierPrefix, bool needPhonons
 		logPrintf("done.\n"); logFlush();
 		
 		//Read phonon force matrix
-		fname = wannierPrefix + ".mlwfOmegaSqPh";
-		if(fileSize(fname.c_str()) <= 0) fname = totalEprefix + ".phononOmegaSq";
+		fname = wmcp.wannierPrefix + ".mlwfOmegaSqPh";
+		if(fileSize(fname.c_str()) <= 0) fname = wmcp.totalEprefix + ".phononOmegaSq";
 		logPrintf("Reading '%s' ... ", fname.c_str()); logFlush();
 		nModes = sqrt(fileSize(fname.c_str())/(sizeof(double)*phononCellMap.size())); //phonon omegaSq is always real
 		omegaSqPh.init(nModes*nModes, phononCellMap.size());
@@ -196,7 +212,7 @@ WannierMC::WannierMC(string totalEprefix, string wannierPrefix, bool needPhonons
 		logPrintf("done.\n"); logFlush();
 		
 		//Read phononCellMapSqPh
-		fname = wannierPrefix + ".mlwfCellMapSqPh";
+		fname = wmcp.wannierPrefix + ".mlwfCellMapSqPh";
 		logPrintf("Reading '%s' ... ", fname.c_str()); logFlush();
 		ifs.open(fname.c_str());
 		getline(ifs, headerLine); // read and ignore header line
@@ -222,7 +238,7 @@ WannierMC::WannierMC(string totalEprefix, string wannierPrefix, bool needPhonons
 	if(nPol)
 	{	if(mpiWorld->isHead())
 		{	pWannier.init(nBands*nBands*3, cellMap.size());
-			readMatrix(pWannier, wannierPrefix + ".mlwfP", spinWeight);
+			readMatrix(pWannier, wmcp.wannierPrefix + ".mlwfP", spinWeight);
 			compressMatElemArr(pWannier);
 			//Pre-contract photon polarizations:
 			matrix rot(3, nPol);
@@ -238,7 +254,7 @@ WannierMC::WannierMC(string totalEprefix, string wannierPrefix, bool needPhonons
 	if(omegaSqPh)
 	{	if(mpiWorld->isHead())
 		{	wannierHePh.init(nModes*nBands*nBands * phononCellMap.size(), phononCellMap.size());
-			readMatrix(wannierHePh, wannierPrefix + ".mlwfHePh", spinWeight);
+			readMatrix(wannierHePh, wmcp.wannierPrefix + ".mlwfHePh", spinWeight);
 			compressMatElemArr(wannierHePh);
 		}
 		else wannierHePh.init(nModes*nPacked * phononCellMap.size(), phononCellMap.size());
@@ -354,28 +370,6 @@ void WannierMC::setPhononMatElemArray(vector3<> k1, const std::vector< vector3<>
 				* (dagger(cEl1.evecs) * unpackMatElem(HePh, alpha) * cEl2.evecs); //electron unitary rotations
 	}
 	watch.stop();
-}
-
-double WannierMC::get_mk(vector3<> k, double omega, double T) const
-{	diagMatrix E = getStates(k, omega);
-	double mk = INFINITY;
-	for(int v=0; v<E.nRows(); v++) if(E[v]<10.*T)
-		for(int c=0; c<E.nRows(); c++) if(E[c]>-10.*T)
-			mk = std::min(mk, mk_sub(E[c], E[v], omega, T));
-	return mk;
-}
-
-double WannierMC::get_mk1k2(vector3<> k1, vector3<> k2, double omega, double T) const
-{	diagMatrix E1 = getStates(k1, omega);
-	diagMatrix E2 = getStates(k2, omega);
-	diagMatrix P = getPhononModes(k1-k2);
- 	double mk1k2 = INFINITY;
-	for(int v=0; v<E1.nRows(); v++) if (E1[v]<10.*T)
-		for(int c=0; c<E2.nRows(); c++) if(E2[c]>-10*T)
-			for(int alpha=0; alpha<nModes; alpha++)
-				for(int ae=-1; ae<=+1; ae+=2)
-					mk1k2 = std::min(mk1k2, mk_sub(E2[c], E1[v], omega + ae*P[alpha], T));
-	return mk1k2;
 }
 
 std::vector< vector3<> > WannierMC::getVelocity(vector3<> k, double omegaMax) const

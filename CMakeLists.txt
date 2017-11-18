@@ -65,8 +65,10 @@ endif()
 find_package(GSL REQUIRED)
 include_directories(${GSL_INCLUDE_DIR})
 
+set(FFTW3_MPI_REQUIRED ON)
 find_package(FFTW3 REQUIRED)
 include_directories(${FFTW3_INCLUDE_DIR})
+include_directories(${FFTW3_MPI_INCLUDE_DIR})
 
 option(EnableLibXC "Use LibXC to provide additional exchange-correlation functionals")
 if(EnableLibXC)
@@ -91,7 +93,7 @@ endif()
 #Main library for WannierMC containing all the auxiliary functionality
 add_library(WannierMC ${LINK_TYPE} WannierMC.cpp LineWidth.cpp InputMap.cpp)
 find_library(JDFTX_LIBRARY jdftx PATHS ${JDFTX_BUILD})
-target_link_libraries(WannierMC ${JDFTX_LIBRARY} ${MPI_CXX_LIBRARIES} ${EXTRA_LIBRARIES})
+target_link_libraries(WannierMC ${JDFTX_LIBRARY} ${MPI_CXX_LIBRARIES} ${EXTRA_LIBRARIES} ${FFTW3_MPI_LIBRARY} ${FFTW3_THREADS_LIBRARY} ${FFTW3_LIBRARY})
 
 #Executables linked to above library
 macro(add_WannierMC_executable targetName)
