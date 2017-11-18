@@ -42,7 +42,7 @@ void readMatrix(matrix& m, string fname, int spinWeight)
 }
 
 WannierMC::WannierMC(const WannierMCParams& wmcp)
-: wmcp(wmcp), spinWeight(0), mu(NAN), nElectrons(0), nValence(0), nPol(wmcp.Ahat.size())
+: wmcp(wmcp), spinWeight(0), mu(NAN), nElectrons(0), nValence(0)
 {	
 	//Read relevant parameters from totalE.out:
 	logPrintf("\nReading '%s.out' ... ", wmcp.totalEprefix.c_str()); logFlush();
@@ -164,61 +164,28 @@ WannierMC::WannierMC(const WannierMCParams& wmcp)
 		cellMap.push_back(cm);
 	ifs.close();
 	
-	//Find number of wannier centers and initialize main window (if available):
-	nMain = 0; mainFirst = 0; omegaMain = 0.;
-	{	//read Wannier band contrib file
-		string fname = wmcp.wannierPrefix + ".mlwfBandContrib";
+	//Find number of wannier centers from Wannier band contrib file:
+	{	string fname = wmcp.wannierPrefix + ".mlwfBandContrib";
 		logPrintf("\nReading '%s' ... ", fname.c_str()); logFlush();
 		FILE* fp = fopen(fname.c_str(), "r");
 		if(!fp) die("could not open for reading.\n");
-		double eMin = INFINITY, eMax = -INFINITY;
-		mainFirst = 0;
-		int mainLast = nBandsDFT;
 		nBands = 0; //number of Wannier centers
 		while(!feof(fp))
 		{	int nMin_b, nMax_b; double eMin_b, eMax_b;
 			if(fscanf(fp, "%d %d %lf %lf", &nMin_b, &nMax_b, &eMin_b, &eMax_b) != 4) break;
 			nBands = std::max(nBands, nMax_b+1); //number of Wannier centers
-			//select tightest possible range that contains Fermi level:
-			if(eMin_b<=mu && mu<=eMax_b && (nMax_b-nMin_b)<(mainLast-mainFirst))
-			{	eMin = eMin_b; eMax = eMax_b;
-				mainFirst = nMin_b; mainLast = nMax_b;
-			}
 		}
 		fclose(fp);
 		logPrintf("done.\n");
 		assert(nBands <= nBandsDFT);
-		nMain = mainLast - mainFirst + 1;
-		if(nMain < nBands) //otherwise no point
-		{	omegaMain = std::min(mu-eMin, eMax-mu);
-			if(omegaMain < 0.) omegaMain = 0.; //if Fermi level does not lie in [eMin,eMax]
-		}
-		eMinMain = eMin; eMaxMain = eMax;
 	}
 	logPrintf("nBands = %d\n", nBands);
-	if(omegaMain)
-	{	logPrintf("nMain = %d\n", nMain);
-		logPrintf("omegaMain = %lg eV\n", omegaMain);
-		assert(nMain > 0 && nMain < nBands);
-		//Initialize compressed Hamiltonian:
-	}
-	else nMain = nBands; //so that all Wannier centers are always used
 	
 	/*
 	//Read wannier hamiltonian
 	string fnameH = wmcp.wannierPrefix + ".mlwfH";
 	hWannier.init(nBands*nBands, cellMap.size());
 	readMatrix(hWannier, fnameH, spinWeight);
-	if(omegaMain)
-	{	hWannierMain.init(nMain*nMain, cellMap.size());
-		for(size_t ic=0; ic<cellMap.size(); ic++)
-		{	matrix H = hWannier(0,nBands*nBands, ic,ic+1);
-			H.reshape(nBands, nBands);
-			H = H(mainFirst,mainFirst+nMain, mainFirst,mainFirst+nMain); //extract the "main" part
-			H.reshape(nMain*nMain, 1);
-			hWannierMain.set(0,nMain*nMain, ic,ic+1, H);
-		}
-	}
 	
 	//Offset wannier Hamiltonian by mu:
 	for(size_t ic=0; ic<cellMap.size(); ic++)
@@ -430,60 +397,6 @@ std::vector< vector3<> > WannierMC::getVelocity(vector3<> k, double omegaMax) co
 	return v;
 }
 
-void WannierMC::compressMatElemArr(matrix& mArr) const
-{	if(nMain == nBands) return; //no compression possible
-	assert(mArr.nRows() % (nBands*nBands) == 0);
-	int nMatsPerCol = mArr.nRows() / (nBands*nBands);
-	matrix mPacked(nMatsPerCol*nPacked, mArr.nCols());
-	matrix m(nBands, nBands);
-	const complex* src = mArr.dataPref();
-	for(int iMat=0; iMat<nMatsPerCol*mArr.nCols(); iMat++)
-	{	callPref(eblas_copy)(m.dataPref(), src, nBands*nBands); src += nBands*nBands;
-		packMatElem(m, mPacked, iMat);
-	}
-	std::swap(mPacked, mArr);
-}
-
-void WannierMC::transformMatElemArr(matrix& mArr, const matrix& rot) const
-{	assert(mArr.nRows() % nPacked == 0); //must be in packed form
-	int nMatsPerCol = mArr.nRows() / nPacked;
-	assert(nMatsPerCol % rot.nRows() == 0);
-	int nSetsPerCol = nMatsPerCol / rot.nRows();
-	matrix m(nPacked, rot.nRows());
-	matrix mArrOut(nSetsPerCol*rot.nCols()*nPacked, mArr.nCols());
-	const complex* dataIn = mArr.dataPref();
-	complex* dataOut = mArrOut.dataPref();
-	for(int iSet=0; iSet<nSetsPerCol*mArr.nCols(); iSet++)
-	{	callPref(eblas_copy)(m.dataPref(), dataIn, m.nData()); //read set into a matrix
-		matrix mOut = m * rot; //apply transofrmation
-		callPref(eblas_copy)(dataOut, mOut.dataPref(), mOut.nData()); //store set
-		dataIn += m.nData();
-		dataOut += mOut.nData();
-	}
-	std::swap(mArrOut, mArr);
-}
-
-void WannierMC::packMatElem(const matrix& m, matrix& mArr, int iCol) const
-{	const complex* src = m.dataPref();
-	complex* dest = mArr.dataPref() + iCol*nPacked;
-	callPref(eblas_copy)(dest, src+mainFirst*nBands, nMain*nBands); dest += nMain*nBands;
-	for(int b=0; b<nBands; b++)
-		if(b<mainFirst || b>=(mainFirst+nMain))
-		{	callPref(eblas_copy)(dest, src+mainFirst+b*nBands, nMain); dest += nMain;
-		}
-}
-
-matrix WannierMC::unpackMatElem(const matrix& mArr, int iCol) const
-{	matrix m = zeroes(nBands, nBands);
-	const complex* src = mArr.dataPref() + iCol*nPacked;
-	complex* dest = m.dataPref();
-	callPref(eblas_copy)(dest+mainFirst*nBands, src, nMain*nBands); src += nMain*nBands;
-	for(int b=0; b<nBands; b++)
-		if(b<mainFirst || b>=(mainFirst+nMain))
-		{	callPref(eblas_copy)(dest+mainFirst+b*nBands, src, nMain); src += nMain;
-		}
-	return m;
-}
 
 //------------ Cache functions -------------
 

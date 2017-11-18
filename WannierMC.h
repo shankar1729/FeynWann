@@ -10,8 +10,7 @@ struct WannierMCParams
 	string wannierPrefix; //!< filename prefix for wannier outputs (default: Wannier/wannier)
 	bool needPhonons; //!< whether to initialize phonon-related quantities (default: false)
 	bool needLinewidths; //!< whether to initialize line-widths (default: false)
-	std::vector< vector3<complex> > Ahat; //!< list of relevant photon polarizations (default: none)
-	
+	bool needVelocity; //!< whether to initialize velocity (momentum) matrix elements
 	WannierMCParams();
 };
 
@@ -33,21 +32,12 @@ public:
 	int nBands, spinWeight; //!< number of Wannier bands for the electrons and weight per spin channel
 	double mu, nElectrons, nValence; //!< chemical potential (if a metal), number of electrons per unit cell and number of valence bands (if insulator)
 	double eMinMain, eMaxMain; //!< energy range for main window (within which eigenvalues should be exact compared to DFT)
-	int nPol; //!< number of photon polarizations in pre-contracted matrix elements
 	int nModes; //!< number of phonon modes (polarizations)
 	
 private:
 	//Electrons:
 	std::vector< vector3<int> > cellMap; //electron Wannier cell map
-	int nMain, mainFirst; double omegaMain; //number of "main" Wannier centers, index of first main center and max frequency for which main window suffices
 	matrix hWannier, pWannier; //Wannier hamiltonian and dipole matrix elements
-	matrix hWannierMain; //Wannier hamiltonian for the main centers alone
-	
-	int nPacked; //packed size of matrix elements (nBands x nBands when no main matrix elements)
-	void compressMatElemArr(matrix& mArr) const; //replace a matrix element array by its packed version
-	void transformMatElemArr(matrix& mArr, const matrix& rot) const; //replace a packed matrix element array by its transformed version with given transformation matrix rot
-	void packMatElem(const matrix& m, matrix& mArr, int iCol) const; //pack matrix elements from m, getting rid of non-main by non-main entries, and store in i'th column of mArr
-	matrix unpackMatElem(const matrix& mArr, int iCol) const; //unpack matrix elements from i'th column of mArr
 	
 	//Phonons:
 	std::vector< vector3<int> > phononCellMap; //cell map for phonon force matrix
