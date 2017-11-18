@@ -217,6 +217,18 @@ WannierMC::WannierMC(const WannierMCParams& wmcp)
 		Pw = std::make_shared<DistributedMatrix>(fname, realOnly,
 			mpiGroup, 3*nBands*nBands, cellMap, kfold, false);
 	}
+	
+	//Linewidths:
+	if(wmcp.needLinewidths)
+	{	//e-e:
+		fname = wmcp.wannierPrefix + ".mlwfImSigma_ee";
+		ImSigma_eeW = std::make_shared<DistributedMatrix>(fname, realOnly,
+			mpiGroup, nBands*nBands, cellMap, kfold, false);
+		//e-e:
+		fname = wmcp.wannierPrefix + ".mlwfImSigma_ePh";
+		ImSigma_ePhW = std::make_shared<DistributedMatrix>(fname, realOnly,
+			mpiGroup, nBands*nBands, cellMap, kfold, false);
+	}
 }
 
 /*
