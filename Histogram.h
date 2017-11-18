@@ -1,5 +1,5 @@
-#ifndef WANNIERMETROPOLIS_HISTOGRAM_H
-#define WANNIERMETROPOLIS_HISTOGRAM_H
+#ifndef WANNIERMC_HISTOGRAM_H
+#define WANNIERMC_HISTOGRAM_H
 
 #include <core/Util.h>
 #include <core/matrix.h>
@@ -34,4 +34,4 @@ struct Histogram2D
 	double interp1(double E, double omega) const; //return interpolated value
 };
 
-#endif //WANNIERMETROPOLIS_HISTOGRAM_H
+#endif //WANNIERMC_HISTOGRAM_H

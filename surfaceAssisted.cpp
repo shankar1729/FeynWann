@@ -12,11 +12,11 @@
 #include <complex>
 
 int main(int argc, char** argv)
-{	string inputFilename; bool dryRun, printDefaults;
-	initSystemCmdline(argc, argv, "Numericla check of surface-assisted expressions", inputFilename, dryRun, printDefaults);
+{	
+	InitParams ip = BandStruct::initialize(argc, argv, "Numericla check of surface-assisted expressions");
 
 	//Get the system parameters (mu, T, lattice vectors etc.)
-	InputMap inputMap(inputFilename);
+	InputMap inputMap(ip.inputFilename);
 	const int nKptsN1 = inputMap.get("nKptsN1");
 	const double EplasmonMax = inputMap.get("EplasmonMax") * eV;
 	const double T = inputMap.get("T") * Kelvin;
@@ -30,7 +30,7 @@ int main(int argc, char** argv)
 	logPrintf("R:\n");
 	R.print(globalLog, " %lg ");
 	logPrintf("Zjellium = %lg\n", Zjellium);
-	if(dryRun)
+	if(ip.dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
 		finalizeSystem();
 		return 0;

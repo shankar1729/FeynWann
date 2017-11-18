@@ -15,11 +15,11 @@ inline double fermiPrime(double x) { return 0.25*(std::pow(tanh(0.5*x), 2) - 1.)
 
 
 int main(int argc, char** argv)
-{	string inputFilename; bool dryRun, printDefaults;
-	initSystemCmdline(argc, argv, "Phonon DOS and heat capacity", inputFilename, dryRun, printDefaults);
+{	
+	InitParams ip = BandStruct::initialize(argc, argv, "Phonon DOS and heat capacity");
 
 	//Get the system parameters (mu, T, lattice vectors etc.)
-	InputMap inputMap(inputFilename);
+	InputMap inputMap(ip.inputFilename);
 	int nKpts = inputMap.get("nKpts");
 	const double vL = inputMap.get("vL") * meter/sec; //longitudinal speed of sound
 	const double vT = inputMap.get("vT") * meter/sec; //transverse speed of sound (assumed x2)
@@ -40,7 +40,7 @@ int main(int argc, char** argv)
 	//Initialize Wannier bandstructure:
 	BandStruct bs("Wannier/totalE", "Wannier/wannier", true);
 
-	if(dryRun)
+	if(ip.dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
 		finalizeSystem();
 		return 0;

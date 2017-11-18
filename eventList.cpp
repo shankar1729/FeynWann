@@ -49,11 +49,11 @@ inline void addEvents(std::vector<Event>& dest, const std::vector<Event>& src)
 }
 
 int main(int argc, char** argv)
-{   string inputFilename; bool dryRun, printDefaults;
-	initSystemCmdline(argc, argv, "Generate event list for transport modules", inputFilename, dryRun, printDefaults);
+{	
+	InitParams ip = BandStruct::initialize(argc, argv, "Generate event list for transport modules");
 
 	//Get the system parameters (mu, T, lattice vectors etc.)
-	InputMap inputMap(inputFilename);
+	InputMap inputMap(ip.inputFilename);
 	const int nKpts = inputMap.get("nKpts");
 	const double Eplasmon = inputMap.get("Eplasmon") * eV;
 	const double T = inputMap.get("T") * Kelvin;
@@ -70,7 +70,7 @@ int main(int argc, char** argv)
 	BandStruct bs("Wannier/totalE", "Wannier/wannier", true, Ahat);
 	bs.setCacheSize(4);
 
-	if(dryRun)
+	if(ip.dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
 		finalizeSystem();
 		return 0;

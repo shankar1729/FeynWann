@@ -8,6 +8,22 @@
 #include <math.h>
 #include <set>
 #include <core/Units.h>
+#include "config.h"
+
+InitParams BandStruct::initialize(int argc, char** argv, const char* description)
+{	InitParams ip;
+	ip.packageName = PACKAGE_NAME;
+	ip.versionString = VERSION_STRING;
+	ip.versionHash = GIT_HASH;
+	ip.description = description;
+	initSystemCmdline(argc, argv, ip);
+	return ip;
+}
+
+void BandStruct::finalize()
+{	finalizeSystem();
+}
+
 
 //Read matrix from file accounting for real-only or complex storage based on spinWeight
 void readMatrix(matrix& m, string fname, int spinWeight)

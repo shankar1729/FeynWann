@@ -10,8 +10,8 @@
 #include <core/Units.h>
 
 int main(int argc, char** argv)
-{   string inputFilename; bool dryRun, printDefaults;
-	initSystemCmdline(argc, argv, "Plot FCC Fermi surface", inputFilename, dryRun, printDefaults);
+{	
+	InitParams ip = BandStruct::initialize(argc, argv, "Plot FCC Fermi surface");
 
 	const int nk = 64;
 	matrix3<> R = matrix3<>(0,1,1, 1,0,1, 1,1,0) * 0.5; //unit fcc lattice

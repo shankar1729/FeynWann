@@ -1,5 +1,5 @@
-#ifndef WANNIERMETROPOLIS_BANDSTRUCT_H
-#define WANNIERMETROPOLIS_BANDSTRUCT_H
+#ifndef WANNIERMC_BANDSTRUCT_H
+#define WANNIERMC_BANDSTRUCT_H
 
 #include <core/Util.h>
 #include <core/matrix.h>
@@ -11,6 +11,9 @@
 class BandStruct
 {	
 public:
+	static InitParams initialize(int argc, char** argv, const char* description); //wrap initSystemCmdLine from JDFTx
+	static void finalize(); //wrap finalizeSystem from JDFTx
+	
 	BandStruct(
 		string totalEprefix, //!< filename prefix for DFT outputs
 		string wannierPrefix, //!< filename prefix for wannier outputs
@@ -103,4 +106,4 @@ private:
 	friend class Wannierizer; //Used by electronPhononLinewidth to transform back to Wannier
 };
 
-#endif //WANNIERMETROPOLIS_BANDSTRUCT_H
+#endif //WANNIERMC_BANDSTRUCT_H

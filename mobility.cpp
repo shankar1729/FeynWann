@@ -11,11 +11,11 @@
 #include "Histogram.h"
 
 int main(int argc, char** argv)
-{	string inputFilename; bool dryRun, printDefaults;
-	initSystemCmdline(argc, argv, "Monte Carlo estimate of mobility", inputFilename, dryRun, printDefaults);
+{	
+	InitParams ip = BandStruct::initialize(argc, argv, "Monte Carlo estimate of mobility");
 
 	//Read input file:
-	InputMap inputMap(inputFilename);
+	InputMap inputMap(ip.inputFilename);
 	const int nKpts = inputMap.get("nKpts");
 	const double T = inputMap.get("T") * Kelvin;
 
@@ -31,7 +31,7 @@ int main(int argc, char** argv)
 	//Initalize line width of electronic states
 	LineWidth lineWidth("Wannier/wannier", bs);
 
-	if(dryRun)
+	if(ip.dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
 		finalizeSystem();
 		return 0;

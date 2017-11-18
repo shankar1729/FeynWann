@@ -1,5 +1,5 @@
-#ifndef WANNIERMETROPOLIS_EPSILON_H
-#define WANNIERMETROPOLIS_EPSILON_H
+#ifndef WANNIERMC_EPSILON_H
+#define WANNIERMC_EPSILON_H
 
 #include <core/string.h>
 #include <vector>
@@ -21,4 +21,4 @@ public:
 	void setFrequency(double omegaIn, bool print=true);
 	double exptLinewidth() const; //!< calculate experimental linewidth
 };
-#endif //WANNIERMETROPOLIS_EPSILON_H
+#endif //WANNIERMC_EPSILON_H

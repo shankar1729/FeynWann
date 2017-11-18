@@ -143,11 +143,11 @@ struct SparseMatrix
 };
 
 int main(int argc, char** argv)
-{	string inputFilename; bool dryRun, printDefaults;
-	initSystemCmdline(argc, argv, "LInearized-Boltzmann calculation of resistivity", inputFilename, dryRun, printDefaults);
+{	
+	InitParams ip = BandStruct::initialize(argc, argv, "LInearized-Boltzmann calculation of resistivity");
 
 	//Get the system parameters (mu, T, lattice vectors etc.)
-	InputMap inputMap(inputFilename);
+	InputMap inputMap(ip.inputFilename);
 	const double T = inputMap.get("T") * Kelvin;
 
 	logPrintf("\nInputs after conversion to atomic units:\n");
@@ -156,7 +156,7 @@ int main(int argc, char** argv)
 	//Initialize Wannier bandstructure:
 	BandStruct bs("Wannier/totalE", "Wannier/wannier", true);
 
-	if(dryRun)
+	if(ip.dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
 		finalizeSystem();
 		return 0;

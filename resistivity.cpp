@@ -63,11 +63,11 @@ inline double trace(const matrix3<>& M, int slabDir)
 }
 
 int main(int argc, char** argv)
-{	string inputFilename; bool dryRun, printDefaults;
-	initSystemCmdline(argc, argv, "Monte Carlo estimate of resistivity", inputFilename, dryRun, printDefaults);
+{	
+	InitParams ip = BandStruct::initialize(argc, argv, "Monte Carlo estimate of resistivity");
 
 	//Read input file:
-	InputMap inputMap(inputFilename);
+	InputMap inputMap(ip.inputFilename);
 	const int nKpts = inputMap.get("nKpts");
 	const int nBlocks = inputMap.get("nBlocks"); assert(nBlocks>0);
 	const double T = inputMap.get("T") * Kelvin;
@@ -92,7 +92,7 @@ int main(int argc, char** argv)
 	BandStruct bs("Wannier/totalE", "Wannier/wannier", true);
 	bs.setCacheSize(2*bunchSize);
 	
-	if(dryRun)
+	if(ip.dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
 		finalizeSystem();
 		return 0;

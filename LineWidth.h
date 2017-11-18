@@ -1,5 +1,5 @@
-#ifndef WANNIERMETROPOLIS_LINEWIDTH_H
-#define WANNIERMETROPOLIS_LINEWIDTH_H
+#ifndef WANNIERMC_LINEWIDTH_H
+#define WANNIERMC_LINEWIDTH_H
 
 #include <core/matrix.h>
 #include <core/string.h>
@@ -18,4 +18,4 @@ private:
 	matrix ImSigmaWannier; //Wannierized e-e and e-Ph contributions to ImSigma (combined columneiwse for efficient multiply)
 };
 
-#endif //WANNIERMETROPOLIS_LINEWIDTH_H
+#endif //WANNIERMC_LINEWIDTH_H

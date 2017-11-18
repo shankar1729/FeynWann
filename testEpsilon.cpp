@@ -7,11 +7,12 @@
 #include <vector>
 #include <math.h>
 #include "Epsilon.h"
+#include "BandStruct.h"
 #include <core/Units.h>
 
 int main(int argc, char** argv)
-{	string inputFilename; bool dryRun, printDefaults;
-	initSystemCmdline(argc, argv, "Test dielectric function parametrization", inputFilename, dryRun, printDefaults);
+{	
+	InitParams ip = BandStruct::initialize(argc, argv, "Test dielectric function parametrization");
 
 	Epsilon eps("Wannier/epsilon.dat");
 	

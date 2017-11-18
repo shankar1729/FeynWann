@@ -42,11 +42,11 @@ inline void writeImEps(const char* fname, const std::vector<Histogram>& ImEps, c
 }
 
 int main(int argc, char** argv)
-{	string inputFilename; bool dryRun, printDefaults;
-	initSystemCmdline(argc, argv, "Ab initio parameters for Transient Absorption analysis", inputFilename, dryRun, printDefaults);
+{	
+	InitParams ip = BandStruct::initialize(argc, argv, "Ab initio parameters for Transient Absorption analysis");
 
 	//Get the system parameters (mu, T, lattice vectors etc.)
-	InputMap inputMap(inputFilename);
+	InputMap inputMap(ip.inputFilename);
 	long nKpts = inputMap.get("nKpts");
 	const double dE = inputMap.get("dE") * eV; //energy resolution used for output and energy conservation
 	const double TeMin = inputMap.get("TeMin") * Kelvin; //electron temperature grid start
@@ -71,7 +71,7 @@ int main(int argc, char** argv)
 	const int bunchSize = 32;
 	bs.setCacheSize(2*bunchSize);
 
-	if(dryRun)
+	if(ip.dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
 		finalizeSystem();
 		return 0;

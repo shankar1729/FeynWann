@@ -10,11 +10,11 @@
 #include "Histogram.h"
 
 int main(int argc, char** argv)
-{	string inputFilename; bool dryRun, printDefaults;
-	initSystemCmdline(argc, argv, "Monte Carlo estimate of resistivity", inputFilename, dryRun, printDefaults);
+{	
+	InitParams ip = BandStruct::initialize(argc, argv, "Monte Carlo estimate of resistivity");
 
 	//Get the system parameters (mu, T, lattice vectors etc.)
-	InputMap inputMap(inputFilename);
+	InputMap inputMap(ip.inputFilename);
 	long nKpts = inputMap.get("nKpts");
 	const double Zjellium = inputMap.get("Zjellium");
 
@@ -29,7 +29,7 @@ int main(int argc, char** argv)
 	const int bunchSize = 32;
 	bs.setCacheSize(2*bunchSize);
 
-	if(dryRun)
+	if(ip.dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
 		finalizeSystem();
 		return 0;

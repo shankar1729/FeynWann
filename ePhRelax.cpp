@@ -1,4 +1,5 @@
 #include <core/Units.h>
+#include "BandStruct.h"
 #include "InputMap.h"
 #include "Interp1.h"
 #include "Histogram.h"
@@ -28,11 +29,11 @@ struct ePhRelax
 	ePhRelax(int argc, char** argv)
 	{
 		//Parse the command line:
-		string inputFilename; bool dryRun, printDefaults;
-		initSystemCmdline(argc, argv, "Electron-phonon relaxation using Boltzmann equation", inputFilename, dryRun, printDefaults);
+		
+		InitParams ip = BandStruct::initialize(argc, argv, "Electron-phonon relaxation using Boltzmann equation");
 
 		//Get the system parameters (mu, T, lattice vectors etc.)
-		InputMap inputMap(inputFilename);	
+		InputMap inputMap(ip.inputFilename);	
 		Z = inputMap.get("Z"); //number of electrons per unit cell
 		T = inputMap.get("T") * Kelvin; //initial temperature in Kelvin (electron and lattice)
 		const double Uabs = inputMap.get("Uabs") * Joule/std::pow(meter,3); //absorbed laser energy per unit volume in Joule/meter^3
@@ -51,7 +52,7 @@ struct ePhRelax
 		logPrintf("runName = %s\n", runName.c_str());
 		logPrintf("R:\n");
 		R.print(globalLog, " %lg ");
-		if(dryRun)
+		if(ip.dryRun)
 		{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
 			finalizeSystem();
 			exit(0);

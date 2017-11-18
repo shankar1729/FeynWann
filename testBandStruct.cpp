@@ -9,8 +9,8 @@
 #include <core/Units.h>
 
 int main(int argc, char** argv)
-{	string inputFilename; bool dryRun, printDefaults;
-	initSystemCmdline(argc, argv, "Test Wannier bandstructure", inputFilename, dryRun, printDefaults);
+{	
+	InitParams ip = BandStruct::initialize(argc, argv, "Test Wannier bandstructure");
 
 	
 	//Read k-points from input:
@@ -32,7 +32,7 @@ int main(int argc, char** argv)
 	Ahat[2] = vector3<complex>(0., 0., 1.);
 	BandStruct bs("Wannier/totalE", "Wannier/wannier", false, Ahat);
 
-	if(dryRun)
+	if(ip.dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
 		finalizeSystem();
 		return 0;

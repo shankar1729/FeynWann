@@ -74,11 +74,11 @@ inline bool eigsEqual(const diagMatrix& E1, const diagMatrix& E2, double Emin, d
 }
 
 int main(int argc, char** argv)
-{   string inputFilename; bool dryRun, printDefaults;
-	initSystemCmdline(argc, argv, "Electron-phonon scattering contribution to electron linewidth", inputFilename, dryRun, printDefaults);
+{
+	InitParams ip = BandStruct::initialize(argc, argv, "Electron-phonon scattering contribution to electron linewidth");
 
 	//Read input file:
-	InputMap inputMap(inputFilename);
+	InputMap inputMap(ip.inputFilename);
 	const double T = inputMap.get("T") * Kelvin;
 	const double EconserveWidth = inputMap.get("EconserveWidth") * eV;
 	const int NkMultAll = int(round(inputMap.get("NkMult"))); //increase in number of k-points for phonon mesh
@@ -115,7 +115,7 @@ int main(int argc, char** argv)
 	vector3<int> strideIn(NkIn[1]*NkIn[2], NkIn[2], 1);
 	int prodNkIn = NkIn[0]*NkIn[1]*NkIn[2];
 	
-	if(dryRun)
+	if(ip.dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
 		finalizeSystem();
 		return 0;

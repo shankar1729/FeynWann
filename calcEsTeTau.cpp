@@ -4,18 +4,19 @@
 #include <core/Random.h>
 #include <core/string.h>
 #include <core/WignerSeitz.h>
-#include "InputMap.h"
 #include <core/Units.h>
+#include "BandStruct.h"
+#include "InputMap.h"
 
 inline double fermi(double x) { return x>30. ? exp(-x) : 1./(1.+exp(x)); } //avoid overflow issues
 inline double argLW(double E,double Es) { return sqrt(E)/(E+Es) + atan(sqrt(E/Es))/sqrt(Es); }
 
 int main(int argc, char** argv)
-{	string inputFilename; bool dryRun, printDefaults;
-	initSystemCmdline(argc, argv, "Calculation of q_TF and E_S from Vallee paper", inputFilename, dryRun, printDefaults);
+{	
+	InitParams ip = BandStruct::initialize(argc, argv, "Calculation of q_TF and E_S from Vallee paper");
 
 	//Get the system parameters (mu, T, lattice vectors etc.)
-	InputMap inputMap(inputFilename);
+	InputMap inputMap(ip.inputFilename);
 	const double Zjellium = inputMap.get("Zjellium");
 	const matrix3<> R = matrix3<>(0,1,1, 1,0,1, 1,1,0) * (0.5*inputMap.get("aCubic")*Angstrom);
 	const double beta = inputMap.get("beta"); // from vallee paper, q_s = beta * q_TF

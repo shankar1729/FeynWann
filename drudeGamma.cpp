@@ -12,11 +12,11 @@
 #include <complex>
 
 int main(int argc, char** argv)
-{	string inputFilename; bool dryRun, printDefaults;
-	initSystemCmdline(argc, argv, "Calibrated jellium estimates of intraband processes", inputFilename, dryRun, printDefaults);
+{	
+	InitParams ip = BandStruct::initialize(argc, argv, "Calibrated jellium estimates of intraband processes");
 
 	//Get the system parameters (mu, T, lattice vectors etc.)
-	InputMap inputMap(inputFilename);
+	InputMap inputMap(ip.inputFilename);
 	const double EplasmonMax = inputMap.get("EplasmonMax") * eV;
 	const double T = inputMap.get("T") * Kelvin;
 	const matrix3<> R = matrix3<>(0,1,1, 1,0,1, 1,1,0) * (0.5*inputMap.get("aCubic")*Angstrom);
@@ -34,7 +34,7 @@ int main(int argc, char** argv)
 	logPrintf("tau = %lg fs\n", tau/fs);
 	logPrintf("rho = %lg ohm-m\n", rho/(Ohm*meter));
 	logPrintf("sigma_o = %lg 1/(ohm-m)\n", sigma_o*Ohm*meter);
-	if(dryRun)
+	if(ip.dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
 		finalizeSystem();
 		return 0;

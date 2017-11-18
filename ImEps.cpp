@@ -19,11 +19,11 @@ inline double lorentzianOdd(double omega, double omega0, double breadth)
 }
 
 int main(int argc, char** argv)
-{	string inputFilename; bool dryRun, printDefaults;
-	initSystemCmdline(argc, argv, "Monte Carlo estimate of imaginary dielectric tensor (ImEps)", inputFilename, dryRun, printDefaults);
+{	
+	InitParams ip = BandStruct::initialize(argc, argv, "Monte Carlo estimate of imaginary dielectric tensor (ImEps)");
 
 	//Get the system parameters (mu, T, lattice vectors etc.)
-	InputMap inputMap(inputFilename);
+	InputMap inputMap(ip.inputFilename);
 	long nKpts = inputMap.get("nKpts");
 	const double EplasmonMax = inputMap.get("EplasmonMax") * eV;
 	const double T = inputMap.get("T") * Kelvin;
@@ -52,7 +52,7 @@ int main(int argc, char** argv)
 	const int bunchSize = 32;
 	bs.setCacheSize(2*bunchSize);
 	
-	if(dryRun)
+	if(ip.dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
 		finalizeSystem();
 		return 0;

@@ -1,5 +1,5 @@
-#ifndef WANNIERMETROPOLIS_INTERP1_H
-#define WANNIERMETROPOLIS_INTERP1_H
+#ifndef WANNIERMC_INTERP1_H
+#define WANNIERMC_INTERP1_H
 
 #include <core/Util.h>
 #include <cmath>
@@ -34,4 +34,4 @@ struct Interp1
 
 
 
-#endif //WANNIERMETROPOLIS_INTERP1_H
+#endif //WANNIERMC_INTERP1_H

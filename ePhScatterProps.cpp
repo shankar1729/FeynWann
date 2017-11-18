@@ -8,11 +8,11 @@
 #include "Histogram.h"
 
 int main(int argc, char** argv)
-{	string inputFilename; bool dryRun, printDefaults;
-	initSystemCmdline(argc, argv, "e-phonon scattering properties", inputFilename, dryRun, printDefaults);
+{	
+	InitParams ip = BandStruct::initialize(argc, argv, "e-phonon scattering properties");
 	
 	//Get the system parameters (mu, T, lattice vectors etc.)
-	InputMap inputMap(inputFilename);
+	InputMap inputMap(ip.inputFilename);
 	long nKpts = inputMap.get("nKpts");
 	const double T = inputMap.get("T") * Kelvin;
 	const double EplasmonMax = inputMap.get("EplasmonMax") * eV;
@@ -27,7 +27,7 @@ int main(int argc, char** argv)
 	BandStruct bs("Wannier/totalE", "Wannier/wannier", true);
 	bs.setCacheSize(2*bunchSize);
 
-	if(dryRun)
+	if(ip.dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
 		finalizeSystem();
 		return 0;
