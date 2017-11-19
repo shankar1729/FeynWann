@@ -105,3 +105,5 @@ endmacro()
 add_WannierMC_executable(resistivity)
 add_WannierMC_executable(electronPhononLinewidth)
 add_WannierMC_executable(electronDOS)
+add_WannierMC_executable(phononDOS)
+

@@ -144,13 +144,12 @@ int main(int argc, char** argv)
 	
 	//Write to file
 	if(mpiWorld->isHead())
-	{	const double Omega = fabs(det(wmc.R));
-		const double CeSI = Joule/(Kelvin*pow(meter,3));
+	{	const double CeSI = Joule/(Kelvin*pow(meter,3));
 		ofstream ofs("Ce.dat");
 		ofs << "#T[K] Ce[J/m^3K] dmu[eV]\n";
 		for(size_t iT=0; iT<Tarr.size(); iT++)
 			ofs << Tarr[iT]/Kelvin << '\t'
-				<< Ce[iT]/(Omega*CeSI) << '\t'
+				<< Ce[iT]/(wmc.Omega*CeSI) << '\t'
 				<< dmu[iT]/eV << '\n';
 	}
 	

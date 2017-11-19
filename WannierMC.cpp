@@ -59,6 +59,7 @@ WannierMC::WannierMC(const WannierMCParams& wmcp)
 			{	getline(ifs, line);
 				sscanf(line.c_str(), "[ %lf %lf %lf ]", &R(j,0), &R(j,1), &R(j,2));
 			}
+			Omega = fabs(det(R));
 		}
 		else if(line.find("kpoint-folding") != string::npos)
 		{	istringstream iss(line); string buf;
@@ -284,13 +285,27 @@ void WannierMC::eLoop(const vector3<>& k0, WannierMC::eProcessFunc eProcess, voi
 	{	ImSigma_eeW->transform(k0);
 		ImSigma_ePhW->transform(k0);
 	}
-	//Call eProcess for k-points that are current on present process:
+	//Call eProcess for k-points on present process:
 	int ik = Hw->ikStart;
 	int ikStop = ik + Hw->nk;
 	StateE state;
 	PartialLoop3D(kfold, ik, ikStop, state.k, k0,
 		setState(ik, state);
 		eProcess(state, params);
+	)
+}
+
+void WannierMC::phLoop(const vector3<>& q0, WannierMC::phProcessFunc phProcess, void* params)
+{	assert(wmcp.needPhonons);
+	//Run Fourier transforms with this offset:
+	OsqW->transform(q0);
+	//Call phProcess for q-points on present process:
+	int iq = OsqW->ikStart;
+	int iqStop = iq + OsqW->nk;
+	StatePh state;
+	PartialLoop3D(phononSup, iq, iqStop, state.q, q0,
+		setState(iq, state);
+		phProcess(state, params);
 	)
 }
 
@@ -313,6 +328,15 @@ void WannierMC::setState(int ik, WannierMC::StateE& state, matrix* Vptr)
 		for(int b=0; b<nBands; b++)
 			state.ImE[b] += exp(logImE_ePh[b]); //e-ph linewidth interpolated in logarithm
 	}
+}
+
+void WannierMC::setState(int iq, WannierMC::StatePh& state, matrix* Vptr)
+{	assert(wmcp.needPhonons);
+	//Get and diagonalize force matrix:
+	matrix Vq, Osqq = getMatrix(OsqW->getResult(iq), nModes, nModes);
+	Osqq.diagonalize(Vq, state.omega);
+	for(double& omega: state.omega) omega = sqrt(std::max(0.,omega)); //convert to phonon frequency; discard imaginary
+	if(Vptr) *Vptr = Vq;
 }
 
 /*

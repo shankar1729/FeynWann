@@ -48,16 +48,22 @@ public:
 		std::vector<matrix> M; //!< nModes matrices of nBands x nBands matrix elements
 	};
 	
-	//! Callback function pointer for eLoop()
-	typedef void (*eProcessFunc)(const StateE& e, void* params);
+	typedef void (*eProcessFunc)(const StateE& state, void* params); //!< Callback function pointer for eLoop()
+	typedef void (*phProcessFunc)(const StatePh& state, void* params); //!< Callback function pointer for phLoop()
 	
 	//! Calculate electronic properties for each k-point in a mesh offset by k0
 	//! Calls provided callback function eProcess on each of them, along with provided params
 	void eLoop(const vector3<>& k0, eProcessFunc eProcess, void* params);
 	size_t eCountPerOffset() const { return Hw->nkTot; } //!< number of k's sampled per offset
 	
+	//! Calculate phonon properties for each q-point in a mesh offset by q0
+	//! Calls provided callback function phProcess on each of them, along with provided params
+	void phLoop(const vector3<>& q0, phProcessFunc phProcess, void* params);
+	size_t phCountPerOffset() const { return OsqW->nkTot; } //!< number of q's sampled per offset
+	
 	//DFT / Wannier / Phonon parameters:
 	matrix3<> R; //!< lattice vectors
+	double Omega; //!< unit cell volume
 	vector3<int> kfold; //!< k-point folding in original calculation
 	vector3<int> phononSup; //!< phonon supercell in original calculation
 	vector3<bool> isTruncated; //!< whether each direction is truncated
@@ -76,6 +82,7 @@ private:
 	//Phonons:
 	std::vector< vector3<int> > phononCellMap; //cell map for phonon force matrix
 	std::shared_ptr<DistributedMatrix> OsqW; //phonon omega-squared matrix
+	void setState(int iq, StatePh& state, matrix* Vptr=0); //!< set requested properties for iq in state, optionally retrieving eigenvectors in Vptr
 	
 	//Electron-phonon interaction:
 	std::shared_ptr<DistributedMatrix> HePhW; //electron-phonon matrix elements in Wannier basis
