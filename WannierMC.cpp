@@ -1,18 +1,12 @@
 #include "WannierMC.h"
 #include <core/BlasExtra.h>
-#include <core/matrix.h>
-#include <iostream>
-#include <fstream>
-#include <vector>
-#include <math.h>
-#include <set>
-#include <core/Units.h>
+#include <core/Random.h>
 #include <fftw3-mpi.h>
 #include "config.h"
 
 WannierMCParams::WannierMCParams()
 : totalEprefix("Wannier/totalE"), phononPrefix("Wannier/phonon"), wannierPrefix("Wannier/wannier"),
-needPhonons(false), needLinewidths(false)
+needPhonons(false), needLinewidths(false), needVelocity(false)
 {
 	
 }
@@ -33,6 +27,13 @@ void WannierMC::finalize()
 	finalizeSystem();
 }
 
+vector3<> WannierMC::randomVector(MPIUtil* mpiUtil)
+{	vector3<> v;
+	for(int iDir=0; iDir<3; iDir++)
+		v[iDir] = Random::uniform();
+	if(mpiUtil) mpiUtil->bcast(&v[0], 3);
+	return v;
+}
 
 //Read matrix from file accounting for real-only or complex storage based on spinWeight
 void readMatrix(matrix& m, string fname, int spinWeight)
@@ -231,19 +232,6 @@ WannierMC::WannierMC(const WannierMCParams& wmcp)
 	}
 	
 	logPrintf("\n");
-	
-	//Test e-ph matrix elements:
-	HePhW->transform(vector3<>(0.01,0.12,-0.13), vector3<>(-0.23,0.45,0.67));
-	ostringstream oss; oss << "debug." << mpiWorld->iProcess();
-	FILE* fp = fopen(oss.str().c_str(), "w");
-	for(int ik=HePhW->ikStart; ik<HePhW->ikStart+HePhW->nk; ik++)
-	{	const complex* HePh = HePhW->getResult(ik);
-		fprintf(fp, "%4d:", ik);
-		for(int iData=0; iData<nModes*nBands*nBands; iData++)
-			fprintf(fp, " %+9.6f %+9.6f", 1e3*HePh[iData].real(), 1e3*HePh[iData].imag());
-		fprintf(fp, "\n");
-	}
-	fclose(fp);
 }
 
 void WannierMC::free()
@@ -255,66 +243,79 @@ void WannierMC::free()
 	HePhW = 0;
 }
 
-
-/*
-diagMatrix WannierMC::getStates(vector3<> k, double omegaMax, matrix* evecs) const
-{	return getStates(std::vector< vector3<> >(1, k), omegaMax, evecs)[0];
-}
-
-std::vector<diagMatrix> WannierMC::getStates(const std::vector< vector3<> >& kArr, double omegaMax, matrix* evecs) const
-{	static StopWatch watch("WannierMC::getStates"); watch.start();
-	std::vector< std::shared_ptr<const CacheEntry> > ceArr = getElectronCache(kArr, omegaMax);
-	std::vector< diagMatrix > eigs(kArr.size());
-	for(size_t ik=0; ik<kArr.size(); ik++)
-	{	eigs[ik] = ceArr[ik]->eigs;
-		if(evecs) evecs[ik] = ceArr[ik]->evecs;
-	}
-	watch.stop();
-	return eigs;
-}
-
-
-diagMatrix WannierMC::getPhononModes(vector3<> q) const
-{	static StopWatch watch("WannierMC::getPhononModes"); watch.start();
-	std::shared_ptr<const CacheEntry> ce = getPhononCache(q);
-	watch.stop();
-	return ce->eigs;
-}
-
-std::vector<matrix> WannierMC::getDipoleMatElem(vector3<> k) const
-{	return getDipoleMatElem(std::vector<vector3<>>(1, k))[0];
-}
-
-std::vector< std::vector<matrix> > WannierMC::getDipoleMatElem(const std::vector< vector3<> >& kArr) const
-{	static StopWatch watch("WannierMC::getDipoleMatElem"); watch.start();
-	assert(nPol);
-	std::vector< std::shared_ptr<const WannierMC::CacheEntry> > ceArr = getElectronCache(kArr);
-	//Collect phases:
-	matrix phase(cellMap.size(), kArr.size());
-	for(size_t ik=0; ik<kArr.size(); ik++)
-		phase.set(0,phase.nRows(), ik,ik+1, ceArr[ik]->phase);
-	//Single matrix multiply for Fourier transforms:
-	matrix PkArr = pWannier * phase;
-	//Apply unitary rotations individually:
-	std::vector< std::vector<matrix> > out(kArr.size());
-	for(size_t ik=0; ik<kArr.size(); ik++)
-	{	const matrix& evecs = ceArr[ik]->evecs;
-		matrix Pk = PkArr(0,PkArr.nRows(), ik,ik+1);
-		Pk.reshape(nPacked, nPol);
-		out[ik].resize(nPol);
-		for(int iPol=0; iPol<nPol; iPol++)
-			out[ik][iPol] = dagger(evecs) * unpackMatElem(Pk,iPol) * evecs; //switch to eigenbasis of Hk
-	}
-	watch.stop();
-	return out;
-}
-
-std::vector<matrix> WannierMC::getPhononMatElem(vector3<> k1, vector3<> k2) const
-{	std::vector<matrix> result;
-	setPhononMatElemArray(k1, std::vector< vector3<> >(1, k2), &result);
+//Get iMatrix'th matrix of specified dimensions from pointer src, assuming they are stored contiguously there in column-major order)
+inline matrix getMatrix(const complex* src, int nRows, int nCols, int iMatrix=0)
+{	matrix result(nRows, nCols);
+	eblas_copy(result.data(), src + iMatrix*result.nData(), result.nData());
 	return result;
 }
 
+//Loop i till iStop, sampling a 3D mesh of dimensions S
+//At each point, set fractional coordinates x offset by x0 and run code
+#define PartialLoop3D(S, i, iStop, x, x0, code) \
+	vector3<int> i##v( \
+		i / (S[2]*S[1]), \
+		(i/S[2]) % S[1], \
+		i % S[2] ); \
+	vector3<> i##Frac(1./S[0], 1./S[1], 1./S[2]); \
+	while(i<iStop) \
+	{	\
+		x = x0 + vector3<>(i##v[0]*i##Frac[0], i##v[1]*i##Frac[1], i##v[2]*i##Frac[2]); \
+		code \
+		\
+		i++; if(i==iStop) break; \
+		i##v[2]++; \
+		if(i##v[2]==S[2]) \
+		{	i##v[2]=0; \
+			i##v[1]++; \
+			if(i##v[1]==S[1]) \
+			{	i##v[1] = 0; \
+				i##v[0]++; \
+			} \
+		} \
+	}
+
+void WannierMC::eLoop(const vector3<>& k0, WannierMC::eProcessFunc eProcess, void* params)
+{	//Run Fourier transforms with this offset:
+	Hw->transform(k0);
+	if(wmcp.needVelocity)
+		Pw->transform(k0);
+	if(wmcp.needLinewidths)
+	{	ImSigma_eeW->transform(k0);
+		ImSigma_ePhW->transform(k0);
+	}
+	//Call eProcess for k-points that are current on present process:
+	int ik = Hw->ikStart;
+	int ikStop = ik + Hw->nk;
+	StateE state;
+	PartialLoop3D(kfold, ik, ikStop, state.k, k0,
+		setState(ik, state);
+		eProcess(state, params);
+	)
+}
+
+void WannierMC::setState(int ik, WannierMC::StateE& state, matrix* Vptr)
+{	//Get and diagonalize Hamiltonian:
+	matrix Vk, Hk = getMatrix(Hw->getResult(ik), nBands, nBands);
+	Hk.diagonalize(Vk, state.E);
+	for(double& E: state.E) E -= mu; //reference to Fermi level
+	if(Vptr) *Vptr = Vk;
+	//Velcoity matrix, if needed:
+	if(wmcp.needVelocity)
+		for(int iDir=0; iDir<3; iDir++)
+			state.v[iDir] = dagger(Vk) * getMatrix(Pw->getResult(ik), nBands, nBands, iDir) * Vk;
+	//Linewidths, if needed:
+	if(wmcp.needLinewidths)
+	{	//e-e linewidth:
+		state.ImE = diag(dagger(Vk) * getMatrix(ImSigma_eeW->getResult(ik), nBands, nBands) * Vk);
+		//add e-ph linewidth:
+		diagMatrix logImE_ePh = diag(dagger(Vk) * getMatrix(ImSigma_ePhW->getResult(ik), nBands, nBands) * Vk);
+		for(int b=0; b<nBands; b++)
+			state.ImE[b] += exp(logImE_ePh[b]); //e-ph linewidth interpolated in logarithm
+	}
+}
+
+/*
 void WannierMC::setPhononMatElemArray(vector3<> k1, const std::vector< vector3<> >& k2arr, std::vector<matrix>* result) const
 {	static StopWatch watch("WannierMC::getPhononMatElem"), watchFT("WannierMC::getPhononMatEl_FT"); watch.start();
 	int nk2 = k2arr.size();
@@ -357,111 +358,5 @@ void WannierMC::setPhononMatElemArray(vector3<> k1, const std::vector< vector3<>
 				* (dagger(cEl1.evecs) * unpackMatElem(HePh, alpha) * cEl2.evecs); //electron unitary rotations
 	}
 	watch.stop();
-}
-
-std::vector< vector3<> > WannierMC::getVelocity(vector3<> k, double omegaMax) const
-{	static StopWatch watch("WannierMC::getVelocity"); watch.start();
-	std::shared_ptr<const CacheEntry> ce = getElectronCache(k, omegaMax);
-	int nBandsEff = ce->nBands();
-	const matrix& hWannierEff = nBandsEff==nBands ? hWannier : hWannierMain;
-	std::vector< vector3<> > v(nBandsEff);
-	for(int j = 0; j < 3; j++)
-	{	matrix phasePrime = ce->phase;
-		complex* phasePrimeData = phasePrime.data();
-		for(size_t ic=0; ic<cellMap.size(); ic++)
-			phasePrimeData[ic] *= complex(0,cellMap[ic][j]); //multiply phase by I*iR[j] to get phasePrime
-		matrix dHdk = hWannierEff * phasePrime;
-		dHdk.reshape(nBandsEff, nBandsEff);
-		diagMatrix vj = diag(dagger(ce->evecs) * dHdk * ce->evecs);
-		for(int b=0; b<nBandsEff; b++) v[b][j] = vj[b];
-	}
-	for(vector3<>& vb: v) vb = R * vb; //Convert to Cartesian
-	watch.stop();
-	return v;
-}
-
-
-//------------ Cache functions -------------
-
-std::shared_ptr<const WannierMC::CacheEntry> WannierMC::getElectronCache(vector3<> k, double omegaMax) const
-{	return getElectronCache(std::vector< vector3<> >(1, k), omegaMax)[0];
-}
-
-std::shared_ptr<const WannierMC::CacheEntry> WannierMC::getPhononCache(vector3<> q) const
-{	return getPhononCache(std::vector< vector3<> >(1, q))[0];
-}
-
-std::vector< std::shared_ptr<const WannierMC::CacheEntry> > WannierMC::getElectronCache(const std::vector< vector3<> >& kArr, double omegaMax) const
-{	if(omegaMax<omegaMain)
-		return getCache(kArr, mainCache, cellMap, hWannierMain, rankMain, false);
-	else
-		return getCache(kArr, electronCache, cellMap, hWannier, rankElectron, false);
-}
-
-std::vector< std::shared_ptr<const WannierMC::CacheEntry> > WannierMC::getPhononCache(const std::vector< vector3<> >& qArr) const
-{	return getCache(qArr, phononCache, phononCellMap, omegaSqPh, rankPhonon, true);
-}
-
-std::vector< std::shared_ptr<const WannierMC::CacheEntry> > WannierMC::getCache( const std::vector< vector3<> >& kArr, 
-		const std::map<vector3<>, std::shared_ptr<const CacheEntry> >& cache, const std::vector< vector3<int> >& cellMap,
-		const matrix& hWannierEff, const size_t& rank, bool shouldSqrt) const
-{	static StopWatch watch("WannierMC::getCache");
-	std::vector< std::shared_ptr<const WannierMC::CacheEntry> > ceArr(kArr.size());
-	std::vector< vector3<> > kNew; //k's for which results not yet available in cache
-	//Check cache first:
-	for(size_t ik=0; ik<kArr.size(); ik++)
-	{	const vector3<>& k = kArr[ik];
-		auto iter = cache.find(k);
-		if(iter == cache.end()) kNew.push_back(k);
-		else ceArr[ik] = iter->second;
-	}
-	if(!kNew.size()) return ceArr;
-	//Generate ones not found in cache:
-	watch.start(); //only time when actually producing new entries
-	//--- combine Fourier transforms into a single BLAS3:
-	matrix phase(cellMap.size(), kNew.size());
-	for(size_t ikNew=0; ikNew<kNew.size(); ikNew++)
-	{	const vector3<>& k = kNew[ikNew];
-		for(size_t ic=0; ic<cellMap.size(); ic++)
-			phase.set(ic,ikNew, cis(2*M_PI*dot(cellMap[ic],k)));
-	}
-	matrix HkNew = hWannierEff * phase;
-	//--- need to do the remainder (diagonalization etc.) individually:
-	typedef std::map<vector3<>, std::shared_ptr<const CacheEntry> > Cache;
-	Cache& cacheMod = (Cache&)cache; //!< modifiable copy
-	size_t ikNew = 0;
-	for(size_t ik=0; ik<kArr.size(); ik++)
-	{	if(ceArr[ik]) continue; //result already obtained from cache
-		const vector3<>& k = kNew[ikNew];
-		auto ce = std::make_shared<CacheEntry>();
-		ce->rank = (((size_t&)rank)++);
-		//--- collect phase, Hamiltonian at current k and diagonalize:
-		ce->phase = phase(0,phase.nRows(), ikNew,ikNew+1);
-		matrix Hk = HkNew(0,HkNew.nRows(), ikNew,ikNew+1);
-		int nBandsEff = round(sqrt(HkNew.nRows()));
-		Hk.reshape(nBandsEff, nBandsEff);
-		Hk = dagger_symmetrize(Hk);
-		Hk.diagonalize(ce->evecs, ce->eigs);
-		if(shouldSqrt)
-		{	for(double& x: ce->eigs)
-				x = sqrt(fabs(x));
-		}
-		ceArr[ik] = ce;
-		cacheMod[k] = ce; //add to cache
-		ikNew++;
-	}
-	assert(ikNew == kNew.size());
-	//Clean up cache if necessary:
-	if(cacheMod.size() > 2*cacheSize)
-	{	size_t rankMin = rank - cacheSize; //remove everything older
-		for(auto iter=cacheMod.begin(); iter!=cacheMod.end(); )
-		{	auto iterNext = iter; iterNext++;
-			if(iter->second->rank < rankMin)
-				cacheMod.erase(iter);
-			iter = iterNext;
-		}
-	}
-	watch.stop();
-	return ceArr;
 }
 */

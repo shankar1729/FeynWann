@@ -246,6 +246,6 @@ int main(int argc, char** argv)
 	Wannierizer(bs, ImSigma, kInArr).save("Wannier/wannier.mlwfImSigma_ePh");
 	Wannierizer(bs, ImSigmaP, kInArr).save("Wannier/wannier.mlwfImSigmaP_ePh");
 	*/
-	finalizeSystem();
+	WannierMC::finalize();
 	return 0;
 }

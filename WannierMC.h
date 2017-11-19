@@ -14,16 +14,47 @@ struct WannierMCParams
 	WannierMCParams();
 };
 
-
+//! Wannier interpolator for electrons and phonons
 class WannierMC
 {
 public:
-	static InitParams initialize(int argc, char** argv, const char* description); //wrap initSystemCmdLine from JDFTx
-	static void finalize(); //wrap finalizeSystem from JDFTx
+	static InitParams initialize(int argc, char** argv, const char* description); //!< wrap initSystemCmdLine from JDFTx
+	static void finalize(); //!< wrap finalizeSystem from JDFTx
+	static vector3<> randomVector(MPIUtil* mpiUtil=0); //!< uniformly random vector in [0,1)^3, constant across mpi instance, if any
 	
 	const WannierMCParams& wmcp;
 	WannierMC(const WannierMCParams& wmcp);
 	void free(); //!< free matrices
+	
+	//! Electronic properties at a given wave vector
+	struct StateE
+	{	vector3<> k; //!< wave-vector in recip lattice coords
+		diagMatrix E; //!< energy relative to Fermi level (WannierMC::mu)
+		matrix v[3]; //!< velocity matrix elements in Cartesian coordinates, available if needVelocity = true
+		diagMatrix ImE; //!< linewidth, available if needLinewidths = true
+	};
+	
+	//! Phonon properties at a given wave vector
+	struct StatePh
+	{	vector3<> q; //!< wave-vector in recip lattice coords
+		diagMatrix omega; //!< frequency
+	};
+	
+	//! Electron-phonon matrix elements
+	struct MatrixEPh
+	{	const StateE* e1; //!< corresponding first electronic state
+		const StateE* e2; //!< corresponding second electronic state
+		const StatePh* ph; //!< corresponding phonon state
+		std::vector<matrix> M; //!< nModes matrices of nBands x nBands matrix elements
+	};
+	
+	//! Callback function pointer for eLoop()
+	typedef void (*eProcessFunc)(const StateE& e, void* params);
+	
+	//! Calculate electronic properties for each k-point in a mesh offset by k0
+	//! Calls provided callback function eProcess on each of them, along with provided params
+	void eLoop(const vector3<>& k0, eProcessFunc eProcess, void* params);
+	size_t eCountPerOffset() const { return Hw->nkTot; } //!< number of k's sampled per offset
 	
 	//DFT / Wannier / Phonon parameters:
 	matrix3<> R; //!< lattice vectors
@@ -40,6 +71,7 @@ private:
 	std::vector< vector3<int> > cellMap; //electron Wannier cell map
 	std::shared_ptr<DistributedMatrix> Hw, Pw; //Wannier hamiltonian and dipole matrix elements
 	std::shared_ptr<DistributedMatrix> ImSigma_eeW, ImSigma_ePhW; //linewidths in wannier basis
+	void setState(int ik, StateE& state, matrix* Vptr=0); //!< set requested properties for ik in state, optionally retrieving eigenvectors in Vptr
 	
 	//Phonons:
 	std::vector< vector3<int> > phononCellMap; //cell map for phonon force matrix

@@ -1,11 +1,7 @@
-#include <core/matrix.h>
-#include <core/scalar.h>
-#include <core/Random.h>
-#include <core/string.h>
-#include <core/WignerSeitz.h>
 #include "WannierMC.h"
 #include "InputMap.h"
 #include <core/Units.h>
+
 /*
 void reportResult(const std::vector<matrix3<>>& result, string resultName, double unit, string unitName)
 {	matrix3<> resultMean, resultStd;
@@ -95,7 +91,7 @@ int main(int argc, char** argv)
 	if(ip.dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
 		wmc.free();
-		finalizeSystem();
+		WannierMC::finalize();
 		return 0;
 	}
 	logPrintf("\n");
@@ -285,5 +281,5 @@ int main(int argc, char** argv)
 	*/
 	
 	wmc.free();
-	finalizeSystem();
+	WannierMC::finalize();
 }
