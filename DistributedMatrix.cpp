@@ -73,7 +73,7 @@ DistributedMatrix::DistributedMatrix(string fname, bool realOnly, const MPIUtil*
 	if(!planSet->transpose) die_alone("MPI transpose plan creation failed.\n");
 	//--- FFTs:
 	if(squared)
-	{	planSet->fft1 = fftw_plan_many_dft(3, &kfold[0], nElems*kfoldProd,
+	{	planSet->fft1 = fftw_plan_many_dft(3, &kfold[0], kfoldProd, //this has to be called nElems times
 			(fftw_complex*)bufData, NULL, kfoldProd, 1, //Note: strided transform
 			(fftw_complex*)bufData, NULL, kfoldProd, 1,
 			-1, FFTW_MEASURE);
@@ -132,8 +132,10 @@ void DistributedMatrix::transform(vector3<> k0)
 	complex* bufData = buf.data();
 	const complex* matData = mat.data();
 	for(int iElem=0; iElem<nElems; iElem++)
-		for(int iCell=0; iCell<nCellsTot; iCell++)
-			bufData[iElem*nkTot+cellIndex[iCell]] += *(matData++) * phase0[iCell];
+	{	auto cellIndexPtr = cellIndex.begin();
+		for(const complex& phase0cur: phase0)
+			bufData[iElem*nkTot+*(cellIndexPtr++)] += *(matData++) * phase0cur;
+	}
 	//Apply Fourier transform followed by MPI transpose:
 	fftw_execute(planSet->fft);
 	fftw_execute(planSet->transpose);
@@ -141,8 +143,33 @@ void DistributedMatrix::transform(vector3<> k0)
 }
 
 void DistributedMatrix::transform(vector3<> k01, vector3<> k02)
-{	static StopWatch watch("DistributedMatrix::transform1"); watch.start();
+{	static StopWatch watch("DistributedMatrix::transform2"); watch.start();
 	assert(squared);
+	//Initialize offset phases:
+	std::vector<complex> phase01(cellMap.size()), phase02(cellMap.size());
+	auto phaseIter1 = phase01.begin();
+	auto phaseIter2 = phase02.begin();
+	for(const vector3<int>& iR: cellMap)
+	{	*(phaseIter1++) = cis(-2*M_PI*dot(iR, k01));
+		*(phaseIter2++) = cis(+2*M_PI*dot(iR, k02));
+	}
+	//Reduce from mat to buf (apply offset phases and combine equivalent cells):
+	buf.zero();
+	complex* bufData = buf.data();
+	const complex* matData = mat.data();
+	for(int iElem=0; iElem<nElems; iElem++)
+	{	auto cellIndexPtr = cellIndex.begin();
+		for(const complex& phase01cur: phase01)
+		for(const complex& phase02cur: phase02)
+			bufData[iElem*nkTot+*(cellIndexPtr++)] += *(matData++) * phase01cur * phase02cur;
+	}
+	//Apply Fourier transform followed by MPI transpose:
+	for(int iElem=0; iElem<nElems; iElem++)
+	{	fftw_execute_dft(planSet->fft1, (fftw_complex*)bufData, (fftw_complex*)bufData);
+		bufData += nkTot;
+	}
+	fftw_execute(planSet->fft2);
+	fftw_execute(planSet->transpose);
 	watch.stop();
 }
 
