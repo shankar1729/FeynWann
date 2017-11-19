@@ -102,7 +102,7 @@ int main(int argc, char** argv)
 	}
 	logPrintf("done.\n"); logFlush();
 	dos.allReduce(MPIUtil::ReduceSum);
-	dos.print("dos.dat", 1./eV, eV);
+	dos.print("eDOS.dat", 1./eV, eV);
 	
 	//Calculate mu and Ce at each temperature:
 	diagMatrix dmu(Tarr.size(), 0.), Ce(Tarr.size(), 0.);
