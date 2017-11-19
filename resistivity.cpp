@@ -148,6 +148,7 @@ int main(int argc, char** argv)
 	DeclareArray2D(double, vFarr); DeclareArray2D(double, gArr); 
 	#undef DeclareArray2D
 	int nKptsMin = ceildiv(nKpts, nBlocks*mpiWorld->nProcesses()); //number of k points per block per process
+	logPrintf("Effectively sampled nKpairs: %lu\n\n", size_t(nKptsMin*nBlocks*mpiWorld->nProcesses())*bunchSize);
 	const double Emax = std::max(fabs(dmuMin), fabs(dmuMax)) + 10*T + 5*EconserveWidth; //max energy from Fermi level to consider
 	double EconserveExpFac = -0.5/std::pow(EconserveWidth,2), EconservePrefac = 1./(sqrt(2*M_PI)*EconserveWidth); //energy conserving Gaussian parameters
 	for(int block=0; block<nBlocks; block++)
