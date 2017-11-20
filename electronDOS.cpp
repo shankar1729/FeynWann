@@ -2,6 +2,7 @@
 #include "InputMap.h"
 #include "Histogram.h"
 #include <core/Units.h>
+#include <core/Random.h>
 
 //Get energy range from an eLoop call:
 struct EnergyRange
@@ -77,13 +78,12 @@ int main(int argc, char** argv)
 	logPrintf("Initialized energy grid: %lg to %lg eV with %lu points.\n", er.Emin/eV, (er.Emin+dE*(dos.out.size()-1))/eV, dos.out.size());
 	
 	//Initialize sampling parameters:
-	int noMine = 0;
+	int oStart=0, oStop=0;
 	if(mpiGroup->isHead())
-	{	int oStart, oStop;
 		TaskDivision(nOffsets, mpiGroupHead).myRange(oStart, oStop);
-		noMine = oStop-oStart; //number of offsets handled by current group
-	}
-	mpiGroup->bcast(noMine);
+	mpiGroup->bcast(oStart);
+	mpiGroup->bcast(oStop);
+	int noMine = oStop-oStart; //number of offsets handled by current group
 	int oInterval = std::max(1, int(round(noMine/50.))); //interval for reporting progress
 	
 	logPrintf("\nCollecting DOS: "); logFlush();
@@ -91,7 +91,8 @@ int main(int argc, char** argv)
 	cd.dos = &dos;
 	cd.weight = wmc.spinWeight*(1./nKpts);
 	for(int o=0; o<noMine; o++)
-	{	//Process with a random offset:
+	{	Random::seed(o+oStart); //to make results independent of MPI division
+		//Process with a random offset:
 		vector3<> k0 = wmc.randomVector(mpiGroup); //must be constant across group
 		wmc.eLoop(k0, CollectDOS::eProcess, &cd);
 		//Print progress:

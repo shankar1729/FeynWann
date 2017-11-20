@@ -329,7 +329,8 @@ void WannierMC::phLoop(const vector3<>& q0, WannierMC::phProcessFunc phProcess, 
 }
 
 void WannierMC::ePhLoop(const vector3<>& k01, const vector3<>& k02, WannierMC::ePhProcessFunc ePhProcess, void* params)
-{	assert(wmcp.needPhonons);
+{	static StopWatch watchBcast("WannierMC::ePhLoop:bcast"), watchRotations("WannierMC::ePhLoop:rotations");
+	assert(wmcp.needPhonons);
 	int prodKfold = Hw->nkTot;
 	int prodSup = OsqW->nkTot;
 	int prodSupSq = HePhW->nkTot;
@@ -352,9 +353,12 @@ void WannierMC::ePhLoop(const vector3<>& k01, const vector3<>& k02, WannierMC::e
 			) \
 			/* Make available on all processes of group */ \
 			if(mpiGroup->nProcesses() > 1) \
+			{	watchBcast.start(); \
 				for(int whose=0; whose<mpiGroup->nProcesses(); whose++) \
 					for(int ik=Hw->ikStartProc[whose]; ik<Hw->ikStartProc[whose+1]; ik++) \
 						bcastState(e##i[ik], mpiGroup, whose, &V##i[ik]); \
+				watchBcast.stop(); \
+			} \
 		}
 	PrepareElecStates(1) //prepares e1 and V1
 	PrepareElecStates(2) //prepares e2 and V2
@@ -377,12 +381,15 @@ void WannierMC::ePhLoop(const vector3<>& k01, const vector3<>& k02, WannierMC::e
 			)
 			//Make available on all processes of group:
 			if(mpiGroup->nProcesses() > 1)
+			{	watchBcast.start();
 				for(int whose=0; whose<mpiGroup->nProcesses(); whose++)
 					for(int iq=OsqW->ikStartProc[whose]; iq<OsqW->ikStartProc[whose+1]; iq++)
 					{	mpiGroup->bcast(&ph[iq].q[0], 3, whose);
 						bcast(ph[iq].omega, nModes, mpiGroup, whose);
 						bcast(Vph[iq], nModes, nModes, mpiGroup, whose);
 					}
+				watchBcast.stop();
+			}
 		}
 		//Loop over k2 supercell offsets:
 		vector3<int> ik2sup;
@@ -402,7 +409,8 @@ void WannierMC::ePhLoop(const vector3<>& k01, const vector3<>& k02, WannierMC::e
 				int ik2 = 0; vector3<> k2;
 				PartialLoop3D(phononSup, ik2, prodSup, k2, k02cur,
 					if(ikPair>=ikPairStart && ikPair<ikPairStop)
-					{	//Get the matrix elements for all modes together:
+					{	watchRotations.start();
+						//Get the matrix elements for all modes together:
 						MatrixEph m;
 						matrix Mall = getMatrix(HePhW->getResult(ikPair), nBands*nBands, nModes);
 						//Apply associated phonon transformation:
@@ -419,6 +427,7 @@ void WannierMC::ePhLoop(const vector3<>& k01, const vector3<>& k02, WannierMC::e
 						for(int iMode=0; iMode<nModes; iMode++)
 							m.M[iMode] = sqrt(0.5/m.ph->omega[iMode]) //frequency-dependent phonon amplitude
 								* (dagger(V1[ik1net]) * getMatrix(Mall.data(), nBands, nBands, iMode) * V2[ik2net]); //to E1 and E2 eigenbasis
+						watchRotations.stop();
 						//Invoke call-back function:
 						ePhProcess(m, params);
 					}
@@ -440,7 +449,8 @@ void WannierMC::setState(int ik, WannierMC::StateE& state, matrix* Vptr)
 	if(wmcp.needVelocity)
 	{	state.vVec.resize(nBands);
 		for(int iDir=0; iDir<3; iDir++)
-		{	state.v[iDir] = dagger(Vk) * getMatrix(Pw->getResult(ik), nBands, nBands, iDir) * Vk;
+		{	state.v[iDir] = complex(0,1) //Since P was stored with i omitted (to make it real when possible)
+				* (dagger(Vk) * getMatrix(Pw->getResult(ik), nBands, nBands, iDir) * Vk);
 			//Extract diagonal parts for convenience:
 			for(int b=0; b<nBands; b++)
 				state.vVec[b][iDir] = state.v[iDir](b,b).real();

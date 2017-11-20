@@ -1,6 +1,7 @@
 #include "WannierMC.h"
 #include "InputMap.h"
 #include <core/Units.h>
+#include <core/Random.h>
 
 struct ResistivityCollect
 {	std::vector<double> dmu; //doping levels
@@ -132,14 +133,13 @@ int main(int argc, char** argv)
 	//Initialize sampling parameters:
 	int nOffsetsPerBlock = ceildiv(nOffsets, nBlocks);
 	size_t nKpairsPerBlock = wmc.ePhCountPerOffset() * nOffsetsPerBlock;
-	logPrintf("Effectively sampled nKpts: %lu\n", nKpairsPerBlock * nBlocks);
-	int noMine = 0;
+	logPrintf("Effectively sampled nKpairs: %lu\n", nKpairsPerBlock * nBlocks);
+	int oStart = 0, oStop = 0;
 	if(mpiGroup->isHead())
-	{	int oStart, oStop;
 		TaskDivision(nOffsetsPerBlock, mpiGroupHead).myRange(oStart, oStop);
-		noMine = oStop-oStart; //number of offsets (per block) handled by current group
-	}
-	mpiGroup->bcast(noMine);
+	mpiGroup->bcast(oStart);
+	mpiGroup->bcast(oStop);
+	int noMine = oStop-oStart; //number of offsets (per block) handled by current group
 	int oInterval = std::max(1, int(round(noMine/50.))); //interval for reporting progress
 	
 	if(ip.dryRun)
@@ -151,7 +151,7 @@ int main(int argc, char** argv)
 	logPrintf("\n");
 	
 	//Compute resistivity:
-	double prefacT = wmc.spinWeight/nKpairsPerBlock;
+	double prefacT = wmc.spinWeight*1./nKpairsPerBlock;
 	double prefacGamma = wmc.spinWeight*(2*M_PI)/nKpairsPerBlock;
 	#define DeclareArray2D(type, name) std::vector<std::vector<type>> name(dmuCount, std::vector<type>(nBlocks))
 	DeclareArray2D(matrix3<>, Tarr); DeclareArray2D(matrix3<>, GammaArr); DeclareArray2D(matrix3<>, rhoArr);
@@ -162,7 +162,8 @@ int main(int argc, char** argv)
 	{	logPrintf("Working on block %d of %d: ", block+1, nBlocks); logFlush();
 		ResistivityCollect rc(dmu, T, EconserveWidth);
 		for(int o=0; o<noMine; o++)
-		{	//Process with a random offset pair:
+		{	Random::seed(block*nOffsetsPerBlock+o+oStart); //to make results independent of MPI division
+			//Process with a random offset pair:
 			vector3<> k01 = wmc.randomVector(mpiGroup); //must be constant across group
 			vector3<> k02 = wmc.randomVector(mpiGroup); //must be constant across group
 			wmc.ePhLoop(k01, k02, ResistivityCollect::ePhProcess, &rc);
