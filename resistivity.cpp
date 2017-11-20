@@ -2,40 +2,64 @@
 #include "InputMap.h"
 #include <core/Units.h>
 
-/*
-void reportResult(const std::vector<matrix3<>>& result, string resultName, double unit, string unitName)
-{	matrix3<> resultMean, resultStd;
-	for(int i=0; i<3; i++)
-	{	for(int j=0; j<3; j++)
-		{	double sum = 0., sumSq = 0.; int N = 0;
-			for(size_t block=0; block<result.size(); block++)
-			{	N++;
-				sum += result[block](i,j);
-				sumSq += std::pow(result[block](i,j), 2);
+struct ResistivityCollect
+{	std::vector<double> dmu; //doping levels
+	double T; //temperature
+	double EconserveExpFac, EconservePrefac; //energy conserving Gaussian exponential and prefactor
+	std::vector<double> g, tauInv; //density of states and scattering time
+	std::vector<matrix3<>> Tcur, Gamma; //above with velocity matrices multiplied
+
+	ResistivityCollect(const std::vector<double>& dmu, double T, double EconserveWidth) : dmu(dmu), T(T),
+		EconserveExpFac(-0.5/std::pow(EconserveWidth,2)), EconservePrefac(1./(sqrt(2*M_PI)*EconserveWidth)), //energy conserving Gaussian parameters
+		g(dmu.size()), tauInv(dmu.size()), Tcur(dmu.size()), Gamma(dmu.size())
+	{
+	}
+	
+	void collect(const WannierMC::MatrixEph& m)
+	{	const WannierMC::StateE& e1 = *(m.e1);
+		const WannierMC::StateE& e2 = *(m.e2);
+		const WannierMC::StatePh& ph = *(m.ph);
+		const int nBands = e1.E.nRows();
+		const int nModes = ph.omega.nRows();
+		//Loop over electron 1:
+		for(int b1=0; b1<nBands; b1++)
+		{	const double& E1 = e1.E[b1];
+			const vector3<>& v1 = e1.vVec[b1];
+			matrix3<> v1dotv1 = outer(v1, v1);
+			for(unsigned iMu=0; iMu<dmu.size(); iMu++)
+			{	double dFdE1 = -1./(T*std::pow(2*cosh((E1-dmu[iMu])/(2*T)),2));
+				Tcur[iMu] += v1dotv1*(-dFdE1);
+				g[iMu] += (-dFdE1);
+				for(int b2=0; b2<nBands; b2++)
+				{	const double& E2 = e2.E[b2];
+					const vector3<>& v2 = e2.vVec[b2];
+					matrix3<> v1dotv2 = outer(v1, v2);
+					double f2 = 1./(exp((E2-dmu[iMu])/T)+1);
+					for(int alpha=0; alpha<nModes; alpha++)
+					{	double nPh = 1./(exp(ph.omega[alpha]/T) - 1.);
+						double gePhSq = m.M[alpha](b2,b1).norm();
+						for(int ae=-1; ae<=+1; ae+=2) //absorb or emit phonon
+						{	double deltaExp = EconserveExpFac * std::pow(E2 - E1 - ae*ph.omega[alpha],2);
+							if(deltaExp < -15.) continue; //delta will be negligible
+							double delta = EconservePrefac * exp(deltaExp);
+							double occFactors = (-dFdE1) * (nPh+0.5 - ae*(0.5-f2));
+							Gamma[iMu] += (v1dotv1 -  v1dotv2) * (occFactors * delta * gePhSq);
+							tauInv[iMu] += occFactors * delta * gePhSq;
+						}
+					}
+				}
 			}
-			resultMean(i,j) = sum/N;
-			resultStd(i,j) = sqrt(sumSq/N - std::pow(sum/N,2));
 		}
-		char mOpen[] = "/|\\", mClose[] = "\\|/";
-		logPrintf("%20s%c", i==1 ? (resultName + " = ").c_str() : "", mOpen[i]);
-		for(int j=0; j<3; j++) logPrintf(" %12lg", resultMean(i,j)/unit);
-		logPrintf(" %c%5s%c", mClose[i], i==1 ? " +/- " : "", mOpen[i]);
-		for(int j=0; j<3; j++) logPrintf(" %12lg", resultStd(i,j)/unit);
-		logPrintf(" %c %s\n", mClose[i], i==1 ? unitName.c_str() : "");
 	}
-	logPrintf("\n");
-}
-void reportResult(const std::vector<double>& result, string resultName, double unit, string unitName)
-{	double sum = 0., sumSq = 0.; int N = 0;
-	for(size_t block=0; block<result.size(); block++)
-	{	N++;
-		sum += result[block];
-		sumSq += std::pow(result[block], 2);
+	
+	static void ePhProcess(const WannierMC::MatrixEph& m, void* params)
+	{	((ResistivityCollect*)params)->collect(m);
 	}
-	double resultMean = sum/N;
-	double resultStd = sqrt(sumSq/N - std::pow(sum/N,2));
-	logPrintf("%17s = %12lg +/- %12lg %s\n", resultName.c_str(), resultMean/unit, resultStd/unit, unitName.c_str());
-}
+};
+
+//Functions for printing with error estimates (implemented at bottom of file)
+void reportResult(const std::vector<matrix3<>>& result, string resultName, double unit, string unitName);
+void reportResult(const std::vector<double>& result, string resultName, double unit, string unitName);
 
 //Eliminate direction slabDir from tensor (for 2D case normal to slabDir):
 inline void slabConstrain(matrix3<>& M, int slabDir)
@@ -56,7 +80,7 @@ inline double trace(const matrix3<>& M, int slabDir)
 			result += M(jDir,jDir);
 	return result;
 }
-*/
+
 
 int main(int argc, char** argv)
 {	InitParams ip = WannierMC::initialize(argc, argv, "Monte Carlo estimate of resistivity");
@@ -88,46 +112,13 @@ int main(int argc, char** argv)
 	wmcp.needVelocity = true;
 	WannierMC wmc(wmcp);
 	
-	if(ip.dryRun)
-	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
-		wmc.free();
-		WannierMC::finalize();
-		return 0;
-	}
-	logPrintf("\n");
-	
-	/* //DEBUG: check translation invariance of e-ph matrix elements:
-	if(mpiWorld->isHead())
-	{	FILE* fp = fopen("test_gePh.dat", "w");
-		for(int block=0; block<200; block++)
-		{	vector3<> k1; for(int j=0; j<3; j++) k1[j] = Random::uniform();
-			std::vector< vector3<> > k2arr(bunchSize);
-			for(vector3<>& k2: k2arr) for(int j=0; j<3; j++) k2[j] = k1[j] + Random::normal(0., 0.05, 2);
-			k2arr[0] = k1;
-			std::vector<matrix> gePh[bunchSize];
-			wmc.setPhononMatElemArray(k1, k2arr, gePh);
-			for(int ik2=0; ik2<bunchSize; ik2++)
-			{	vector3<> dk = k2arr[ik2] - k1;
-				for(int j=0; j<3; j++) dk[j] -= floor(0.5+dk[j]);
-				double dkMag = (dk * inv(wmc.R)).length();
-				fprintf(fp, "%lf", dkMag);
-				for(int mode=0; mode<3; mode++) //pick only acoustic-like modes
-					for(int b=0; b<wmc.nBands; b++)
-						fprintf(fp, " %le", gePh[ik2][mode](b,b).abs());
-				fprintf(fp, "\n");
-			}
-		}
-		fclose(fp);
-	}
-	die("Testing.\n"); */
-	/*
 	//dmu array:
 	std::vector<double> dmu(dmuCount, dmuMin); //set first value here
 	for(int iMu=1; iMu<dmuCount; iMu++) //set remaining values (if any)
 		dmu[iMu] = dmuMin + iMu*(dmuMax-dmuMin)/(dmuCount-1);
 	
 	//Handle dimensionality:
-	double Omega = fabs(det(wmc.R));
+	double Omega = wmc.Omega;
 	double rhoUnit = 1e-9*Ohm*meter;
 	string rhoUnitName="nOhm-m";
 	string rhoName = "Resistivity";
@@ -138,125 +129,69 @@ int main(int argc, char** argv)
 		rhoName = "SheetResistance";
 	}
 	
+	//Initialize sampling parameters:
+	int nOffsetsPerBlock = ceildiv(nOffsets, nBlocks);
+	size_t nKpairsPerBlock = wmc.ePhCountPerOffset() * nOffsetsPerBlock;
+	logPrintf("Effectively sampled nKpts: %lu\n", nKpairsPerBlock * nBlocks);
+	int noMine = 0;
+	if(mpiGroup->isHead())
+	{	int oStart, oStop;
+		TaskDivision(nOffsetsPerBlock, mpiGroupHead).myRange(oStart, oStop);
+		noMine = oStop-oStart; //number of offsets (per block) handled by current group
+	}
+	mpiGroup->bcast(noMine);
+	int oInterval = std::max(1, int(round(noMine/50.))); //interval for reporting progress
+	
+	if(ip.dryRun)
+	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
+		wmc.free();
+		WannierMC::finalize();
+		return 0;
+	}
+	logPrintf("\n");
+	
 	//Compute resistivity:
+	double prefacT = wmc.spinWeight/nKpairsPerBlock;
+	double prefacGamma = wmc.spinWeight*(2*M_PI)/nKpairsPerBlock;
 	#define DeclareArray2D(type, name) std::vector<std::vector<type>> name(dmuCount, std::vector<type>(nBlocks))
 	DeclareArray2D(matrix3<>, Tarr); DeclareArray2D(matrix3<>, GammaArr); DeclareArray2D(matrix3<>, rhoArr);
 	DeclareArray2D(double, rhoBarArr); DeclareArray2D(double, tauArr); DeclareArray2D(double, tauDrudeArr);
 	DeclareArray2D(double, vFarr); DeclareArray2D(double, gArr); 
 	#undef DeclareArray2D
-	int nKptsMin = ceildiv(nKpts, nBlocks*mpiWorld->nProcesses()); //number of k points per block per process
-	const double Emax = std::max(fabs(dmuMin), fabs(dmuMax)) + 10*T + 5*EconserveWidth; //max energy from Fermi level to consider
-	double EconserveExpFac = -0.5/std::pow(EconserveWidth,2), EconservePrefac = 1./(sqrt(2*M_PI)*EconserveWidth); //energy conserving Gaussian parameters
 	for(int block=0; block<nBlocks; block++)
-	{	logPrintf("Working on block %d of %d ... ", block+1, nBlocks); logFlush();
-		std::vector<matrix3<>> Tcur(dmuCount), Gamma(dmuCount);
-		std::vector<double> g(dmuCount), tauInv(dmuCount);
-		double nKpts = 0.; int nBunches = 0;
-		while(nKpts < nKptsMin)
-		{	//Get a bunch of k-points with states near the Fermi level:
-			std::vector< vector3<> > kArr; kArr.reserve(bunchSize);
-			while(kArr.size() < size_t(bunchSize))
-			{	//Diagonalize Hamiltonians at a set of random k-points:
-				std::vector< vector3<> > kTmp(bunchSize);
-				for(vector3<>& k: kTmp)
-					for(int j=0; j<3; j++)
-						k[j] = Random::uniform();
-				std::vector<diagMatrix> Etmp = wmc.getStates(kTmp, Emax);
-				//Add k-points with appropriate states:
-				int nFound = 0, nAdded = 0;
-				for(int ik=0; ik<bunchSize; ik++)
-				{	bool worthwhile = false;
-					for(int b=0; b<Etmp[ik].nRows(); b++)
-						if(fabs(Etmp[ik][b]) < Emax)
-						{	worthwhile = true;
-							break;
-						}
-					if(worthwhile)
-					{	nFound++;
-						if(kArr.size() < size_t(bunchSize))
-						{	kArr.push_back(kTmp[ik]);
-							nAdded++;
-						}
-					}
-				}
-				nKpts += bunchSize * (nFound ? nAdded * (1./nFound) : 1.); //number of k-points examined to get the relevant ones (needed for normalization)
-			}
-			nBunches++;
-			
-			//Get energies and velocities for selected bunch:
-			std::vector<diagMatrix> Earr = wmc.getStates(kArr, Emax);
-			std::vector< vector3<> > vArr[bunchSize];
-			for(int ik=0; ik<bunchSize; ik++)
-				vArr[ik] = wmc.getVelocity(kArr[ik], Emax);
-			
-			diagMatrix omegaPh[bunchSize];
-			std::vector<matrix> gePh[bunchSize];
-			for(int ik1=0; ik1<bunchSize; ik1++)
-			{	//Calculate phonon stuff for each pair of k-points involving ik1
-				wmc.setPhononMatElemArray(kArr[ik1], kArr, gePh);
-				for(int ik2=0; ik2<bunchSize; ik2++)
-					omegaPh[ik2] = wmc.getPhononModes(kArr[ik1] - kArr[ik2]);
-				
-				for(int v=0; v<Earr[ik1].nRows(); v++)
-				{	matrix3<> viDotvi = outer(vArr[ik1][v], vArr[ik1][v]);
-					std::vector<double> dFdEi(dmuCount);
-					for(int iMu=0; iMu<dmuCount; iMu++)
-					{	double dFdEi = -1/(T*std::pow(2*cosh((Earr[ik1][v]-dmu[iMu])/(2*T)),2));
-						Tcur[iMu] += viDotvi*(-dFdEi);
-						g[iMu] += (-dFdEi);
-						for(int ik2=0; ik2<bunchSize; ik2++)
-							if(ik2 != ik1)
-								for(int c=0; c<Earr[ik2].nRows(); c++)
-								{	matrix3<> viDotvj = outer(vArr[ik1][v], vArr[ik2][c]);
-									double fj = 1./(exp((Earr[ik2][c]-dmu[iMu])/T)+1);
-									for(int alpha=0; alpha<omegaPh[ik2].nRows(); alpha++)
-									{	double nPh = 1./(exp(omegaPh[ik2][alpha]/T) - 1.);
-										double gePhSq = gePh[ik2][alpha](c,v).norm();
-										for(int ae=-1; ae<=+1; ae+=2)
-										{	double deltaExp = EconserveExpFac * std::pow(Earr[ik2][c]-Earr[ik1][v] - ae*omegaPh[ik2][alpha],2);
-											if(deltaExp < -15.) continue; //delta will be negligible
-											double delta = EconservePrefac * exp(deltaExp);
-											double occFactors = (-dFdEi) * (nPh+0.5 - ae*(0.5-fj));
-											Gamma[iMu] += (viDotvi -  viDotvj) * (occFactors * delta * gePhSq);
-											tauInv[iMu] += occFactors * delta * gePhSq;
-										}
-									}
-								}
-					}
-				}
-			}
+	{	logPrintf("Working on block %d of %d: ", block+1, nBlocks); logFlush();
+		ResistivityCollect rc(dmu, T, EconserveWidth);
+		for(int o=0; o<noMine; o++)
+		{	//Process with a random offset pair:
+			vector3<> k01 = wmc.randomVector(mpiGroup); //must be constant across group
+			vector3<> k02 = wmc.randomVector(mpiGroup); //must be constant across group
+			wmc.ePhLoop(k01, k02, ResistivityCollect::ePhProcess, &rc);
+			//Print progress:
+			if((o+1)%oInterval==0) { logPrintf("%d%% ", int(round((o+1)*100./noMine))); logFlush(); }
 		}
-		
-		//Accumulate between processes:
+		logPrintf("done.\n"); logFlush();
 		for(int iMu=0; iMu<dmuCount; iMu++)
-		{	mpiWorld->allReduce(&Tcur[iMu](0,0), 3*3, MPIUtil::ReduceSum);
-			mpiWorld->allReduce(&Gamma[iMu](0,0), 3*3, MPIUtil::ReduceSum);
-			mpiWorld->allReduce(g[iMu], MPIUtil::ReduceSum);
-			mpiWorld->allReduce(tauInv[iMu], MPIUtil::ReduceSum);
-		}
-		mpiWorld->allReduce(nKpts, MPIUtil::ReduceSum);
-		mpiWorld->allReduce(nBunches, MPIUtil::ReduceSum);
-		logPrintf("useFraction: %lg\n", (bunchSize*nBunches)/nKpts); logFlush();
-		
-		double prefacT = wmc.spinWeight/(nKpts);
-		double prefacGamma = wmc.spinWeight*(2*M_PI)/(nKpts*nKpts*1./nBunches);
-		//Apply normalizing factors:
-		for(int iMu=0; iMu<dmuCount; iMu++)
-		{	Tcur[iMu] *= prefacT;
-			g[iMu] *= prefacT;
-			Gamma[iMu] *= prefacGamma; Gamma[iMu] = 0.5*(Gamma[iMu] + (~Gamma[iMu])); //symmetrize
-			tauInv[iMu] *= prefacGamma;
-			slabConstrain(Tcur[iMu], slabDir); //eliminate out-of-plane components if necessary
-			slabConstrain(Gamma[iMu], slabDir); //eliminate out-of-plane components if necessary
+		{	//Accumulate between processes:
+			mpiWorld->allReduce(&rc.Tcur[iMu](0,0), 3*3, MPIUtil::ReduceSum);
+			mpiWorld->allReduce(&rc.Gamma[iMu](0,0), 3*3, MPIUtil::ReduceSum);
+			mpiWorld->allReduce(rc.g[iMu], MPIUtil::ReduceSum);
+			mpiWorld->allReduce(rc.tauInv[iMu], MPIUtil::ReduceSum);
+			//Apply normalizing factors:
+			rc.Tcur[iMu] *= prefacT;
+			rc.g[iMu] *= prefacT;
+			rc.Gamma[iMu] *= prefacGamma; rc.Gamma[iMu] = 0.5*(rc.Gamma[iMu] + (~rc.Gamma[iMu])); //symmetrize
+			rc.tauInv[iMu] *= prefacGamma;
+			slabConstrain(rc.Tcur[iMu], slabDir); //eliminate out-of-plane components if necessary
+			slabConstrain(rc.Gamma[iMu], slabDir); //eliminate out-of-plane components if necessary
 			//Store relevant quantities:
-			Tarr[iMu][block] = Tcur[iMu];
-			GammaArr[iMu][block] = Gamma[iMu];
-			rhoArr[iMu][block] = Omega * (inv(Tcur[iMu]) * Gamma[iMu] * inv(Tcur[iMu]));
+			Tarr[iMu][block] = rc.Tcur[iMu];
+			GammaArr[iMu][block] = rc.Gamma[iMu];
+			rhoArr[iMu][block] = Omega * (inv(rc.Tcur[iMu]) * rc.Gamma[iMu] * inv(rc.Tcur[iMu]));
 			rhoBarArr[iMu][block] = trace(rhoArr[iMu][block], slabDir) / (slabDir>=0 ? 2. : 3.);
-			tauArr[iMu][block] = g[iMu] / tauInv[iMu];
-			tauDrudeArr[iMu][block] = trace(Tcur[iMu], slabDir) / trace(Gamma[iMu], slabDir);
-			vFarr[iMu][block] = sqrt(trace(Tcur[iMu], slabDir)/g[iMu]);
-			gArr[iMu][block] = g[iMu];
+			tauArr[iMu][block] = rc.g[iMu] / rc.tauInv[iMu];
+			tauDrudeArr[iMu][block] = trace(rc.Tcur[iMu], slabDir) / trace(rc.Gamma[iMu], slabDir);
+			vFarr[iMu][block] = sqrt(trace(rc.Tcur[iMu], slabDir)/rc.g[iMu]);
+			gArr[iMu][block] = rc.g[iMu];
 			//Fix slab direction values physically:
 			if(slabDir>=0.)
 			{	Tarr[iMu][block](slabDir,slabDir) = 0.;
@@ -265,8 +200,7 @@ int main(int argc, char** argv)
 			}
 		}
 	}
-	logPrintf("Done.\n\n");
-
+	
 	for(int iMu=0; iMu<dmuCount; iMu++)
 	{	logPrintf("\nResults for dmu = %lg eV:\n", dmu[iMu]/eV);
 		reportResult(Tarr[iMu], "T", 1, "");
@@ -278,8 +212,44 @@ int main(int argc, char** argv)
 		reportResult(vFarr[iMu], "vF", 1, "");
 		reportResult(gArr[iMu], "g(eF)", 1, "");
 	}
-	*/
 	
 	wmc.free();
 	WannierMC::finalize();
+}
+
+//Report a tensor with error estimates
+void reportResult(const std::vector<matrix3<>>& result, string resultName, double unit, string unitName)
+{	matrix3<> resultMean, resultStd;
+	for(int i=0; i<3; i++)
+	{	for(int j=0; j<3; j++)
+		{	double sum = 0., sumSq = 0.; int N = 0;
+			for(size_t block=0; block<result.size(); block++)
+			{	N++;
+				sum += result[block](i,j);
+				sumSq += std::pow(result[block](i,j), 2);
+			}
+			resultMean(i,j) = sum/N;
+			resultStd(i,j) = sqrt(sumSq/N - std::pow(sum/N,2));
+		}
+		char mOpen[] = "/|\\", mClose[] = "\\|/";
+		logPrintf("%20s%c", i==1 ? (resultName + " = ").c_str() : "", mOpen[i]);
+		for(int j=0; j<3; j++) logPrintf(" %12lg", resultMean(i,j)/unit);
+		logPrintf(" %c%5s%c", mClose[i], i==1 ? " +/- " : "", mOpen[i]);
+		for(int j=0; j<3; j++) logPrintf(" %12lg", resultStd(i,j)/unit);
+		logPrintf(" %c %s\n", mClose[i], i==1 ? unitName.c_str() : "");
+	}
+	logPrintf("\n");
+}
+
+//Report a scalar with error estimates:
+void reportResult(const std::vector<double>& result, string resultName, double unit, string unitName)
+{	double sum = 0., sumSq = 0.; int N = 0;
+	for(size_t block=0; block<result.size(); block++)
+	{	N++;
+		sum += result[block];
+		sumSq += std::pow(result[block], 2);
+	}
+	double resultMean = sum/N;
+	double resultStd = sqrt(sumSq/N - std::pow(sum/N,2));
+	logPrintf("%17s = %12lg +/- %12lg %s\n", resultName.c_str(), resultMean/unit, resultStd/unit, unitName.c_str());
 }

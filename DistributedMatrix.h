@@ -22,6 +22,7 @@ public:
 	int nkTot; //!< prod(kfold) or its square, depending on squared
 	int nk; //!< number of k-points (or pairs, if squared) on current process
 	int ikStart; //!< starting k-point (or pair, if squared) on current process
+	std::vector<int> ikStartProc; //!< ikStart for each process in MPI group
 	
 	//! Initialize from file, containing complex or real elements as specified by realOnly
 	//! (remaining parameters are as specified in the class)
@@ -38,5 +39,15 @@ private:
 	std::shared_ptr<struct PlanSet> planSet; //!< opaque pointer to required set of FFT plans
 	std::vector<int> cellIndex; //!< index of cell or cell-pair in nkTot array
 };
+
+//Calculate flat index given 3D coordinates and sample counts
+inline int calculateIndex(const vector3<int>& iv, const vector3<int>& S)
+{	int i = 0;
+	for(int iDir=0; iDir<3; iDir++)
+	{	if(iDir) i *= S[iDir-1];
+		i += positiveRemainder(iv[iDir], S[iDir]);
+	}
+	return i;
+}
 
 #endif //WANNIERMC_DISTRIBUTEDMATRIX_H

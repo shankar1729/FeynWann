@@ -60,7 +60,7 @@ int main(int argc, char** argv)
 	}
 	logPrintf("\n");
 	
-		//Initialize temperature grid:
+	//Initialize temperature grid:
 	std::vector<double> Tarr(int(ceil((Tmax-Tmin)/Tstep)));
 	for(size_t iT=0; iT<Tarr.size(); iT++)
 		Tarr[iT] = Tmin + Tstep*iT;

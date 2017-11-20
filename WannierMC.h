@@ -31,6 +31,7 @@ public:
 	{	vector3<> k; //!< wave-vector in recip lattice coords
 		diagMatrix E; //!< energy relative to Fermi level (WannierMC::mu)
 		matrix v[3]; //!< velocity matrix elements in Cartesian coordinates, available if needVelocity = true
+		std::vector<vector3<>> vVec; //!< band velocities (diagonal part of v) in Cartesian coordinates, available if needVelocity = true
 		diagMatrix ImE; //!< linewidth, available if needLinewidths = true
 	};
 	
@@ -41,7 +42,7 @@ public:
 	};
 	
 	//! Electron-phonon matrix elements
-	struct MatrixEPh
+	struct MatrixEph
 	{	const StateE* e1; //!< corresponding first electronic state
 		const StateE* e2; //!< corresponding second electronic state
 		const StatePh* ph; //!< corresponding phonon state
@@ -50,6 +51,7 @@ public:
 	
 	typedef void (*eProcessFunc)(const StateE& state, void* params); //!< Callback function pointer for eLoop()
 	typedef void (*phProcessFunc)(const StatePh& state, void* params); //!< Callback function pointer for phLoop()
+	typedef void (*ePhProcessFunc)(const MatrixEph& mat, void* params); //!< Callback function pointer for ePhLoop()
 	
 	//! Calculate electronic properties for each k-point in a mesh offset by k0
 	//! Calls provided callback function eProcess on each of them, along with provided params
@@ -61,11 +63,18 @@ public:
 	void phLoop(const vector3<>& q0, phProcessFunc phProcess, void* params);
 	size_t phCountPerOffset() const { return OsqW->nkTot; } //!< number of q's sampled per offset
 	
+	//! Calculate electronic properties for each pair of k-points between two meshes offset by k01 and k02,
+	//! as well as phonon properties and electron-phonon matrix elements connecting these k-points.
+	//! Calls provided callback function ePhProcess on each of them, along with provided params
+	void ePhLoop(const vector3<>& k01, const vector3<>& k02, ePhProcessFunc ePhProcess, void* params);
+	size_t ePhCountPerOffset() const { return Hw->nkTot * Hw->nkTot; } //!< number of k-pairs sampled per offset
+	
 	//DFT / Wannier / Phonon parameters:
 	matrix3<> R; //!< lattice vectors
 	double Omega; //!< unit cell volume
 	vector3<int> kfold; //!< k-point folding in original calculation
 	vector3<int> phononSup; //!< phonon supercell in original calculation
+	vector3<int> kfoldSup; //!< k-point folding of phonon supercell i.e. kfold / phononSup
 	vector3<bool> isTruncated; //!< whether each direction is truncated
 	int nBands, spinWeight; //!< number of Wannier bands for the electrons and weight per spin channel
 	double mu, nElectrons, nValence; //!< chemical potential (if a metal), number of electrons per unit cell and number of valence bands (if insulator)
@@ -78,6 +87,7 @@ private:
 	std::shared_ptr<DistributedMatrix> Hw, Pw; //Wannier hamiltonian and dipole matrix elements
 	std::shared_ptr<DistributedMatrix> ImSigma_eeW, ImSigma_ePhW; //linewidths in wannier basis
 	void setState(int ik, StateE& state, matrix* Vptr=0); //!< set requested properties for ik in state, optionally retrieving eigenvectors in Vptr
+	void bcastState(StateE& state, MPIUtil* mpiUtil, int root, matrix* Vptr=0); //!< broadcast specified state (and optionally eigenvectors) on specified MPI instance
 	
 	//Phonons:
 	std::vector< vector3<int> > phononCellMap; //cell map for phonon force matrix

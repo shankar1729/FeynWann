@@ -156,6 +156,11 @@ WannierMC::WannierMC(const WannierMCParams& wmcp)
 	logPrintf("done.\n"); logFlush();
 	logPrintf("nModes = %d\n", nModes);
 	logPrintf("phononSup = "); phononSup.print(globalLog, " %d ");
+	for(int iDir=0; iDir<3; iDir++)
+	{	kfoldSup[iDir] = kfold[iDir] / phononSup[iDir];
+		if(kfoldSup[iDir] * phononSup[iDir] != kfold[iDir])
+			die("kfold is not a multiple of phononSup.\n");
+	}
 	
 	//Read cell map
 	ifs.open(wmcp.wannierPrefix + ".mlwfCellMap");
@@ -251,6 +256,20 @@ inline matrix getMatrix(const complex* src, int nRows, int nCols, int iMatrix=0)
 	return result;
 }
 
+//Prepare and broadcast matrices on custom communicator:
+inline void bcast(diagMatrix& m, int nRows, MPIUtil* mpiUtil, int root)
+{	m.resize(nRows);
+	mpiUtil->bcast(m.data(), nRows, root);
+}
+inline void bcast(matrix& m, int nRows, int nCols, MPIUtil* mpiUtil, int root)
+{	if(!m) m.init(nRows, nCols);
+	mpiUtil->bcast(m.data(), m.nData(), root);
+}
+
+template<typename T> vector3<T> elemwiseProd(vector3<int> a, vector3<T> b)
+{	return vector3<T>(a[0]*b[0], a[1]*b[1], a[2]*b[2]);
+}
+
 //Loop i till iStop, sampling a 3D mesh of dimensions S
 //At each point, set fractional coordinates x offset by x0 and run code
 #define PartialLoop3D(S, i, iStop, x, x0, code) \
@@ -309,6 +328,108 @@ void WannierMC::phLoop(const vector3<>& q0, WannierMC::phProcessFunc phProcess, 
 	)
 }
 
+void WannierMC::ePhLoop(const vector3<>& k01, const vector3<>& k02, WannierMC::ePhProcessFunc ePhProcess, void* params)
+{	assert(wmcp.needPhonons);
+	int prodKfold = Hw->nkTot;
+	int prodSup = OsqW->nkTot;
+	int prodSupSq = HePhW->nkTot;
+	assert(prodSupSq == prodSup*prodSup);
+	//Initialize electronic states for 1 and 2:
+	#define PrepareElecStates(i) \
+		std::vector<StateE> e##i(prodKfold); /* States */ \
+		std::vector<matrix> V##i(prodKfold); /* Eigenvectors */ \
+		{	Hw->transform(k0##i); \
+			if(wmcp.needVelocity) \
+				Pw->transform(k0##i); \
+			if(wmcp.needLinewidths) \
+			{	ImSigma_eeW->transform(k0##i); \
+				ImSigma_ePhW->transform(k0##i); \
+			} \
+			int ik = Hw->ikStart; \
+			int ikStop = ik + Hw->nk; \
+			PartialLoop3D(kfold, ik, ikStop, e##i[ik].k, k0##i, \
+				setState(ik, e##i[ik], &V##i[ik]); \
+			) \
+			/* Make available on all processes of group */ \
+			if(mpiGroup->nProcesses() > 1) \
+				for(int whose=0; whose<mpiGroup->nProcesses(); whose++) \
+					for(int ik=Hw->ikStartProc[whose]; ik<Hw->ikStartProc[whose+1]; ik++) \
+						bcastState(e##i[ik], mpiGroup, whose, &V##i[ik]); \
+		}
+	PrepareElecStates(1) //prepares e1 and V1
+	PrepareElecStates(2) //prepares e2 and V2
+	#undef PrepareElecStates
+	//Loop over phonon q offsets:
+	vector3<> kfoldInv(1./kfold[0], 1./kfold[1], 1./kfold[2]);
+	vector3<int> iqSup;
+	for(iqSup[0]=0; iqSup[0]<kfoldSup[0]; iqSup[0]++)
+	for(iqSup[1]=0; iqSup[1]<kfoldSup[1]; iqSup[1]++)
+	for(iqSup[2]=0; iqSup[2]<kfoldSup[2]; iqSup[2]++)
+	{	//Prepare phonon states:
+		vector3<> q0 = k01 - k02 + elemwiseProd(iqSup, kfoldInv);
+		OsqW->transform(q0);
+		std::vector<StatePh> ph(prodSup);
+		std::vector<matrix> Vph(prodSup);
+		{	int iq = OsqW->ikStart;
+			int iqStop = iq + OsqW->nk;
+			PartialLoop3D(phononSup, iq, iqStop, ph[iq].q, q0,
+				setState(iq, ph[iq], &Vph[iq]);
+			)
+			//Make available on all processes of group:
+			if(mpiGroup->nProcesses() > 1)
+				for(int whose=0; whose<mpiGroup->nProcesses(); whose++)
+					for(int iq=OsqW->ikStartProc[whose]; iq<OsqW->ikStartProc[whose+1]; iq++)
+					{	mpiGroup->bcast(&ph[iq].q[0], 3, whose);
+						bcast(ph[iq].omega, nModes, mpiGroup, whose);
+						bcast(Vph[iq], nModes, nModes, mpiGroup, whose);
+					}
+		}
+		//Loop over k2 supercell offsets:
+		vector3<int> ik2sup;
+		for(ik2sup[0]=0; ik2sup[0]<kfoldSup[0]; ik2sup[0]++)
+		for(ik2sup[1]=0; ik2sup[1]<kfoldSup[1]; ik2sup[1]++)
+		for(ik2sup[2]=0; ik2sup[2]<kfoldSup[2]; ik2sup[2]++)
+		{	vector3<> k02cur = k02 + elemwiseProd(ik2sup, kfoldInv);
+			vector3<int> ik1sup = iqSup + ik2sup; //momentum conservation
+			vector3<> k01cur = q0 + k02cur; //momentum conservation
+			//Calculate electron-phonon matrix elements:
+			HePhW->transform(k01cur, k02cur);
+			int ikPair = 0;
+			int ikPairStart = HePhW->ikStart;
+			int ikPairStop = ikPairStart + HePhW->nk;
+			int ik1 = 0; vector3<> k1;
+			PartialLoop3D(phononSup, ik1, prodSup, k1, k01cur,
+				int ik2 = 0; vector3<> k2;
+				PartialLoop3D(phononSup, ik2, prodSup, k2, k02cur,
+					if(ikPair>=ikPairStart && ikPair<ikPairStop)
+					{	//Get the matrix elements for all modes together:
+						MatrixEph m;
+						matrix Mall = getMatrix(HePhW->getResult(ikPair), nBands*nBands, nModes);
+						//Apply associated phonon transformation:
+						int iqIndex = calculateIndex(ik1v - ik2v, phononSup);
+						m.ph = &ph[iqIndex];
+						Mall = Mall * Vph[iqIndex]; //to phonon eigenbasis
+						//Identify associated electronic states:
+						int ik1net = calculateIndex(ik1sup + elemwiseProd(phononSup, ik1v), kfold);
+						int ik2net = calculateIndex(ik2sup + elemwiseProd(phononSup, ik2v), kfold);
+						m.e1 = &e1[ik1net];
+						m.e2 = &e2[ik2net];
+						//Extract matrices for each phonon mode:
+						m.M.resize(nModes);
+						for(int iMode=0; iMode<nModes; iMode++)
+							m.M[iMode] = sqrt(0.5/m.ph->omega[iMode]) //frequency-dependent phonon amplitude
+								* (dagger(V1[ik1net]) * getMatrix(Mall.data(), nBands, nBands, iMode) * V2[ik2net]); //to E1 and E2 eigenbasis
+						//Invoke call-back function:
+						ePhProcess(m, params);
+					}
+					ikPair++;
+				)
+			)
+		}
+	}
+}
+
+
 void WannierMC::setState(int ik, WannierMC::StateE& state, matrix* Vptr)
 {	//Get and diagonalize Hamiltonian:
 	matrix Vk, Hk = getMatrix(Hw->getResult(ik), nBands, nBands);
@@ -317,8 +438,14 @@ void WannierMC::setState(int ik, WannierMC::StateE& state, matrix* Vptr)
 	if(Vptr) *Vptr = Vk;
 	//Velcoity matrix, if needed:
 	if(wmcp.needVelocity)
+	{	state.vVec.resize(nBands);
 		for(int iDir=0; iDir<3; iDir++)
-			state.v[iDir] = dagger(Vk) * getMatrix(Pw->getResult(ik), nBands, nBands, iDir) * Vk;
+		{	state.v[iDir] = dagger(Vk) * getMatrix(Pw->getResult(ik), nBands, nBands, iDir) * Vk;
+			//Extract diagonal parts for convenience:
+			for(int b=0; b<nBands; b++)
+				state.vVec[b][iDir] = state.v[iDir](b,b).real();
+		}
+	}
 	//Linewidths, if needed:
 	if(wmcp.needLinewidths)
 	{	//e-e linewidth:
@@ -329,6 +456,26 @@ void WannierMC::setState(int ik, WannierMC::StateE& state, matrix* Vptr)
 			state.ImE[b] += exp(logImE_ePh[b]); //e-ph linewidth interpolated in logarithm
 	}
 }
+
+void WannierMC::bcastState(WannierMC::StateE& state, MPIUtil* mpiUtil, int root, matrix* Vptr)
+{	if(mpiUtil->nProcesses()==1) return; //noc ommunictaion needed
+	mpiUtil->bcast(&state.k[0], 3, root);
+	//Energy and eigenvectors:
+	bcast(state.E, nBands, mpiUtil, root);
+	if(Vptr)
+		bcast(*Vptr, nBands, nBands, mpiUtil, root);
+	//Velcoity matrix, if needed:
+	if(wmcp.needVelocity)
+	{	for(int iDir=0; iDir<3; iDir++)
+			bcast(state.v[iDir], nBands, nBands, mpiUtil, root);
+		state.vVec.resize(nBands);
+		mpiUtil->bcast(&state.vVec[0][0], 3*nBands, root);
+	}
+	//Linewidths, if needed:
+	if(wmcp.needLinewidths)
+		bcast(state.ImE, nBands, mpiUtil, root);
+}
+
 
 void WannierMC::setState(int iq, WannierMC::StatePh& state, matrix* Vptr)
 {	assert(wmcp.needPhonons);

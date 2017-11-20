@@ -26,15 +26,6 @@ struct PlanSet
 	fftw_plan fft2; //Fourier transform plan w.r.t iR2 for squared case
 };
 
-inline int calculateIndex(const vector3<int>& iR, const vector3<int>& kfold)
-{	int i = 0;
-	for(int iDir=0; iDir<3; iDir++)
-	{	if(iDir) i *= kfold[iDir-1];
-		i += positiveRemainder(iR[iDir], kfold[iDir]);
-	}
-	return i;
-}
-
 DistributedMatrix::DistributedMatrix(string fname, bool realOnly, const MPIUtil* mpiUtil, int nElemsTot,
 	const std::vector<vector3<int>>& cellMap, const vector3<int>& kfold, bool squared)
 : mpiUtil(mpiUtil), nElemsTot(nElemsTot), cellMap(cellMap), kfold(kfold), squared(squared)
@@ -53,6 +44,14 @@ DistributedMatrix::DistributedMatrix(string fname, bool realOnly, const MPIUtil*
 		mpiUtil->communicator(), &local_n0, &local_0start, &local_n1, &local_1start);
 	nElems = local_n0; iElemStart = local_0start;
 	nk = local_n1; ikStart = local_1start;
+	
+	//Make ikStart for all processes available:
+	ikStartProc.resize(mpiUtil->nProcesses()+1);
+	ikStartProc[mpiUtil->iProcess()] = ikStart;
+	for(int jProc=0; jProc<mpiUtil->nProcesses(); jProc++)
+		mpiUtil->bcast(ikStartProc[jProc], jProc);
+	ikStartProc[mpiUtil->nProcesses()] = nkTot;
+	assert(ikStartProc[mpiUtil->iProcess()+1] == ikStart+nk);
 	
 	//Allocate matrix and buffer:
 	mat.init(nElems*nCellsTot);
