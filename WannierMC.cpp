@@ -6,9 +6,8 @@
 
 WannierMCParams::WannierMCParams()
 : totalEprefix("Wannier/totalE"), phononPrefix("Wannier/phonon"), wannierPrefix("Wannier/wannier"),
-needPhonons(false), needLinewidths(false), needVelocity(false)
+needSymmetries(false), needPhonons(false), needLinewidths(false), needVelocity(false)
 {
-	
 }
 
 InitParams WannierMC::initialize(int argc, char** argv, const char* description)
@@ -46,9 +45,9 @@ WannierMC::WannierMC(const WannierMCParams& wmcp)
 : wmcp(wmcp), spinWeight(0), mu(NAN), nElectrons(0), nValence(0)
 {	
 	//Read relevant parameters from totalE.out:
-	logPrintf("\nReading '%s.out' ... ", wmcp.totalEprefix.c_str()); logFlush();
-	ifstream ifs(wmcp.totalEprefix + ".out");
-	if(!ifs.is_open()) die("could not open file.\n");
+	string fname = wmcp.totalEprefix + ".out";
+	logPrintf("\nReading '%s' ... ", fname.c_str()); logFlush();
+	ifstream ifs(fname); if(!ifs.is_open()) die("could not open file.\n");
 	bool initDone = false; //whether finished reading the initialization part of totalE.out
 	int nBandsDFT = 0; //number of DFT bands (>= this->nBands = # Wannier bands)
 	while(!ifs.eof())
@@ -129,53 +128,40 @@ WannierMC::WannierMC(const WannierMCParams& wmcp)
 	logPrintf("isTruncated = "); isTruncated.print(globalLog, " %d ");
 	logPrintf("R:\n");
 	R.print(globalLog, " %lg ");
+	logPrintf("\n");
 	
-	//Read relevant parameters from phonon.out:
-	logPrintf("\nReading '%s.out' ... ", wmcp.phononPrefix.c_str()); logFlush();
-	ifs.open(wmcp.phononPrefix + ".out");
-	if(!ifs.is_open()) die("could not open file.\n");
-	nModes = 0;
-	while(!ifs.eof())
-	{	string line; getline(ifs, line);
-		if(line.find("phonon  \\") != string::npos)
-		{	//at start of phonon command print
-			string key;
-			while(key!="supercell" && (!ifs.eof()))
-				ifs >> key; //search for supercell keyword
-			ifs >> phononSup[0] >> phononSup[1] >> phononSup[2];
-			if(!ifs.good()) die("Failed to read phonon supercell dimensions.\n");
+	//Read symmetries if required
+	if(wmcp.needSymmetries)
+	{	fname = wmcp.totalEprefix + ".sym";
+		logPrintf("Reading '%s' ... ", fname.c_str()); logFlush();
+		ifs.open(fname); if(!ifs.is_open()) die("could not open file.\n");
+		sym.clear();
+		while(!ifs.eof())
+		{	SpaceGroupOp op;
+			for(int i=0; i<3; i++) for(int j=0; j<3; j++) ifs >> op.rot(i,j); //rotation
+			for(int i=0; i<3; i++) ifs >> op.a[i]; //translation
+			if(ifs.good()) sym.push_back(op);
 		}
-		string cmdName; istringstream(line) >> cmdName;
-		if(cmdName == "ion")
-			nModes += 3; //3 modes per atom in unit cell
-		if(line.find("Unit cell calculation") != string::npos)
-			break; //don't need anything else after this from phonon.out
-	}
-	ifs.close();
-	if(!phononSup.length_squared()) die("Failed to read phonon supercell dimensions.\n");
-	logPrintf("done.\n"); logFlush();
-	logPrintf("nModes = %d\n", nModes);
-	logPrintf("phononSup = "); phononSup.print(globalLog, " %d ");
-	for(int iDir=0; iDir<3; iDir++)
-	{	kfoldSup[iDir] = kfold[iDir] / phononSup[iDir];
-		if(kfoldSup[iDir] * phononSup[iDir] != kfold[iDir])
-			die("kfold is not a multiple of phononSup.\n");
+		logPrintf("done. Read %lu symmetries.\n", sym.size());
 	}
 	
 	//Read cell map
-	ifs.open(wmcp.wannierPrefix + ".mlwfCellMap");
+	fname = wmcp.wannierPrefix + ".mlwfCellMap";
+	logPrintf("Reading '%s' ... ", fname.c_str()); logFlush();
+	ifs.open(fname); if(!ifs.is_open()) die("could not open file.\n");
 	string headerLine; getline(ifs, headerLine); //read and ignore header line
 	vector3<int> cm;
 	double x,y,z;
 	while(ifs >> cm[0] >> cm[1] >> cm[2] >> x >> y >> z)
 		cellMap.push_back(cm);
 	ifs.close();
+	logPrintf("done.\n");
 	
 	//Find number of wannier centers from Wannier band contrib file:
-	{	string fname = wmcp.wannierPrefix + ".mlwfBandContrib";
-		logPrintf("\nReading '%s' ... ", fname.c_str()); logFlush();
+	{	fname = wmcp.wannierPrefix + ".mlwfBandContrib";
+		logPrintf("Reading '%s' ... ", fname.c_str()); logFlush();
 		FILE* fp = fopen(fname.c_str(), "r");
-		if(!fp) die("could not open for reading.\n");
+		if(!fp) die("could not open file.\n");
 		nBands = 0; //number of Wannier centers
 		while(!feof(fp))
 		{	int nMin_b, nMax_b; double eMin_b, eMax_b;
@@ -191,16 +177,48 @@ WannierMC::WannierMC(const WannierMCParams& wmcp)
 	
 	//Read wannier hamiltonian
 	bool realOnly = (spinWeight==2);
-	string fname = wmcp.wannierPrefix + ".mlwfH";
+	fname = wmcp.wannierPrefix + ".mlwfH";
 	Hw = std::make_shared<DistributedMatrix>(fname, realOnly,
 		mpiGroup, nBands*nBands, cellMap, kfold, false);
 	
-	
 	if(wmcp.needPhonons)
-	{	//Read phonon cell map
-		string fname = wmcp.wannierPrefix + ".mlwfCellMapPh";
+	{	//Read relevant parameters from phonon.out:
+		fname = wmcp.phononPrefix + ".out";
+		logPrintf("\nReading '%s' ... ", fname.c_str()); logFlush();
+		ifs.open(fname); if(!ifs.is_open()) die("could not open file.\n");
+		nModes = 0;
+		while(!ifs.eof())
+		{	string line; getline(ifs, line);
+			if(line.find("phonon  \\") != string::npos)
+			{	//at start of phonon command print
+				string key;
+				while(key!="supercell" && (!ifs.eof()))
+					ifs >> key; //search for supercell keyword
+				ifs >> phononSup[0] >> phononSup[1] >> phononSup[2];
+				if(!ifs.good()) die("Failed to read phonon supercell dimensions.\n");
+			}
+			string cmdName; istringstream(line) >> cmdName;
+			if(cmdName == "ion")
+				nModes += 3; //3 modes per atom in unit cell
+			if(line.find("Unit cell calculation") != string::npos)
+				break; //don't need anything else after this from phonon.out
+		}
+		ifs.close();
+		if(!phononSup.length_squared()) die("Failed to read phonon supercell dimensions.\n");
+		logPrintf("done.\n"); logFlush();
+		logPrintf("nModes = %d\n", nModes);
+		logPrintf("phononSup = "); phononSup.print(globalLog, " %d ");
+		for(int iDir=0; iDir<3; iDir++)
+		{	kfoldSup[iDir] = kfold[iDir] / phononSup[iDir];
+			if(kfoldSup[iDir] * phononSup[iDir] != kfold[iDir])
+				die("kfold is not a multiple of phononSup.\n");
+		}
+		logPrintf("\n");
+		
+		//Read phonon cell map
+		fname = wmcp.wannierPrefix + ".mlwfCellMapPh";
 		logPrintf("Reading '%s' ... ", fname.c_str()); logFlush();
-		ifs.open(fname.c_str());
+		ifs.open(fname.c_str()); if(!ifs.is_open()) die("could not open file.\n");
 		getline(ifs, headerLine); //read and ignore header line
 		while(ifs >> cm[0] >> cm[1] >> cm[2] >> x >> y >> z)
 			phononCellMap.push_back(cm);

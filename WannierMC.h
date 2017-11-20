@@ -8,6 +8,7 @@ struct WannierMCParams
 {	string totalEprefix; //!< filename prefix for DFT outputs (default: Wannier/totalE)
 	string phononPrefix; //!< filename prefix for phonon outputs (default: Wannier/phonon)
 	string wannierPrefix; //!< filename prefix for wannier outputs (default: Wannier/wannier)
+	bool needSymmetries; //!< whether to read symmetries from .sym file from JDFTx (default: false)
 	bool needPhonons; //!< whether to initialize phonon-related quantities (default: false)
 	bool needLinewidths; //!< whether to initialize line-widths (default: false)
 	bool needVelocity; //!< whether to initialize velocity (momentum) matrix elements
@@ -76,6 +77,7 @@ public:
 	vector3<int> phononSup; //!< phonon supercell in original calculation
 	vector3<int> kfoldSup; //!< k-point folding of phonon supercell i.e. kfold / phononSup
 	vector3<bool> isTruncated; //!< whether each direction is truncated
+	std::vector<SpaceGroupOp> sym; //!< symmetries of DFT calculation
 	int nBands, spinWeight; //!< number of Wannier bands for the electrons and weight per spin channel
 	double mu, nElectrons, nValence; //!< chemical potential (if a metal), number of electrons per unit cell and number of valence bands (if insulator)
 	double eMinMain, eMaxMain; //!< energy range for main window (within which eigenvalues should be exact compared to DFT)

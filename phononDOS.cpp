@@ -42,7 +42,7 @@ int main(int argc, char** argv)
 	if(vL) logPrintf("vL = %lg\n", vL);
 	if(vT) logPrintf("vT = %lg\n", vT);
 	
-	//Initialize Wannier bandstructure:
+	//Initialize WannierMC:
 	WannierMCParams wmcp;
 	wmcp.needPhonons = true;
 	WannierMC wmc(wmcp);

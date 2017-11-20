@@ -75,7 +75,7 @@ inline bool eigsEqual(const diagMatrix& E1, const diagMatrix& E2, double Emin, d
 */
 
 int main(int argc, char** argv)
-{   InitParams ip =  WannierMC::initialize(argc, argv, "Calculate electron-phonon scattering contribution to electron linewidth.");
+{   InitParams ip =  WannierMC::initialize(argc, argv, "Electron-phonon scattering contribution to electron linewidth.");
 
 	//Read input file:
 	InputMap inputMap(ip.inputFilename);
@@ -86,24 +86,20 @@ int main(int argc, char** argv)
 	NkMult[0] = inputMap.get("NkxMult", NkMultAll); //override increase in x direction
 	NkMult[1] = inputMap.get("NkyMult", NkMultAll); //override increase in y direction
 	NkMult[2] = inputMap.get("NkzMult", NkMultAll); //override increase in z direction
-	vector3<> k0; //optional input to get linewidths at single k-point
-	k0[0] = inputMap.get("k0x", INFINITY);
-	k0[1] = inputMap.get("k0y", INFINITY);
-	k0[2] = inputMap.get("k0z", INFINITY);
+	
 	logPrintf("\nInputs after conversion to atomic units:\n");
 	logPrintf("T = %lg\n", T);
 	logPrintf("EconserveWidth = %lg\n", EconserveWidth);
 	logPrintf("NkMult = "); NkMult.print(globalLog, " %d ");
-	if(std::isfinite(k0.length_squared()))
-	{	logPrintf("k0 = ");
-		k0.print(globalLog, " %lf ");
-	}
-
-	/*
-	//Initialize Wannier bandstructure:
-	const int bunchSize = 32;
-	WannierMC wmc("Wannier/totalE", "Wannier/wannier", true);
 	
+	//Initialize WannierMC:
+	WannierMCParams wmcp;
+	wmcp.needSymmetries = true;
+	wmcp.needPhonons = true;
+	wmcp.needVelocity = true;
+	WannierMC wmc(wmcp);
+	
+	/*
 	vector3<int> NkIn = wmc.kfold, NkOut;
 	for(int j=0; j<3; j++)
 		NkOut[j] = NkIn[j] * (wmc.isTruncated[j] ? 1 : NkMult[j]); //multiply k-points in periodic directions
@@ -246,6 +242,8 @@ int main(int argc, char** argv)
 	Wannierizer(bs, ImSigma, kInArr).save("Wannier/wannier.mlwfImSigma_ePh");
 	Wannierizer(bs, ImSigmaP, kInArr).save("Wannier/wannier.mlwfImSigmaP_ePh");
 	*/
+	
+	wmc.free();
 	WannierMC::finalize();
 	return 0;
 }

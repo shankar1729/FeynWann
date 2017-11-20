@@ -47,7 +47,7 @@ int main(int argc, char** argv)
 	logPrintf("Tmax = %lg\n", Tmax);
 	logPrintf("Tstep = %lg\n", Tstep);
 
-	//Initialize Wannier bandstructure:
+	//Initialize WannierMC:
 	WannierMCParams wmcp; //default parametres suffice
 	WannierMC wmc(wmcp);
 	size_t nKpts = nOffsets * wmc.eCountPerOffset();  

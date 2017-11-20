@@ -107,7 +107,7 @@ int main(int argc, char** argv)
 	logPrintf("dmuCount = %d\n", dmuCount);
 	logPrintf("slabDir = %d\n", slabDir);
 	
-	//Initialize Wannier bandstructure:
+	//Initialize WannierMC:
 	WannierMCParams wmcp;
 	wmcp.needPhonons = true;
 	wmcp.needVelocity = true;
