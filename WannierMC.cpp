@@ -296,7 +296,8 @@ template<typename T> vector3<T> elemwiseProd(vector3<int> a, vector3<T> b)
 	}
 
 void WannierMC::eLoop(const vector3<>& k0, WannierMC::eProcessFunc eProcess, void* params)
-{	//Run Fourier transforms with this offset:
+{	static StopWatch watchCallback("WannierMC::eLoop:callback");
+	//Run Fourier transforms with this offset:
 	Hw->transform(k0);
 	if(wmcp.needVelocity)
 		Pw->transform(k0);
@@ -310,12 +311,15 @@ void WannierMC::eLoop(const vector3<>& k0, WannierMC::eProcessFunc eProcess, voi
 	StateE state;
 	PartialLoop3D(kfold, ik, ikStop, state.k, k0,
 		setState(ik, state);
+		watchCallback.start();
 		eProcess(state, params);
+		watchCallback.stop();
 	)
 }
 
 void WannierMC::phLoop(const vector3<>& q0, WannierMC::phProcessFunc phProcess, void* params)
-{	assert(wmcp.needPhonons);
+{	static StopWatch watchCallback("WannierMC::phLoop:callback");
+	assert(wmcp.needPhonons);
 	//Run Fourier transforms with this offset:
 	OsqW->transform(q0);
 	//Call phProcess for q-points on present process:
@@ -324,12 +328,16 @@ void WannierMC::phLoop(const vector3<>& q0, WannierMC::phProcessFunc phProcess, 
 	StatePh state;
 	PartialLoop3D(phononSup, iq, iqStop, state.q, q0,
 		setState(iq, state);
+		watchCallback.start();
 		phProcess(state, params);
+		watchCallback.stop();
 	)
 }
 
 void WannierMC::ePhLoop(const vector3<>& k01, const vector3<>& k02, WannierMC::ePhProcessFunc ePhProcess, void* params)
-{	static StopWatch watchBcast("WannierMC::ePhLoop:bcast"), watchRotations("WannierMC::ePhLoop:rotations");
+{	static StopWatch watchBcast("WannierMC::ePhLoop:bcast"); 
+	static StopWatch watchRotations("WannierMC::ePhLoop:rotations");
+	static StopWatch watchCallback("WannierMC::ePhLoop:callback");
 	assert(wmcp.needPhonons);
 	int prodKfold = Hw->nkTot;
 	int prodSup = OsqW->nkTot;
@@ -429,7 +437,9 @@ void WannierMC::ePhLoop(const vector3<>& k01, const vector3<>& k02, WannierMC::e
 								* (dagger(V1[ik1net]) * getMatrix(Mall.data(), nBands, nBands, iMode) * V2[ik2net]); //to E1 and E2 eigenbasis
 						watchRotations.stop();
 						//Invoke call-back function:
+						watchCallback.start();
 						ePhProcess(m, params);
+						watchCallback.stop();
 					}
 					ikPair++;
 				)
@@ -440,11 +450,13 @@ void WannierMC::ePhLoop(const vector3<>& k01, const vector3<>& k02, WannierMC::e
 
 
 void WannierMC::setState(int ik, WannierMC::StateE& state, matrix* Vptr)
-{	//Get and diagonalize Hamiltonian:
+{	static StopWatch watchRotations("WannierMC::setState:rotations");
+	//Get and diagonalize Hamiltonian:
 	matrix Vk, Hk = getMatrix(Hw->getResult(ik), nBands, nBands);
 	Hk.diagonalize(Vk, state.E);
 	for(double& E: state.E) E -= mu; //reference to Fermi level
 	if(Vptr) *Vptr = Vk;
+	watchRotations.start();
 	//Velcoity matrix, if needed:
 	if(wmcp.needVelocity)
 	{	state.vVec.resize(nBands);
@@ -465,6 +477,7 @@ void WannierMC::setState(int ik, WannierMC::StateE& state, matrix* Vptr)
 		for(int b=0; b<nBands; b++)
 			state.ImE[b] += exp(logImE_ePh[b]); //e-ph linewidth interpolated in logarithm
 	}
+	watchRotations.stop();
 }
 
 void WannierMC::bcastState(WannierMC::StateE& state, MPIUtil* mpiUtil, int root, matrix* Vptr)
