@@ -418,8 +418,8 @@ void WannierMC::ePhLoop(const vector3<>& k01, const vector3<>& k02, WannierMC::e
 						m.ph = &ph[iqIndex];
 						Mall = Mall * Vph[iqIndex]; //to phonon eigenbasis
 						//Identify associated electronic states:
-						int ik1net = calculateIndex(ik1sup + elemwiseProd(phononSup, ik1v), kfold);
-						int ik2net = calculateIndex(ik2sup + elemwiseProd(phononSup, ik2v), kfold);
+						int ik1net = calculateIndex(ik1sup + elemwiseProd(kfoldSup, ik1v), kfold);
+						int ik2net = calculateIndex(ik2sup + elemwiseProd(kfoldSup, ik2v), kfold);
 						m.e1 = &e1[ik1net];
 						m.e2 = &e2[ik2net];
 						//Extract matrices for each phonon mode:
