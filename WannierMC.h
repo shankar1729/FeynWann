@@ -9,6 +9,7 @@ struct WannierMCParams
 	string phononPrefix; //!< filename prefix for phonon outputs (default: Wannier/phonon)
 	string wannierPrefix; //!< filename prefix for wannier outputs (default: Wannier/wannier)
 	bool needSymmetries; //!< whether to read symmetries from .sym file from JDFTx (default: false)
+	bool needCellWeights; //!< whether to read mlwfCellWeights file (default: false)
 	bool needPhonons; //!< whether to initialize phonon-related quantities (default: false)
 	bool needLinewidths; //!< whether to initialize line-widths (default: false)
 	bool needVelocity; //!< whether to initialize velocity (momentum) matrix elements
@@ -32,6 +33,7 @@ public:
 	{	int ik; //!< index in mesh of dimensions kfold
 		vector3<> k; //!< wave-vector in recip lattice coords
 		diagMatrix E; //!< energy relative to Fermi level (WannierMC::mu)
+		matrix U; //!< rotation from Wannier to eiegen-basis
 		matrix v[3]; //!< velocity matrix elements in Cartesian coordinates, available if needVelocity = true
 		std::vector<vector3<>> vVec; //!< band velocities (diagonal part of v) in Cartesian coordinates, available if needVelocity = true
 		diagMatrix ImE; //!< linewidth, available if needLinewidths = true
@@ -42,6 +44,7 @@ public:
 	{	int iq; //!< index in mesh of dimensions phononSup
 		vector3<> q; //!< wave-vector in recip lattice coords
 		diagMatrix omega; //!< frequency
+		matrix U; //!< rotation from atom-displacement to eiegen-basis
 	};
 	
 	//! Electron-phonon matrix elements
@@ -87,18 +90,19 @@ public:
 	double eMinMain, eMaxMain; //!< energy range for main window (within which eigenvalues should be exact compared to DFT)
 	int nModes; //!< number of phonon modes (polarizations)
 	
-private:
 	//Electrons:
 	std::vector< vector3<int> > cellMap; //electron Wannier cell map
+	matrix cellWeights; //corresponding weights (nBands*nBands x nCells), available if needCellWeights = true
 	std::shared_ptr<DistributedMatrix> Hw, Pw; //Wannier hamiltonian and dipole matrix elements
 	std::shared_ptr<DistributedMatrix> ImSigma_eeW, ImSigma_ePhW; //linewidths in wannier basis
-	void setState(StateE& state, matrix* Vptr=0); //!< set requested properties for ik in state, optionally retrieving eigenvectors in Vptr
-	void bcastState(StateE& state, MPIUtil* mpiUtil, int root, matrix* Vptr=0); //!< broadcast specified state (and optionally eigenvectors) on specified MPI instance
+	void setState(StateE& state); //!< set requested properties for ik in state
+	void bcastState(StateE& state, MPIUtil* mpiUtil, int root); //!< broadcast specified state on specified MPI instance
 	
 	//Phonons:
 	std::vector< vector3<int> > phononCellMap; //cell map for phonon force matrix
 	std::shared_ptr<DistributedMatrix> OsqW; //phonon omega-squared matrix
-	void setState(StatePh& state, matrix* Vptr=0); //!< set requested properties for iq in state, optionally retrieving eigenvectors in Vptr
+	void setState(StatePh& state); //!< set requested properties for iq in state
+	void bcastState(StatePh& state, MPIUtil* mpiUtil, int root); //!< broadcast specified state on specified MPI instance
 	
 	//Electron-phonon interaction:
 	std::shared_ptr<DistributedMatrix> HePhW; //electron-phonon matrix elements in Wannier basis

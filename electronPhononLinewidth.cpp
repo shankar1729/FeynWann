@@ -2,61 +2,7 @@
 #include "InputMap.h"
 #include <core/Units.h>
 #include <core/LatticeUtils.h>
-
-/*
-class Wannierizer
-{	const BandStruct& bs; const std::vector<diagMatrix>& ImSigma; const std::vector<vector3<>>& kArr;
-public:
-	Wannierizer(const BandStruct& bs, const std::vector<diagMatrix>& ImSigma, const std::vector<vector3<>>& kArr)
-	: bs(bs), ImSigma(ImSigma), kArr(kArr) { }
-	
-	void save(string fname) const
-	{	//Calculate cell weights:
-		int nCells = wmc.cellMap.size();
-		std::vector<std::vector<int>> cellSets; cellSets.reserve(nCells); //cells grouped by translatinal equivalence
-		std::vector<vector3<>> cellSupArr; cellSupArr.reserve(nCells); //unique cells in supercell coordinates
-		PeriodicLookup<vector3<>> plook(cellSupArr, (~wmc.R)*wmc.R, nCells);
-		for(int iCell=0; iCell<nCells; iCell++)
-		{	vector3<> cellSup;
-			for(int j=0; j<3; j++)
-				cellSup[j] = wmc.cellMap[iCell][j] * (1./wmc.kfold[j]);
-			size_t setIndex = plook.find(cellSup);
-			if(setIndex == string::npos) //not yet found, create new set:
-			{	plook.addPoint(cellSets.size(), cellSup);
-				cellSupArr.push_back(cellSup);
-				cellSets.push_back(std::vector<int>(1,iCell));
-			}
-			else cellSets[setIndex].push_back(iCell);
-		}
-		assert(int(cellSets.size()) == wmc.kfold[0]*wmc.kfold[1]*wmc.kfold[2]);
-		diagMatrix cellWeights(nCells);
-		for(const std::vector<int>& cellSet: cellSets)
-			for(int iCell: cellSet)
-				cellWeights[iCell] = 1./(cellSet.size()*cellSets.size());
-		//Transform from Bloch to Wannier:
-		int qStart, qStop; TaskDivision(kArr.size(), mpiWorld).myRange(qStart, qStop);
-		std::vector<vector3<>> kArrMine(kArr.begin()+qStart, kArr.begin()+qStop);
-		auto ceArr = wmc.getElectronCache(kArrMine);
-		matrix ImSigmaRS(wmc.nBands*wmc.nBands, ceArr.size());
-		matrix phase(ceArr.size(), nCells);
-		for(int q=qStart; q<qStop; q++)
-		{	int dq = q - qStart;
-			std::shared_ptr<const BandStruct::CacheEntry> ce = ceArr[dq];
-			diagMatrix logImSigma_q(wmc.nBands);
-			for(int b=0; b<wmc.nBands; b++)
-				logImSigma_q[b] = log(ImSigma[q][b]);
-			matrix ImSigma_q = ce->evecs * logImSigma_q * dagger(ce->evecs);
-			ImSigma_q.reshape(wmc.nBands*wmc.nBands, 1);
-			ImSigmaRS.set(0,ImSigmaRS.nRows(), dq,dq+1, ImSigma_q);
-			phase.set(dq,dq+1, 0,nCells, dagger(ce->phase) * cellWeights);
-		}
-		matrix ImSigmaWannier = ceArr.size() ? ImSigmaRS * phase : zeroes(wmc.nBands*wmc.nBands, nCells);
-		ImSigmaWannier.allReduce(MPIUtil::ReduceSum);
-		if(mpiWorld->isHead())
-			ImSigmaWannier.dump(fname.c_str(), wmc.spinWeight==2);
-	}
-};
-*/
+#include <algorithm>
 
 template<typename T> T prod(const vector3<T>& v) { return v[0]*v[1]*v[2]; }
 
@@ -121,6 +67,47 @@ struct CollectEph
 	static void ePhProcess(const WannierMC::MatrixEph& mEph, void* params)
 	{	((CollectEph*)params)->process(mEph);
 	}
+	
+	//---- Wannierization ----
+	int cStart, cStop; //range of cells handled here
+	matrix mlwfImSigma, mlwfImSigmaP, phase;
+	
+	void wannierize(const WannierMC::StateE& state)
+	{	//Convert to log for the interpolation:
+		diagMatrix logImSigma(ImSigma[state.ik]); for(double& x: logImSigma) x = log(x);
+		diagMatrix logImSigmaP(ImSigmaP[state.ik]); for(double& x: logImSigmaP) x = log(x);
+		//Switch to Wannier basis:
+		matrix logImSigmaW = state.U * logImSigma * dagger(state.U);
+		matrix logImSigmaPW = state.U * logImSigmaP * dagger(state.U);
+		//Save as a column in a matrix containing all k:
+		int iCol = state.ik - wmc.Hw->ikStart;
+		int colLength = wmc.nBands * wmc.nBands;
+		eblas_copy(mlwfImSigma.data()+iCol*colLength, logImSigmaW.data(), colLength);
+		eblas_copy(mlwfImSigmaP.data()+iCol*colLength, logImSigmaPW.data(), colLength);
+		//Calculate corresponding phases for Fourier transform:
+		for(int c=cStart; c<cStop; c++)
+			phase.set(iCol, c-cStart, cis(-2*M_PI*dot(state.k, wmc.cellMap[c])));
+	}
+	static void eProcess(const WannierMC::StateE& state, void* params)
+	{	((CollectEph*)params)->wannierize(state);
+	}
+	
+	void dumpWannierized(matrix& m, string fname) const
+	{	m = m * phase; //Fourier transform
+		mpiGroup->allReduce(m.data(), m.nData(), MPIUtil::ReduceSum); //Collect results within groups
+		if(mpiGroup->isHead())
+		{	//expand to all cells version (with zeroes where unavailable currently)
+			matrix mEx = zeroes(m.nRows(), wmc.cellMap.size());
+			mEx.set(0,m.nRows(), cStart,cStop, m);
+			//Collect results between group heads
+			mpiGroupHead->allReduce(mEx.data(), mEx.nData(), MPIUtil::ReduceSum);
+			//Output from world head:
+			if(mpiGroupHead->isHead())
+			{	eblas_zmul(wmc.cellWeights.nData(), wmc.cellWeights.data(),1, mEx.data(),1); //Apply weight factors
+				mEx.dump(fname.c_str(), wmc.spinWeight==2); //Output
+			}
+		}
+	}
 };
 
 int main(int argc, char** argv)
@@ -144,6 +131,7 @@ int main(int argc, char** argv)
 	//Initialize WannierMC:
 	WannierMCParams wmcp;
 	wmcp.needSymmetries = true;
+	wmcp.needCellWeights = true;
 	wmcp.needPhonons = true;
 	wmcp.needVelocity = true;
 	WannierMC wmc(wmcp);
@@ -309,11 +297,23 @@ int main(int argc, char** argv)
 		logPrintf("done.\n");
 	}
 	
-	/*
-	//Wannierized output (saved in the input directory):
-	Wannierizer(bs, ImSigma, kInArr).save("Wannier/wannier.mlwfImSigma_ePh");
-	Wannierizer(bs, ImSigmaP, kInArr).save("Wannier/wannier.mlwfImSigmaP_ePh");
-	*/
+	//Wannierize output:
+	//--- divide output cells over MPI groups:
+	cEph.cStart = cEph.cStop = 0;
+	if(mpiGroup->isHead())
+		TaskDivision(wmc.cellMap.size(), mpiGroupHead).myRange(cEph.cStart, cEph.cStop);
+	mpiGroup->bcast(cEph.cStart);
+	mpiGroup->bcast(cEph.cStop);
+	int ncMine = std::max(1, cEph.cStop - cEph.cStart);
+	int nkMine = std::max(1, wmc.Hw->nk);
+	//--- Wannierize
+	cEph.mlwfImSigma = zeroes(wmc.nBands*wmc.nBands, nkMine);
+	cEph.mlwfImSigmaP = zeroes(wmc.nBands*wmc.nBands, nkMine);
+	cEph.phase = zeroes(nkMine, ncMine);
+	wmc.eLoop(vector3<>(), CollectEph::eProcess, &cEph);
+	cEph.phase *= (1./kmesh.size()); //inverse transform normalizing factor
+	cEph.dumpWannierized(cEph.mlwfImSigma, wmcp.wannierPrefix + ".mlwfImSigma_ePh");
+	cEph.dumpWannierized(cEph.mlwfImSigmaP, wmcp.wannierPrefix + ".mlwfImSigmaP_ePh");
 	
 	wmc.free();
 	WannierMC::finalize();
