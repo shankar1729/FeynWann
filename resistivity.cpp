@@ -18,14 +18,14 @@ struct ResistivityCollect
 	{	const int nBands = state.E.nRows();
 		for(int b=0; b<nBands; b++)
 		{	const double& E = state.E[b];
-			const vector3<>& v1 = state.vVec[b];
-			matrix3<> v1dotv1 = outer(v1, v1);
+			const vector3<>& v = state.vVec[b];
+			matrix3<> vdotv = outer(v, v);
 			for(unsigned iMu=0; iMu<dmu.size(); iMu++)
 			{	double dFdE = -1./(T*std::pow(2*cosh((E-dmu[iMu])/(2*T)),2));
-				Tcur[iMu] += v1dotv1*(-dFdE);
+				Tcur[iMu] += vdotv * (-dFdE);
 				g[iMu] += (-dFdE);
-				Gamma[iMu] += v1dotv1 * (2*state.ImSigmaP_ePh[b]);
-				tauInv[iMu] += (2*state.ImSigma_ePh[b]);
+				Gamma[iMu] += vdotv * ((-dFdE) * (2*state.ImSigmaP_ePh[b]));
+				tauInv[iMu] += (-dFdE) * (2*state.ImSigma_ePh[b]);
 			}
 		}
 	}
