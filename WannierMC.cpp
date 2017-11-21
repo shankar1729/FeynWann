@@ -106,6 +106,21 @@ WannierMC::WannierMC(const WannierMCParams& wmcp)
 		{	istringstream iss(line); string buf;
 			iss >> buf >> buf >> mu >> buf >> nElectrons;
 		}
+		else if(initDone && (line.find("# Ionic positions in") != string::npos))
+		{	atpos.clear(); //read last version (if many ionic steps in totalE.out)
+			atNames.clear();
+			bool cartesian = (line.find("cartesian") != string::npos);
+			while(true)
+			{	getline(ifs, line);
+				istringstream iss(line);
+				string cmd, atName; vector3<> x;
+				iss >> cmd >> atName >> x[0] >> x[1] >> x[2]; //rest (move flag etc. not needed)
+				if(cmd != "ion") break;
+				if(cartesian) x = inv(R) * x; //convert to lattice
+				atpos.push_back(x);
+				atNames.push_back(atName);
+			}
+		}
 		else if(line.find("nElectrons:") == 0) //nElectrons, nBands, nStates line
 		{	istringstream iss(line); string buf;
 			iss >> buf >> nElectrons >> buf >> nBandsDFT;
@@ -128,6 +143,10 @@ WannierMC::WannierMC(const WannierMCParams& wmcp)
 	logPrintf("isTruncated = "); isTruncated.print(globalLog, " %d ");
 	logPrintf("R:\n");
 	R.print(globalLog, " %lg ");
+	logPrintf("Atoms with fractional coordinates:\n");
+	for(unsigned i=0; i<atpos.size(); i++)
+		logPrintf("\t%2s %19.15lf %19.15lf %19.15lf\n",
+			atNames[i].c_str(), atpos[i][0], atpos[i][1], atpos[i][2]);
 	logPrintf("\n");
 	
 	//Read symmetries if required
@@ -142,6 +161,7 @@ WannierMC::WannierMC(const WannierMCParams& wmcp)
 			for(int i=0; i<3; i++) ifs >> op.a[i]; //translation
 			if(ifs.good()) sym.push_back(op);
 		}
+		ifs.close();
 		logPrintf("done. Read %lu symmetries.\n", sym.size());
 	}
 	
@@ -328,7 +348,8 @@ void WannierMC::eLoop(const vector3<>& k0, WannierMC::eProcessFunc eProcess, voi
 	int ikStop = ik + Hw->nk;
 	StateE state;
 	PartialLoop3D(kfold, ik, ikStop, state.k, k0,
-		setState(ik, state);
+		state.ik = ik;
+		setState(state);
 		watchCallback.start();
 		eProcess(state, params);
 		watchCallback.stop();
@@ -345,7 +366,8 @@ void WannierMC::phLoop(const vector3<>& q0, WannierMC::phProcessFunc phProcess, 
 	int iqStop = iq + OsqW->nk;
 	StatePh state;
 	PartialLoop3D(phononSup, iq, iqStop, state.q, q0,
-		setState(iq, state);
+		state.iq = iq;
+		setState(state);
 		watchCallback.start();
 		phProcess(state, params);
 		watchCallback.stop();
@@ -375,14 +397,17 @@ void WannierMC::ePhLoop(const vector3<>& k01, const vector3<>& k02, WannierMC::e
 			int ik = Hw->ikStart; \
 			int ikStop = ik + Hw->nk; \
 			PartialLoop3D(kfold, ik, ikStop, e##i[ik].k, k0##i, \
-				setState(ik, e##i[ik], &V##i[ik]); \
+				e##i[ik].ik = ik; \
+				setState(e##i[ik], &V##i[ik]); \
 			) \
 			/* Make available on all processes of group */ \
 			if(mpiGroup->nProcesses() > 1) \
 			{	watchBcast.start(); \
 				for(int whose=0; whose<mpiGroup->nProcesses(); whose++) \
 					for(int ik=Hw->ikStartProc[whose]; ik<Hw->ikStartProc[whose+1]; ik++) \
+					{	e##i[ik].ik = ik; \
 						bcastState(e##i[ik], mpiGroup, whose, &V##i[ik]); \
+					} \
 				watchBcast.stop(); \
 			} \
 		}
@@ -403,14 +428,16 @@ void WannierMC::ePhLoop(const vector3<>& k01, const vector3<>& k02, WannierMC::e
 		{	int iq = OsqW->ikStart;
 			int iqStop = iq + OsqW->nk;
 			PartialLoop3D(phononSup, iq, iqStop, ph[iq].q, q0,
-				setState(iq, ph[iq], &Vph[iq]);
+				ph[iq].iq = iq;
+				setState(ph[iq], &Vph[iq]);
 			)
 			//Make available on all processes of group:
 			if(mpiGroup->nProcesses() > 1)
 			{	watchBcast.start();
 				for(int whose=0; whose<mpiGroup->nProcesses(); whose++)
 					for(int iq=OsqW->ikStartProc[whose]; iq<OsqW->ikStartProc[whose+1]; iq++)
-					{	mpiGroup->bcast(&ph[iq].q[0], 3, whose);
+					{	ph[iq].iq = iq;
+						mpiGroup->bcast(&ph[iq].q[0], 3, whose);
 						bcast(ph[iq].omega, nModes, mpiGroup, whose);
 						bcast(Vph[iq], nModes, nModes, mpiGroup, whose);
 					}
@@ -467,10 +494,10 @@ void WannierMC::ePhLoop(const vector3<>& k01, const vector3<>& k02, WannierMC::e
 }
 
 
-void WannierMC::setState(int ik, WannierMC::StateE& state, matrix* Vptr)
+void WannierMC::setState(WannierMC::StateE& state, matrix* Vptr)
 {	static StopWatch watchRotations("WannierMC::setState:rotations");
 	//Get and diagonalize Hamiltonian:
-	matrix Vk, Hk = getMatrix(Hw->getResult(ik), nBands, nBands);
+	matrix Vk, Hk = getMatrix(Hw->getResult(state.ik), nBands, nBands);
 	Hk.diagonalize(Vk, state.E);
 	for(double& E: state.E) E -= mu; //reference to Fermi level
 	if(Vptr) *Vptr = Vk;
@@ -480,7 +507,7 @@ void WannierMC::setState(int ik, WannierMC::StateE& state, matrix* Vptr)
 	{	state.vVec.resize(nBands);
 		for(int iDir=0; iDir<3; iDir++)
 		{	state.v[iDir] = complex(0,1) //Since P was stored with i omitted (to make it real when possible)
-				* (dagger(Vk) * getMatrix(Pw->getResult(ik), nBands, nBands, iDir) * Vk);
+				* (dagger(Vk) * getMatrix(Pw->getResult(state.ik), nBands, nBands, iDir) * Vk);
 			//Extract diagonal parts for convenience:
 			for(int b=0; b<nBands; b++)
 				state.vVec[b][iDir] = state.v[iDir](b,b).real();
@@ -489,9 +516,9 @@ void WannierMC::setState(int ik, WannierMC::StateE& state, matrix* Vptr)
 	//Linewidths, if needed:
 	if(wmcp.needLinewidths)
 	{	//e-e linewidth:
-		state.ImE = diag(dagger(Vk) * getMatrix(ImSigma_eeW->getResult(ik), nBands, nBands) * Vk);
+		state.ImE = diag(dagger(Vk) * getMatrix(ImSigma_eeW->getResult(state.ik), nBands, nBands) * Vk);
 		//add e-ph linewidth:
-		diagMatrix logImE_ePh = diag(dagger(Vk) * getMatrix(ImSigma_ePhW->getResult(ik), nBands, nBands) * Vk);
+		diagMatrix logImE_ePh = diag(dagger(Vk) * getMatrix(ImSigma_ePhW->getResult(state.ik), nBands, nBands) * Vk);
 		for(int b=0; b<nBands; b++)
 			state.ImE[b] += exp(logImE_ePh[b]); //e-ph linewidth interpolated in logarithm
 	}
@@ -518,10 +545,10 @@ void WannierMC::bcastState(WannierMC::StateE& state, MPIUtil* mpiUtil, int root,
 }
 
 
-void WannierMC::setState(int iq, WannierMC::StatePh& state, matrix* Vptr)
+void WannierMC::setState(WannierMC::StatePh& state, matrix* Vptr)
 {	assert(wmcp.needPhonons);
 	//Get and diagonalize force matrix:
-	matrix Vq, Osqq = getMatrix(OsqW->getResult(iq), nModes, nModes);
+	matrix Vq, Osqq = getMatrix(OsqW->getResult(state.iq), nModes, nModes);
 	Osqq.diagonalize(Vq, state.omega);
 	for(double& omega: state.omega) omega = sqrt(std::max(0.,omega)); //convert to phonon frequency; discard imaginary
 	if(Vptr) *Vptr = Vq;

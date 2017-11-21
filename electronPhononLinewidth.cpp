@@ -1,14 +1,7 @@
-#include <core/matrix.h>
-#include <electronic/ColumnBundle.h>
-#include <electronic/Everything.h>
-#include <core/scalar.h>
-#include <core/Random.h>
-#include <core/string.h>
-#include <core/LatticeUtils.h>
-#include <commands/parser.h>
 #include "WannierMC.h"
 #include "InputMap.h"
 #include <core/Units.h>
+#include <core/LatticeUtils.h>
 
 /*
 class Wannierizer
@@ -63,16 +56,72 @@ public:
 			ImSigmaWannier.dump(fname.c_str(), wmc.spinWeight==2);
 	}
 };
-
-inline bool eigsEqual(const diagMatrix& E1, const diagMatrix& E2, double Emin, double Emax, double tol)
-{	if(E1.nRows() != E2.nRows()) return false;
-	for(int b=0; b<E1.nRows(); b++)
-	{	if(E1[b]>=Emin && E1[b]<=Emax && fabs(E1[b]-E2[b])>tol)
-			return false;
-	}
-	return true;
-}
 */
+
+template<typename T> T prod(const vector3<T>& v) { return v[0]*v[1]*v[2]; }
+
+struct CollectEph
+{	
+	const WannierMC& wmc;
+	const double T;
+	const double prefacImSigma;
+	const double EconserveExpFac, EconservePrefac; //energy conserving Gaussian exponential and pre-factor
+	std::vector<diagMatrix> ImSigma, ImSigmaP; //e-ph linewidth without and with momentum direction factors
+	std::vector<diagMatrix> E; //save electron energies on DFT mesh for later
+	double wOffsetCur; //weight factor of current offset (due to symmetry reduction)
+	
+	CollectEph(const WannierMC& wmc, double T, double EconserveWidth, const vector3<int>& NkMult)
+	: wmc(wmc), T(T),
+		prefacImSigma(0.5 * 2*M_PI/(prod(wmc.kfold)*prod(NkMult))), //Factor of 0.5 in ImSigma because of psi^2 -> n
+		EconserveExpFac(-0.5/std::pow(EconserveWidth,2)),
+		EconservePrefac(1./(sqrt(2.*M_PI)*EconserveWidth)),
+		ImSigma(prod(wmc.kfold), diagMatrix(wmc.nBands)),
+		ImSigmaP(prod(wmc.kfold), diagMatrix(wmc.nBands)),
+		E(prod(wmc.kfold))
+	{
+	}
+	
+	void process(const WannierMC::MatrixEph& mEph)
+	{	const WannierMC::StateE& e1 = *(mEph.e1);
+		const WannierMC::StateE& e2 = *(mEph.e2);
+		const WannierMC::StatePh& ph = *(mEph.ph);
+		const int nBands = e1.E.nRows();
+		const int nModes = ph.omega.nRows();
+		//Loop over electronic state 1:
+		for(int b1=0; b1<nBands; b1++)
+		{	const double& E1 = e1.E[b1];
+			const vector3<>& v1 = e1.vVec[b1];
+			//Loop over electronic state 2:
+			for(int b2=0; b2<nBands; b2++)
+			{	const double& E2 = e2.E[b2];
+				const vector3<>& v2 = e2.vVec[b2];
+				double f2 = wmc.nValence
+					? (b2<wmc.nValence ? 1. : 0.) //insulator/semiconductor
+					: 1./(exp(E2/T)+1); //metal (energies referenced to mu)
+				double cosThetaScatter = dot(v1, v2) / sqrt(std::max(1e-16, v1.length_squared() * v2.length_squared()));
+				//Loop over phonon modes:
+				for(int alpha=0; alpha<nModes; alpha++)
+				{	const double& omegaPh = ph.omega[alpha];
+					double nPh = 1./(exp(omegaPh/T) - 1.);
+					for(int ae=-1; ae<=+1; ae+=2)
+					{	double EconserveExponent = EconserveExpFac * std::pow((E2-E1 - ae*omegaPh),2);
+						if(EconserveExponent < -15.) continue; //the exponential below will be negligible
+						double delta = EconservePrefac * exp(EconserveExponent);
+						double occFactors = (nPh+0.5 - ae*(0.5-f2));
+						double ImSigmaContrib = wOffsetCur * prefacImSigma * occFactors * delta * mEph.M[alpha](b2,b1).norm();
+						ImSigma[e1.ik][b1] += ImSigmaContrib;
+						ImSigmaP[e1.ik][b1] += ImSigmaContrib * (1.-cosThetaScatter);
+					}
+				}
+			}
+		}
+		//Save E1 for final output:
+		if(!E[e1.ik].size()) E[e1.ik] = e1.E;
+	}
+	static void ePhProcess(const WannierMC::MatrixEph& mEph, void* params)
+	{	((CollectEph*)params)->process(mEph);
+	}
+};
 
 int main(int argc, char** argv)
 {   InitParams ip =  WannierMC::initialize(argc, argv, "Electron-phonon scattering contribution to electron linewidth.");
@@ -99,146 +148,169 @@ int main(int argc, char** argv)
 	wmcp.needVelocity = true;
 	WannierMC wmc(wmcp);
 	
-	/*
-	vector3<int> NkIn = wmc.kfold, NkOut;
-	for(int j=0; j<3; j++)
-		NkOut[j] = NkIn[j] * (wmc.isTruncated[j] ? 1 : NkMult[j]); //multiply k-points in periodic directions
-	logPrintf("NkFine = "); NkOut.print(globalLog, " %d ");
-	vector3<> kInOff; //extra offset for k-point meshes (none for mesh mode)
-	if(std::isfinite(k0.length_squared()))
-	{	NkIn = vector3<int>(1,1,1);
-		kInOff = k0; //offset k-meshes by supplied special point
+	//Check NkMult compatibility with symmetries:
+	for(const SpaceGroupOp& op: wmc.sym)
+	{	//Similar to Symmetries::checkFFTbox in JDFTx
+		matrix3<int> mMesh = Diag(NkMult) * op.rot;
+		for(int i=0; i<3; i++)
+			for(int j=0; j<3; j++)
+				if(mMesh(i,j) % NkMult[j] == 0)
+					mMesh(i,j) /= NkMult[j];
+				else
+				{	logPrintf("NkMult not commensurate with symmetry matrix:\n");
+					op.rot.print(globalLog, " %2d ");
+					op.a.print(globalLog, " %lg ");
+					die("NkMult not commensurate with symmetries.\n");
+				}
 	}
-	vector3<int> strideIn(NkIn[1]*NkIn[2], NkIn[2], 1);
-	int prodNkIn = NkIn[0]*NkIn[1]*NkIn[2];
 	
-	if(ip.dryRun)
-	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
-		finalizeSystem();
-		return 0;
-	}
-	logPrintf("\n");
-
-	//Calculate lifetimes for states in input k-point mesh:
-	int nBands = wmc.nBands;
-	std::vector<vector3<>> kInArr(prodNkIn), kInReduced;
-	std::vector<int> iReduced(prodNkIn, -1);
-	{	vector3<> ikIn;
-		std::vector<diagMatrix> Earr(prodNkIn);
-		for(ikIn[0]=0; ikIn[0]<NkIn[0]; ikIn[0]++)
-		for(ikIn[1]=0; ikIn[1]<NkIn[1]; ikIn[1]++)
-		for(ikIn[2]=0; ikIn[2]<NkIn[2]; ikIn[2]++)
-		{	int iIn = dot(ikIn,strideIn);
-			vector3<>& kIn = kInArr[iIn];
-			for(int j=0; j<3; j++)
-				kIn[j] = kInOff[j] + ikIn[j] * (1./NkIn[j]); //use Gamma-centered mesh for in
-			Earr[iIn] = wmc.getStates(kIn);
+	//Construct NkMult mesh:
+	std::vector<vector3<>> kMult;
+	vector3<> kOffset;
+	for(int iDir=0; iDir<3; iDir++)
+		kOffset[iDir] = wmc.isTruncated[iDir] ? 0. : 0.5; //offset from Gamma in periodic directions
+	matrix3<> NkMultInv = inv(Diag(vector3<>(NkMult)));
+	vector3<int> ikMult;
+	for(ikMult[0]=0; ikMult[0]<NkMult[0]; ikMult[0]++)
+	for(ikMult[1]=0; ikMult[1]<NkMult[1]; ikMult[1]++)
+	for(ikMult[2]=0; ikMult[2]<NkMult[2]; ikMult[2]++)
+		kMult.push_back(NkMultInv * (ikMult + kOffset));
+	
+	//Reduce under symmetries (simplified version of Symmetries::reduceKmesh from JDFTx):
+	std::vector<vector3<>> k02; //array of k2-mesh offsets
+	std::vector<double> wk02; //corresponding weights
+	//--- Compile list of inversions to check:
+	std::vector<int> invertList;
+	invertList.push_back(+1);
+	invertList.push_back(-1);
+	for(const SpaceGroupOp& op: wmc.sym)
+		if(op.rot==matrix3<int>(-1,-1,-1))
+		{	invertList.resize(1); //inversion explicitly found in symmetry list, so remove from invertList
+			break;
 		}
-		//Reduce k-points based on degeneracies:
-		for(int i1=0; i1<prodNkIn; i1++)
-			if(iReduced[i1]<0)
-			{	iReduced[i1] = kInReduced.size();
-				for(int i2=i1+1; i2<prodNkIn; i2++)
-					if(eigsEqual(Earr[i1], Earr[i2], wmc.eMinMain, wmc.eMaxMain, 1e-5))
-						iReduced[i2] = kInReduced.size();
-				kInReduced.push_back(kInArr[i1]);
-			}
-		if(prodNkIn>1) logPrintf("Symmetry degeneracies reduced %d input k-points to %lu\n", prodNkIn, kInReduced.size());
-	}
-	std::vector<vector3<>> kOutArr(NkOut[0] * NkOut[1] * NkOut[2]);
-	vector3<int> strideOut(NkOut[1]*NkOut[2], NkOut[2], 1);
-	{	vector3<> ikOut;
-		for(ikOut[0]=0; ikOut[0]<NkOut[0]; ikOut[0]++)
-		for(ikOut[1]=0; ikOut[1]<NkOut[1]; ikOut[1]++)
-		for(ikOut[2]=0; ikOut[2]<NkOut[2]; ikOut[2]++)
-		{	vector3<>& kOut = kOutArr[dot(ikOut,strideOut)];
-			for(int j=0; j<3; j++)
-				kOut[j] = kInOff[j] + (ikOut[j] + (wmc.isTruncated[j] ? 0.0 : 0.5)) / NkOut[j]; //use Gamma-offset mesh for out (offset along periodic directions alone)
-		}
-	}
-	double prefacImSigma = 0.5 * 2*M_PI/(kOutArr.size()); //Note factor of 0.5 between decay rate and ImSigma due to squaring of wavefunctions to probability
-	double EconserveExpFac = -0.5/std::pow(EconserveWidth,2), EconservePrefac = 1./(sqrt(2.*M_PI)*EconserveWidth); //energy conserving Lorentzian parameters
-	//Loop over blocks of one dimension of second k-point
-	int ikOutStart = (kOutArr.size() * mpiWorld->iProcess()) / mpiWorld->nProcesses();
-	int ikOutStop = (kOutArr.size() * (mpiWorld->iProcess()+1)) / mpiWorld->nProcesses();
-	int nkOutBlocks = ceildiv(ikOutStop-ikOutStart, bunchSize);
-	int nkOutInterval = std::max(1, int(round(nkOutBlocks/50.))); //interval for reporting progress
-	std::vector<diagMatrix> ImSigmaReduced(kInReduced.size(), diagMatrix(nBands, 0.)); //imaginary part of self-energy on reduced mesh
-	std::vector<diagMatrix> ImSigmaReducedP(kInReduced.size(), diagMatrix(nBands, 0.)); //momentum-relaxation version of above
-	vector3<int> ikOut;
-	for(int ikOut=ikOutStart; ikOut<ikOutStop; ikOut+=bunchSize)
-	{	//Print progress:
-		int ikOutBlocks = (ikOut-ikOutStart)/bunchSize+1;
-		if(ikOutBlocks % nkOutInterval == 0)
-		{	logPrintf("Working on ikOutBlock = %d of %d\n", ikOutBlocks, nkOutBlocks);
-			logFlush();
-		}
-		//Initialize k2 array:
-		int bunchSizeCur = std::min(bunchSize, ikOutStop-ikOut);
-		std::vector<vector3<>> kOutCur(kOutArr.begin()+ikOut, kOutArr.begin()+ikOut+bunchSizeCur);
-		std::vector< std::vector<matrix> > gePhArr(bunchSizeCur);
-		//Loop over first k-point (irreducible wedge):
-		for(size_t q=0; q<kInReduced.size(); q++)
-		{	const vector3<>& kIn = kInReduced[q];
-			const diagMatrix& Ein = wmc.getStates(kIn);
-			std::vector<vector3<>> vIn = wmc.getVelocity(kIn);
-			wmc.setPhononMatElemArray(kIn, kOutCur, gePhArr.data());
-			for(int ik2=0; ik2<bunchSizeCur; ik2++)
-			{	const vector3<>& kOut = kOutCur[ik2];
-				diagMatrix Eout = wmc.getStates(kOut);
-				std::vector<vector3<>> vOut = wmc.getVelocity(kOut);
-				diagMatrix omegaPh = wmc.getPhononModes(kIn - kOut);
-				const std::vector<matrix>& gePh = gePhArr[ik2];
-				
-				for(int bIn=0; bIn<Ein.nRows(); bIn++)
-				{	for(int bOut=0; bOut<Eout.nRows(); bOut++)
-					{	double fOut = wmc.nValence
-							? (bOut<wmc.nValence ? 1. : 0.) //insulator/semiconductor
-							: 1./(exp(Eout[bOut]/T)+1); //metal (energies referenced to mu)
-						double cosThetaScatter = dot(vIn[bIn], vOut[bOut])
-							/ sqrt(std::max(1e-16, vIn[bIn].length_squared() * vOut[bOut].length_squared()));
-						for(int alpha=0; alpha<omegaPh.nRows(); alpha ++)
-						{	double nPh = 1./(exp(omegaPh[alpha]/T) - 1.);
-							for(int ae=-1; ae<=+1; ae+=2)
-							{	double EconserveExponent = EconserveExpFac * std::pow((Eout[bOut]-Ein[bIn] - ae*omegaPh[alpha]),2);
-								if(EconserveExponent < -15.) continue;
-								double delta = EconservePrefac * exp(EconserveExponent);
-								double occFactors = (nPh+0.5 - ae*(0.5-fOut));
-								double ImSigmaContrib = prefacImSigma * occFactors * delta * gePh[alpha](bOut,bIn).norm();
-								ImSigmaReduced[q][bIn] += ImSigmaContrib;
-								ImSigmaReducedP[q][bIn] += ImSigmaContrib * (1.-cosThetaScatter);
-							}
+	matrix3<> G = 2*M_PI*inv(wmc.R), GGT = G*(~G);
+	matrix3<> kfoldInv = inv(Diag(vector3<>(wmc.kfold)));
+	if(mpiWorld->isHead())
+	{	//compile kpoint map:
+		PeriodicLookup<vector3<>> plook(kMult, GGT);
+		std::vector<bool> kDone(kMult.size(), false);
+		for(size_t iSrc=0; iSrc<kMult.size(); iSrc++)
+			if(!kDone[iSrc])
+			{	double w = 0.; //weight of current point
+				for(int invert: invertList)
+					for(const SpaceGroupOp& op: wmc.sym)
+					{	size_t iDest = plook.find(invert * kMult[iSrc] * op.rot);
+						if(iDest!=string::npos && (!kDone[iDest]))
+						{	kDone[iDest] = true; //iDest in iSrc's orbit
+							w += 1.; //increase weight of iSrc
 						}
 					}
-				}
+				//add corresponding offset:
+				k02.push_back(kfoldInv * kMult[iSrc]);
+				wk02.push_back(w);
 			}
+	}
+	//--- make available on all processes
+	int nOffsets = k02.size();
+	mpiWorld->bcast(nOffsets);
+	k02.resize(nOffsets);
+	wk02.resize(nOffsets);
+	mpiWorld->bcast(&k02[0][0], 3*nOffsets);
+	mpiWorld->bcast(wk02.data(), nOffsets);
+	logPrintf("%lu offsets in NkMult mesh reduced to %d under symmetries.\n", kMult.size(), nOffsets);
+	
+	logPrintf("\n");
+	if(ip.dryRun)
+	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
+		wmc.free();
+		WannierMC::finalize();
+		return 0;
+	}
+	
+	//Initialize sampling parameters:
+	int oStart=0, oStop=0;
+	if(mpiGroup->isHead())
+		TaskDivision(nOffsets, mpiGroupHead).myRange(oStart, oStop);
+	mpiGroup->bcast(oStart);
+	mpiGroup->bcast(oStop);
+	int noMine = oStop-oStart; //number of offsets handled by current group
+	int oInterval = std::max(1, int(round(noMine/50.))); //interval for reporting progress
+	
+	//Collect results for each offset
+	logPrintf("Collecting ImSigma_ePh: "); logFlush();
+	CollectEph cEph(wmc, T, EconserveWidth, NkMult);
+	for(int o=oStart; o<oStop; o++)
+	{	//Process with a random offset:
+		cEph.wOffsetCur = wk02[o];
+		wmc.ePhLoop(vector3<>(), k02[o], CollectEph::ePhProcess, &cEph);
+		//Print progress:
+		if((o-oStart+1)%oInterval==0) { logPrintf("%d%% ", int(round((o-oStart+1)*100./noMine))); logFlush(); }
+	}
+	logPrintf("done.\n"); logFlush();
+	
+	//Collect results from all processes:
+	for(diagMatrix& d: cEph.ImSigma) d.allReduce(MPIUtil::ReduceSum);
+	for(diagMatrix& d: cEph.ImSigmaP) d.allReduce(MPIUtil::ReduceSum);
+	
+	//Symmetrize:
+	std::vector<vector3<>> kmesh; //DFT k-point mesh
+	vector3<int> ikmesh;
+	for(ikmesh[0]=0; ikmesh[0]<wmc.kfold[0]; ikmesh[0]++)
+	for(ikmesh[1]=0; ikmesh[1]<wmc.kfold[1]; ikmesh[1]++)
+	for(ikmesh[2]=0; ikmesh[2]<wmc.kfold[2]; ikmesh[2]++)
+		kmesh.push_back(kfoldInv * ikmesh);
+	PeriodicLookup<vector3<>> plook(kmesh, GGT);
+	std::vector<bool> kDone(kmesh.size(), false);
+	std::vector<int> iReduced;
+	for(size_t i0=0; i0<kmesh.size(); i0++)
+		if(!kDone[i0])
+		{	//Find orbit of this k-points under symmetries:
+			std::vector<int> iEquiv;
+			diagMatrix ImSigmaMean(wmc.nBands), ImSigmaMeanP(wmc.nBands);
+			for(int invert: invertList)
+				for(const SpaceGroupOp& op: wmc.sym)
+				{	size_t i = plook.find(invert * kmesh[i0] * op.rot);
+					if(i!=string::npos && (!kDone[i]))
+					{	kDone[i] = true; //i will be covered in i0's orbit
+						iEquiv.push_back(i);
+						ImSigmaMean += cEph.ImSigma[i];
+						ImSigmaMeanP += cEph.ImSigmaP[i];
+					}
+				}
+			//Symmetrize within orbit:
+			ImSigmaMean *= (1./iEquiv.size());
+			ImSigmaMeanP *= (1./iEquiv.size());
+			for(int i: iEquiv)
+			{	cEph.ImSigma[i] = ImSigmaMean;
+				cEph.ImSigmaP[i] = ImSigmaMeanP;
+			}
+			iReduced.push_back(i0);
 		}
+	logPrintf("Symmetrized ImSigma for %lu k-points in mesh in %lu orbits.\n", kmesh.size(), iReduced.size());
+	
+	//Collect electronic energies on all processes:
+	for(int i: iReduced)
+	{	int root = cEph.E[i].size() ? mpiGroup->iProcess() : mpiGroup->nProcesses(); //my process ID or N, depending on whether I have E[i]
+		mpiGroup->allReduce(root, MPIUtil::ReduceMin); //lowest process number which has E[i] available
+		cEph.E[i].resize(wmc.nBands);
+		mpiGroup->bcast(cEph.E[i].data(), wmc.nBands, root);
 	}
 	
-	//Collect results and map to full mesh:
-	for(size_t q=0; q<kInReduced.size(); q++)
-	{	ImSigmaReduced[q].allReduce(MPIUtil::ReduceSum);
-		ImSigmaReducedP[q].allReduce(MPIUtil::ReduceSum);
-	}
-	std::vector<diagMatrix> ImSigma(prodNkIn), ImSigmaP(prodNkIn); //imaginary part of self-energy (and momentum-relaxation version) on full input mesh
-	for(int q=0; q<prodNkIn; q++)
-	{	ImSigma[q] = ImSigmaReduced[iReduced[q]];
-		ImSigmaP[q] = ImSigmaReducedP[iReduced[q]];
-	}
-	
+	//Output linewidths and energies in text file:
 	if(mpiWorld->isHead())
-	{	if(prodNkIn==1) logPrintf("\n#E ImSigma_ePh ImSigmaP_ePh\n");
-		FILE* fp = (prodNkIn==1) ? globalLog : fopen("ImSigma_ePh.dat", "w"); //for special k-point mode, only report in log file
-		for(size_t q=0; q<kInReduced.size(); q++)
-		{	diagMatrix E = wmc.getStates(kInReduced[q]);
-			for(int b=0; b<nBands; b++)
-				fprintf(fp, "%+19.12le %19.12le %19.12le\n", E[b], ImSigmaReduced[q][b], ImSigmaReducedP[q][b]);
-		}
-		if(prodNkIn>1) fclose(fp);
+	{	const char* fname = "ImSigma_ePh.dat";
+		logPrintf("Dumping '%s' ... ", fname); fflush(globalLog);
+		FILE* fp = fopen(fname, "w");
+		for(int i: iReduced)
+			for(int b=0; b<wmc.nBands; b++)
+				fprintf(fp, "%+19.12le %19.12le %19.12le\n",
+					cEph.E[i][b], cEph.ImSigma[i][b], cEph.ImSigmaP[i][b]);
+		fclose(fp);
+		logPrintf("done.\n");
 	}
-	if(prodNkIn==1) { logPrintf("\n"); finalizeSystem(); return 0; } //Skip wannierization for special k-point mode
 	
-	//Wannierized output:
+	/*
+	//Wannierized output (saved in the input directory):
 	Wannierizer(bs, ImSigma, kInArr).save("Wannier/wannier.mlwfImSigma_ePh");
 	Wannierizer(bs, ImSigmaP, kInArr).save("Wannier/wannier.mlwfImSigmaP_ePh");
 	*/

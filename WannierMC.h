@@ -29,7 +29,8 @@ public:
 	
 	//! Electronic properties at a given wave vector
 	struct StateE
-	{	vector3<> k; //!< wave-vector in recip lattice coords
+	{	int ik; //!< index in mesh of dimensions kfold
+		vector3<> k; //!< wave-vector in recip lattice coords
 		diagMatrix E; //!< energy relative to Fermi level (WannierMC::mu)
 		matrix v[3]; //!< velocity matrix elements in Cartesian coordinates, available if needVelocity = true
 		std::vector<vector3<>> vVec; //!< band velocities (diagonal part of v) in Cartesian coordinates, available if needVelocity = true
@@ -38,7 +39,8 @@ public:
 	
 	//! Phonon properties at a given wave vector
 	struct StatePh
-	{	vector3<> q; //!< wave-vector in recip lattice coords
+	{	int iq; //!< index in mesh of dimensions phononSup
+		vector3<> q; //!< wave-vector in recip lattice coords
 		diagMatrix omega; //!< frequency
 	};
 	
@@ -72,6 +74,8 @@ public:
 	
 	//DFT / Wannier / Phonon parameters:
 	matrix3<> R; //!< lattice vectors
+	std::vector<vector3<>> atpos; //!< atomic positions
+	std::vector<string> atNames; //!< atom species names
 	double Omega; //!< unit cell volume
 	vector3<int> kfold; //!< k-point folding in original calculation
 	vector3<int> phononSup; //!< phonon supercell in original calculation
@@ -88,13 +92,13 @@ private:
 	std::vector< vector3<int> > cellMap; //electron Wannier cell map
 	std::shared_ptr<DistributedMatrix> Hw, Pw; //Wannier hamiltonian and dipole matrix elements
 	std::shared_ptr<DistributedMatrix> ImSigma_eeW, ImSigma_ePhW; //linewidths in wannier basis
-	void setState(int ik, StateE& state, matrix* Vptr=0); //!< set requested properties for ik in state, optionally retrieving eigenvectors in Vptr
+	void setState(StateE& state, matrix* Vptr=0); //!< set requested properties for ik in state, optionally retrieving eigenvectors in Vptr
 	void bcastState(StateE& state, MPIUtil* mpiUtil, int root, matrix* Vptr=0); //!< broadcast specified state (and optionally eigenvectors) on specified MPI instance
 	
 	//Phonons:
 	std::vector< vector3<int> > phononCellMap; //cell map for phonon force matrix
 	std::shared_ptr<DistributedMatrix> OsqW; //phonon omega-squared matrix
-	void setState(int iq, StatePh& state, matrix* Vptr=0); //!< set requested properties for iq in state, optionally retrieving eigenvectors in Vptr
+	void setState(StatePh& state, matrix* Vptr=0); //!< set requested properties for iq in state, optionally retrieving eigenvectors in Vptr
 	
 	//Electron-phonon interaction:
 	std::shared_ptr<DistributedMatrix> HePhW; //electron-phonon matrix elements in Wannier basis
