@@ -6,7 +6,8 @@
 
 WannierMCParams::WannierMCParams()
 : totalEprefix("Wannier/totalE"), phononPrefix("Wannier/phonon"), wannierPrefix("Wannier/wannier"),
-needSymmetries(false), needCellWeights(false), needPhonons(false), needLinewidths(false), needVelocity(false)
+needSymmetries(false), needCellWeights(false), needPhonons(false), needVelocity(false),
+needLinewidthTot(false), needLinewidth_ee(false), needLinewidth_ePh(false), needLinewidthP_ePh(false)
 {
 }
 
@@ -273,14 +274,22 @@ WannierMC::WannierMC(const WannierMCParams& wmcp)
 	}
 	
 	//Linewidths:
-	if(wmcp.needLinewidths)
+	if(wmcp.needLinewidth_ee || wmcp.needLinewidthTot)
 	{	//e-e:
 		fname = wmcp.wannierPrefix + ".mlwfImSigma_ee";
 		ImSigma_eeW = std::make_shared<DistributedMatrix>(fname, realOnly,
 			mpiGroup, nBands*nBands, cellMap, kfold, false);
-		//e-e:
+	}
+	if(wmcp.needLinewidth_ePh || wmcp.needLinewidthTot)
+	{	//e-ph:
 		fname = wmcp.wannierPrefix + ".mlwfImSigma_ePh";
 		ImSigma_ePhW = std::make_shared<DistributedMatrix>(fname, realOnly,
+			mpiGroup, nBands*nBands, cellMap, kfold, false);
+	}
+	if(wmcp.needLinewidthP_ePh)
+	{	//e-ph:
+		fname = wmcp.wannierPrefix + ".mlwfImSigmaP_ePh";
+		ImSigmaP_ePhW = std::make_shared<DistributedMatrix>(fname, realOnly,
 			mpiGroup, nBands*nBands, cellMap, kfold, false);
 	}
 	
@@ -348,10 +357,9 @@ void WannierMC::eLoop(const vector3<>& k0, WannierMC::eProcessFunc eProcess, voi
 	Hw->transform(k0);
 	if(wmcp.needVelocity)
 		Pw->transform(k0);
-	if(wmcp.needLinewidths)
-	{	ImSigma_eeW->transform(k0);
-		ImSigma_ePhW->transform(k0);
-	}
+	if(wmcp.needLinewidth_ee || wmcp.needLinewidthTot) ImSigma_eeW->transform(k0);
+	if(wmcp.needLinewidth_ePh || wmcp.needLinewidthTot) ImSigma_ePhW->transform(k0);
+	if(wmcp.needLinewidthP_ePh) ImSigmaP_ePhW->transform(k0);
 	//Call eProcess for k-points on present process:
 	int ik = Hw->ikStart;
 	int ikStop = ik + Hw->nk;
@@ -398,10 +406,9 @@ void WannierMC::ePhLoop(const vector3<>& k01, const vector3<>& k02, WannierMC::e
 		{	Hw->transform(k0##i); \
 			if(wmcp.needVelocity) \
 				Pw->transform(k0##i); \
-			if(wmcp.needLinewidths) \
-			{	ImSigma_eeW->transform(k0##i); \
-				ImSigma_ePhW->transform(k0##i); \
-			} \
+			if(wmcp.needLinewidth_ee || wmcp.needLinewidthTot) ImSigma_eeW->transform(k0##i); \
+			if(wmcp.needLinewidth_ePh || wmcp.needLinewidthTot) ImSigma_ePhW->transform(k0##i); \
+			if(wmcp.needLinewidthP_ePh) ImSigmaP_ePhW->transform(k0##i); \
 			int ik = Hw->ikStart; \
 			int ikStop = ik + Hw->nk; \
 			PartialLoop3D(kfold, ik, ikStop, e##i[ik].k, k0##i, \
@@ -517,15 +524,21 @@ void WannierMC::setState(WannierMC::StateE& state)
 				state.vVec[b][iDir] = state.v[iDir](b,b).real();
 		}
 	}
-	//Linewidths, if needed:
-	if(wmcp.needLinewidths)
-	{	//e-e linewidth:
-		state.ImE = diag(dagger(state.U) * getMatrix(ImSigma_eeW->getResult(state.ik), nBands, nBands) * state.U);
-		//add e-ph linewidth:
-		diagMatrix logImE_ePh = diag(dagger(state.U) * getMatrix(ImSigma_ePhW->getResult(state.ik), nBands, nBands) * state.U);
-		for(int b=0; b<nBands; b++)
-			state.ImE[b] += exp(logImE_ePh[b]); //e-ph linewidth interpolated in logarithm
+	//Linewidths, ad needed:
+	if(wmcp.needLinewidth_ee || wmcp.needLinewidthTot)
+		state.ImSigma_ee = diag(dagger(state.U) * getMatrix(ImSigma_eeW->getResult(state.ik), nBands, nBands) * state.U);
+	if(wmcp.needLinewidth_ePh || wmcp.needLinewidthTot)
+	{	state.ImSigma_ePh = diag(dagger(state.U) * getMatrix(ImSigma_ePhW->getResult(state.ik), nBands, nBands) * state.U);
+		for(double& x: state.ImSigma_ePh) x = exp(x); //e-ph linewidth interpolated in logarithm
 	}
+	if(wmcp.needLinewidthP_ePh)
+	{	state.ImSigmaP_ePh = diag(dagger(state.U) * getMatrix(ImSigmaP_ePhW->getResult(state.ik), nBands, nBands) * state.U);
+		for(double& x: state.ImSigmaP_ePh) x = exp(x); //e-ph linewidth interpolated in logarithm
+	}
+	if(wmcp.needLinewidthTot)
+		state.ImSigma = state.ImSigma_ee + state.ImSigma_ePh;
+	if(!wmcp.needLinewidth_ee) state.ImSigma_ee.clear();
+	if(!wmcp.needLinewidth_ePh) state.ImSigma_ePh.clear();
 	watchRotations.stop();
 }
 
@@ -543,8 +556,10 @@ void WannierMC::bcastState(WannierMC::StateE& state, MPIUtil* mpiUtil, int root)
 		mpiUtil->bcast(&state.vVec[0][0], 3*nBands, root);
 	}
 	//Linewidths, if needed:
-	if(wmcp.needLinewidths)
-		bcast(state.ImE, nBands, mpiUtil, root);
+	if(wmcp.needLinewidthTot) bcast(state.ImSigma, nBands, mpiUtil, root);
+	if(wmcp.needLinewidth_ee) bcast(state.ImSigma_ee, nBands, mpiUtil, root);
+	if(wmcp.needLinewidth_ePh) bcast(state.ImSigma_ePh, nBands, mpiUtil, root);
+	if(wmcp.needLinewidthP_ePh) bcast(state.ImSigmaP_ePh, nBands, mpiUtil, root);
 }
 
 

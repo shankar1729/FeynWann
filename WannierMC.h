@@ -11,8 +11,11 @@ struct WannierMCParams
 	bool needSymmetries; //!< whether to read symmetries from .sym file from JDFTx (default: false)
 	bool needCellWeights; //!< whether to read mlwfCellWeights file (default: false)
 	bool needPhonons; //!< whether to initialize phonon-related quantities (default: false)
-	bool needLinewidths; //!< whether to initialize line-widths (default: false)
 	bool needVelocity; //!< whether to initialize velocity (momentum) matrix elements
+	bool needLinewidthTot; //!< whether to provide total line-width (default: false)
+	bool needLinewidth_ee; //!< whether to provide e-e line-width (default: false)
+	bool needLinewidth_ePh; //!< whether to provide e-ph line-width (default: false)
+	bool needLinewidthP_ePh; //!< whether to provide momentum-relaxation e-ph line-width (default: false)
 	WannierMCParams();
 };
 
@@ -36,7 +39,10 @@ public:
 		matrix U; //!< rotation from Wannier to eiegen-basis
 		matrix v[3]; //!< velocity matrix elements in Cartesian coordinates, available if needVelocity = true
 		std::vector<vector3<>> vVec; //!< band velocities (diagonal part of v) in Cartesian coordinates, available if needVelocity = true
-		diagMatrix ImE; //!< linewidth, available if needLinewidths = true
+		diagMatrix ImSigma; //!< total linewidth, available if needLinewidthTot = true
+		diagMatrix ImSigma_ee; //!< e-e linewidth, available if needLinewidth_ee = true
+		diagMatrix ImSigma_ePh; //!< e-ph linewidth, available if needLinewidth_ePh = true
+		diagMatrix ImSigmaP_ePh; //!< e-ph momentum-relaxation linewidth, available if needLinewidthP_ePh = true
 	};
 	
 	//! Phonon properties at a given wave vector
@@ -94,7 +100,7 @@ public:
 	std::vector< vector3<int> > cellMap; //electron Wannier cell map
 	matrix cellWeights; //corresponding weights (nBands*nBands x nCells), available if needCellWeights = true
 	std::shared_ptr<DistributedMatrix> Hw, Pw; //Wannier hamiltonian and dipole matrix elements
-	std::shared_ptr<DistributedMatrix> ImSigma_eeW, ImSigma_ePhW; //linewidths in wannier basis
+	std::shared_ptr<DistributedMatrix> ImSigma_eeW, ImSigma_ePhW, ImSigmaP_ePhW; //linewidths in wannier basis
 	void setState(StateE& state); //!< set requested properties for ik in state
 	void bcastState(StateE& state, MPIUtil* mpiUtil, int root); //!< broadcast specified state on specified MPI instance
 	
