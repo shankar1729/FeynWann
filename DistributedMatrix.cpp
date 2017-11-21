@@ -47,9 +47,13 @@ DistributedMatrix::DistributedMatrix(string fname, bool realOnly, const MPIUtil*
 	
 	//Make ikStart for all processes available:
 	ikStartProc.resize(mpiUtil->nProcesses()+1);
-	ikStartProc[mpiUtil->iProcess()] = ikStart;
+	ikStartProc[0] = 0;
+	ikStartProc[mpiUtil->iProcess()+1] = ikStart + nk;
 	for(int jProc=0; jProc<mpiUtil->nProcesses(); jProc++)
-		mpiUtil->bcast(ikStartProc[jProc], jProc);
+	{	if(!nk && mpiUtil->iProcess()==jProc)
+			ikStart = ikStartProc[jProc+1] = ikStartProc[jProc]; //because FFTW doesn't set the ikStart if nk=0
+		mpiUtil->bcast(ikStartProc[jProc+1], jProc);
+	}
 	ikStartProc[mpiUtil->nProcesses()] = nkTot;
 	assert(ikStartProc[mpiUtil->iProcess()+1] == ikStart+nk);
 	
