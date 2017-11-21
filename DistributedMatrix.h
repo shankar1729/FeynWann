@@ -44,7 +44,7 @@ private:
 inline int calculateIndex(const vector3<int>& iv, const vector3<int>& S)
 {	int i = 0;
 	for(int iDir=0; iDir<3; iDir++)
-	{	if(iDir) i *= S[iDir-1];
+	{	if(iDir) i *= S[iDir];
 		i += positiveRemainder(iv[iDir], S[iDir]);
 	}
 	return i;

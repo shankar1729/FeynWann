@@ -27,6 +27,22 @@ struct CollectEph
 	{
 	}
 	
+	//---- Max group velocity calculation for NkMult hint ----
+	vector3<> dEdkMax; //w.r.t k in reciprocal lattice coordinates
+	void vgMaxCollect(const WannierMC::StateE& state)
+	{	matrix3<> G = (2*M_PI)*inv(wmc.R);
+		for(int b=0; b<wmc.nBands; b++)
+			if(fabs(state.E[b]) < 5*eV) //only consider states in medium proximity to Fermi level
+			{	vector3<> dEdk = G * state.vVec[b]; //w.r.t k in reciprocal lattice coordinates
+				for(int iDir=0; iDir<3; iDir++)
+					dEdkMax[iDir] = std::max(dEdkMax[iDir], fabs(dEdk[iDir]));
+			}
+	}
+	static void vgMaxProcess(const WannierMC::StateE& state, void* params)
+	{	((CollectEph*)params)->vgMaxCollect(state);
+	}
+	
+	//---- Main e-ph scattering linewidth kernel ----
 	void process(const WannierMC::MatrixEph& mEph)
 	{	const WannierMC::StateE& e1 = *(mEph.e1);
 		const WannierMC::StateE& e2 = *(mEph.e2);
@@ -156,13 +172,31 @@ int main(int argc, char** argv)
 	std::vector<vector3<>> kMult;
 	vector3<> kOffset;
 	for(int iDir=0; iDir<3; iDir++)
-		kOffset[iDir] = wmc.isTruncated[iDir] ? 0. : 0.5; //offset from Gamma in periodic directions
+	{	kOffset[iDir] = wmc.isTruncated[iDir] ? 0. : 0.5; //offset from Gamma in periodic directions
+		if(wmc.isTruncated[iDir] && NkMult[iDir]!=1)
+		{	logPrintf("Setting NkMult = 1 along truncated direction %d.\n", iDir+1);
+			NkMult[iDir] = 1; //no multiplication in truncated directions
+		}
+	}
 	matrix3<> NkMultInv = inv(Diag(vector3<>(NkMult)));
 	vector3<int> ikMult;
 	for(ikMult[0]=0; ikMult[0]<NkMult[0]; ikMult[0]++)
 	for(ikMult[1]=0; ikMult[1]<NkMult[1]; ikMult[1]++)
 	for(ikMult[2]=0; ikMult[2]<NkMult[2]; ikMult[2]++)
 		kMult.push_back(NkMultInv * (ikMult + kOffset));
+	
+	//Initialize collect helper class:
+	CollectEph cEph(wmc, T, EconserveWidth, NkMult);
+	//Estimate minimum NkMult:
+	wmc.eLoop(vector3<>(), CollectEph::vgMaxProcess, &cEph);
+	mpiGroup->allReduce(&cEph.dEdkMax[0], 3, MPIUtil::ReduceMax);
+	vector3<int> NkMultMin;
+	for(int iDir=0; iDir<3; iDir++)
+	{	double dkMax = EconserveWidth / cEph.dEdkMax[iDir]; //max dk in recip coords such that dE within EconserveWidth
+		NkMultMin[iDir] = ceil(1./(wmc.kfold[iDir]*dkMax)); //multiplication factor that will keep dk of mesh smaller than that
+	}
+	logPrintf("For dE ~ EconserveWidth, NkMult ~ ");
+	NkMultMin.print(globalLog, " %d ");
 	
 	//Reduce under symmetries (simplified version of Symmetries::reduceKmesh from JDFTx):
 	std::vector<vector3<>> k02; //array of k2-mesh offsets
@@ -226,7 +260,6 @@ int main(int argc, char** argv)
 	
 	//Collect results for each offset
 	logPrintf("Collecting ImSigma_ePh: "); logFlush();
-	CollectEph cEph(wmc, T, EconserveWidth, NkMult);
 	for(int o=oStart; o<oStop; o++)
 	{	//Process with a random offset:
 		cEph.wOffsetCur = wk02[o];
