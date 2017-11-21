@@ -301,6 +301,7 @@ void WannierMC::free()
 	Pw = 0;
 	ImSigma_eeW = 0;
 	ImSigma_ePhW = 0;
+	ImSigmaP_ePhW = 0;
 	OsqW = 0;
 	HePhW = 0;
 }

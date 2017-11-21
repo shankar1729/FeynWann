@@ -6,55 +6,31 @@
 struct ResistivityCollect
 {	std::vector<double> dmu; //doping levels
 	double T; //temperature
-	double EconserveExpFac, EconservePrefac; //energy conserving Gaussian exponential and prefactor
 	std::vector<double> g, tauInv; //density of states and scattering time
 	std::vector<matrix3<>> Tcur, Gamma; //above with velocity matrices multiplied
 
 	ResistivityCollect(const std::vector<double>& dmu, double T, double EconserveWidth) : dmu(dmu), T(T),
-		EconserveExpFac(-0.5/std::pow(EconserveWidth,2)), EconservePrefac(1./(sqrt(2*M_PI)*EconserveWidth)), //energy conserving Gaussian parameters
 		g(dmu.size()), tauInv(dmu.size()), Tcur(dmu.size()), Gamma(dmu.size())
 	{
 	}
 	
-	void collect(const WannierMC::MatrixEph& m)
-	{	const WannierMC::StateE& e1 = *(m.e1);
-		const WannierMC::StateE& e2 = *(m.e2);
-		const WannierMC::StatePh& ph = *(m.ph);
-		const int nBands = e1.E.nRows();
-		const int nModes = ph.omega.nRows();
-		//Loop over electron 1:
-		for(int b1=0; b1<nBands; b1++)
-		{	const double& E1 = e1.E[b1];
-			const vector3<>& v1 = e1.vVec[b1];
+	void collect(const WannierMC::StateE& state)
+	{	const int nBands = state.E.nRows();
+		for(int b=0; b<nBands; b++)
+		{	const double& E = state.E[b];
+			const vector3<>& v1 = state.vVec[b];
 			matrix3<> v1dotv1 = outer(v1, v1);
 			for(unsigned iMu=0; iMu<dmu.size(); iMu++)
-			{	double dFdE1 = -1./(T*std::pow(2*cosh((E1-dmu[iMu])/(2*T)),2));
-				Tcur[iMu] += v1dotv1*(-dFdE1);
-				g[iMu] += (-dFdE1);
-				for(int b2=0; b2<nBands; b2++)
-				{	const double& E2 = e2.E[b2];
-					const vector3<>& v2 = e2.vVec[b2];
-					matrix3<> v1dotv2 = outer(v1, v2);
-					double f2 = 1./(exp((E2-dmu[iMu])/T)+1);
-					for(int alpha=0; alpha<nModes; alpha++)
-					{	double nPh = 1./(exp(ph.omega[alpha]/T) - 1.);
-						double gePhSq = m.M[alpha](b2,b1).norm();
-						for(int ae=-1; ae<=+1; ae+=2) //absorb or emit phonon
-						{	double deltaExp = EconserveExpFac * std::pow(E2 - E1 - ae*ph.omega[alpha],2);
-							if(deltaExp < -15.) continue; //delta will be negligible
-							double delta = EconservePrefac * exp(deltaExp);
-							double occFactors = (-dFdE1) * (nPh+0.5 - ae*(0.5-f2));
-							Gamma[iMu] += (v1dotv1 -  v1dotv2) * (occFactors * delta * gePhSq);
-							tauInv[iMu] += occFactors * delta * gePhSq;
-						}
-					}
-				}
+			{	double dFdE = -1./(T*std::pow(2*cosh((E-dmu[iMu])/(2*T)),2));
+				Tcur[iMu] += v1dotv1*(-dFdE);
+				g[iMu] += (-dFdE);
+				Gamma[iMu] += v1dotv1 * (2*state.ImSigmaP_ePh[b]);
+				tauInv[iMu] += (2*state.ImSigma_ePh[b]);
 			}
 		}
 	}
-	
-	static void ePhProcess(const WannierMC::MatrixEph& m, void* params)
-	{	((ResistivityCollect*)params)->collect(m);
+	static void eProcess(const WannierMC::StateE& state, void* params)
+	{	((ResistivityCollect*)params)->collect(state);
 	}
 };
 
@@ -109,8 +85,9 @@ int main(int argc, char** argv)
 	
 	//Initialize WannierMC:
 	WannierMCParams wmcp;
-	wmcp.needPhonons = true;
 	wmcp.needVelocity = true;
+	wmcp.needLinewidth_ePh = true;
+	wmcp.needLinewidthP_ePh = true;
 	WannierMC wmc(wmcp);
 	
 	//dmu array:
@@ -132,8 +109,8 @@ int main(int argc, char** argv)
 	
 	//Initialize sampling parameters:
 	int nOffsetsPerBlock = ceildiv(nOffsets, nBlocks);
-	size_t nKpairsPerBlock = wmc.ePhCountPerOffset() * nOffsetsPerBlock;
-	logPrintf("Effectively sampled nKpairs: %lu\n", nKpairsPerBlock * nBlocks);
+	size_t nKptsPerBlock = wmc.eCountPerOffset() * nOffsetsPerBlock;
+	logPrintf("Effectively sampled nKpts: %lu\n", nKptsPerBlock * nBlocks);
 	int oStart = 0, oStop = 0;
 	if(mpiGroup->isHead())
 		TaskDivision(nOffsetsPerBlock, mpiGroupHead).myRange(oStart, oStop);
@@ -151,8 +128,7 @@ int main(int argc, char** argv)
 	logPrintf("\n");
 	
 	//Compute resistivity:
-	double prefacT = wmc.spinWeight*1./nKpairsPerBlock;
-	double prefacGamma = wmc.spinWeight*(2*M_PI)/nKpairsPerBlock;
+	double prefacDOS = wmc.spinWeight*(1./nKptsPerBlock);
 	#define DeclareArray2D(type, name) std::vector<std::vector<type>> name(dmuCount, std::vector<type>(nBlocks))
 	DeclareArray2D(matrix3<>, Tarr); DeclareArray2D(matrix3<>, GammaArr); DeclareArray2D(matrix3<>, rhoArr);
 	DeclareArray2D(double, rhoBarArr); DeclareArray2D(double, tauArr); DeclareArray2D(double, tauDrudeArr);
@@ -163,10 +139,9 @@ int main(int argc, char** argv)
 		ResistivityCollect rc(dmu, T, EconserveWidth);
 		for(int o=0; o<noMine; o++)
 		{	Random::seed(block*nOffsetsPerBlock+o+oStart); //to make results independent of MPI division
-			//Process with a random offset pair:
-			vector3<> k01 = wmc.randomVector(mpiGroup); //must be constant across group
-			vector3<> k02 = wmc.randomVector(mpiGroup); //must be constant across group
-			wmc.ePhLoop(k01, k02, ResistivityCollect::ePhProcess, &rc);
+			//Process with a random offset:
+			vector3<> k0 = wmc.randomVector(mpiGroup); //must be constant across group
+			wmc.eLoop(k0, ResistivityCollect::eProcess, &rc);
 			//Print progress:
 			if((o+1)%oInterval==0) { logPrintf("%d%% ", int(round((o+1)*100./noMine))); logFlush(); }
 		}
@@ -178,10 +153,10 @@ int main(int argc, char** argv)
 			mpiWorld->allReduce(rc.g[iMu], MPIUtil::ReduceSum);
 			mpiWorld->allReduce(rc.tauInv[iMu], MPIUtil::ReduceSum);
 			//Apply normalizing factors:
-			rc.Tcur[iMu] *= prefacT;
-			rc.g[iMu] *= prefacT;
-			rc.Gamma[iMu] *= prefacGamma; rc.Gamma[iMu] = 0.5*(rc.Gamma[iMu] + (~rc.Gamma[iMu])); //symmetrize
-			rc.tauInv[iMu] *= prefacGamma;
+			rc.Tcur[iMu] *= prefacDOS;
+			rc.g[iMu] *= prefacDOS;
+			rc.Gamma[iMu] *= prefacDOS; rc.Gamma[iMu] = 0.5*(rc.Gamma[iMu] + (~rc.Gamma[iMu])); //symmetrize
+			rc.tauInv[iMu] *= prefacDOS;
 			slabConstrain(rc.Tcur[iMu], slabDir); //eliminate out-of-plane components if necessary
 			slabConstrain(rc.Gamma[iMu], slabDir); //eliminate out-of-plane components if necessary
 			//Store relevant quantities:
