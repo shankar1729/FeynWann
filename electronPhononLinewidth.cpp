@@ -114,7 +114,8 @@ struct CollectEph
 		if(mpiGroup->isHead())
 		{	//expand to all cells version (with zeroes where unavailable currently)
 			matrix mEx = zeroes(m.nRows(), wmc.cellMap.size());
-			mEx.set(0,m.nRows(), cStart,cStop, m);
+			if(cStop>cStart)
+				mEx.set(0,m.nRows(), cStart,cStop, m);
 			//Collect results between group heads
 			mpiGroupHead->allReduce(mEx.data(), mEx.nData(), MPIUtil::ReduceSum);
 			//Output from world head:
