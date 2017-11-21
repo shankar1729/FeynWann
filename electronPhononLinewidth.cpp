@@ -126,6 +126,34 @@ struct CollectEph
 	}
 };
 
+
+//Report ImSigma for N states closes to Fermi level
+class FermiImSigmaReport
+{	const size_t N;
+	std::multimap<double, std::pair<double,double>> cache;
+public:
+	FermiImSigmaReport(size_t N) : N(N) {}
+	
+	void addState(double E, double ImSigma)
+	{	auto entry = std::make_pair(fabs(E), std::make_pair(E, ImSigma));
+		if(cache.size() < N)
+			cache.insert(entry);
+		else
+		{	if(entry.first < cache.rbegin()->first)
+			{	//current one better than worst entry in cache
+				cache.erase(--cache.end()); //remove worst entry
+				cache.insert(entry); //add currnet one
+			}
+		}
+	}
+	
+	void report() const
+	{	for(auto entry: cache)
+			logPrintf("\t%+9.6lf %14.12lf\n", entry.second.first, entry.second.second);
+	}
+};
+
+
 int main(int argc, char** argv)
 {   InitParams ip =  WannierMC::initialize(argc, argv, "Electron-phonon scattering contribution to electron linewidth.");
 
@@ -171,12 +199,14 @@ int main(int argc, char** argv)
 	//Construct NkMult mesh:
 	std::vector<vector3<>> kMult;
 	vector3<> kOffset;
+	vector3<int> NkFine;
 	for(int iDir=0; iDir<3; iDir++)
 	{	kOffset[iDir] = wmc.isTruncated[iDir] ? 0. : 0.5; //offset from Gamma in periodic directions
 		if(wmc.isTruncated[iDir] && NkMult[iDir]!=1)
 		{	logPrintf("Setting NkMult = 1 along truncated direction %d.\n", iDir+1);
 			NkMult[iDir] = 1; //no multiplication in truncated directions
 		}
+		NkFine[iDir] = wmc.kfold[iDir] * NkMult[iDir];
 	}
 	matrix3<> NkMultInv = inv(Diag(vector3<>(NkMult)));
 	vector3<int> ikMult;
@@ -184,6 +214,8 @@ int main(int argc, char** argv)
 	for(ikMult[1]=0; ikMult[1]<NkMult[1]; ikMult[1]++)
 	for(ikMult[2]=0; ikMult[2]<NkMult[2]; ikMult[2]++)
 		kMult.push_back(NkMultInv * (ikMult + kOffset));
+	logPrintf("Effective interpolated k-mesh dimensions: ");
+	NkFine.print(globalLog, " %d ");
 	
 	//Initialize collect helper class:
 	CollectEph cEph(wmc, T, EconserveWidth, NkMult);
@@ -195,7 +227,7 @@ int main(int argc, char** argv)
 	{	double dkMax = EconserveWidth / cEph.dEdkMax[iDir]; //max dk in recip coords such that dE within EconserveWidth
 		NkMultMin[iDir] = ceil(1./(wmc.kfold[iDir]*dkMax)); //multiplication factor that will keep dk of mesh smaller than that
 	}
-	logPrintf("For dE ~ EconserveWidth, NkMult ~ ");
+	logPrintf("\nFor dE ~ EconserveWidth, NkMult ~ ");
 	NkMultMin.print(globalLog, " %d ");
 	
 	//Reduce under symmetries (simplified version of Symmetries::reduceKmesh from JDFTx):
@@ -239,7 +271,7 @@ int main(int argc, char** argv)
 	wk02.resize(nOffsets);
 	mpiWorld->bcast(&k02[0][0], 3*nOffsets);
 	mpiWorld->bcast(wk02.data(), nOffsets);
-	logPrintf("%lu offsets in NkMult mesh reduced to %d under symmetries.\n", kMult.size(), nOffsets);
+	logPrintf("\n%lu offsets in NkMult mesh reduced to %d under symmetries.\n", kMult.size(), nOffsets);
 	
 	logPrintf("\n");
 	if(ip.dryRun)
@@ -319,15 +351,21 @@ int main(int argc, char** argv)
 	
 	//Output linewidths and energies in text file:
 	if(mpiWorld->isHead())
-	{	const char* fname = "ImSigma_ePh.dat";
+	{	FermiImSigmaReport fr(10);
+		const char* fname = "ImSigma_ePh.dat";
 		logPrintf("Dumping '%s' ... ", fname); fflush(globalLog);
 		FILE* fp = fopen(fname, "w");
 		for(int i: iReduced)
 			for(int b=0; b<wmc.nBands; b++)
-				fprintf(fp, "%+19.12le %19.12le %19.12le\n",
+			{	fprintf(fp, "%+19.12le %19.12le %19.12le\n",
 					cEph.E[i][b], cEph.ImSigma[i][b], cEph.ImSigmaP[i][b]);
+				fr.addState(cEph.E[i][b], cEph.ImSigma[i][b]);
+			}
 		fclose(fp);
 		logPrintf("done.\n");
+		logPrintf("\nEnergy and ImSigma [Eh] for few states closest to Fermi level:\n");
+		fr.report();
+		logPrintf("HINT: check convergence of above numbers with NkMult.\n\n");
 	}
 	
 	//Wannierize output:
