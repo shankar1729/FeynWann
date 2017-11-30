@@ -6,11 +6,11 @@
 struct ResistivityCollect
 {	std::vector<double> dmu; //doping levels
 	double T; //temperature
-	std::vector<double> g, tauInv; //density of states and scattering time
-	std::vector<matrix3<>> Tcur, Gamma; //above with velocity matrices multiplied
+	std::vector<double> g, vSq, tau; //density of states, |v|^2 and e-ph life time
+	std::vector<matrix3<>> vvTau; //scattering time * velocity outer product
 
 	ResistivityCollect(const std::vector<double>& dmu, double T, double EconserveWidth) : dmu(dmu), T(T),
-		g(dmu.size()), tauInv(dmu.size()), Tcur(dmu.size()), Gamma(dmu.size())
+		g(dmu.size()), vSq(dmu.size()), tau(dmu.size()), vvTau(dmu.size())
 	{
 	}
 	
@@ -22,10 +22,10 @@ struct ResistivityCollect
 			matrix3<> vdotv = outer(v, v);
 			for(unsigned iMu=0; iMu<dmu.size(); iMu++)
 			{	double dFdE = -1./(T*std::pow(2*cosh((E-dmu[iMu])/(2*T)),2));
-				Tcur[iMu] += vdotv * (-dFdE);
 				g[iMu] += (-dFdE);
-				Gamma[iMu] += vdotv * ((-dFdE) * (2*state.ImSigmaP_ePh[b]));
-				tauInv[iMu] += (-dFdE) * (2*state.ImSigma_ePh[b]);
+				vSq[iMu] += (-dFdE) * v.length_squared();
+				tau[iMu] += (-dFdE) / (2*state.ImSigma_ePh[b]);
+				vvTau[iMu] += ((-dFdE) / (2*state.ImSigmaP_ePh[b])) * vdotv;
 			}
 		}
 	}
@@ -130,7 +130,7 @@ int main(int argc, char** argv)
 	//Compute resistivity:
 	double prefacDOS = wmc.spinWeight*(1./nKptsPerBlock);
 	#define DeclareArray2D(type, name) std::vector<std::vector<type>> name(dmuCount, std::vector<type>(nBlocks))
-	DeclareArray2D(matrix3<>, Tarr); DeclareArray2D(matrix3<>, GammaArr); DeclareArray2D(matrix3<>, rhoArr);
+	DeclareArray2D(matrix3<>, rhoArr);
 	DeclareArray2D(double, rhoBarArr); DeclareArray2D(double, tauArr); DeclareArray2D(double, tauDrudeArr);
 	DeclareArray2D(double, vFarr); DeclareArray2D(double, gArr); 
 	#undef DeclareArray2D
@@ -148,39 +148,30 @@ int main(int argc, char** argv)
 		logPrintf("done.\n"); logFlush();
 		for(int iMu=0; iMu<dmuCount; iMu++)
 		{	//Accumulate between processes:
-			mpiWorld->allReduce(&rc.Tcur[iMu](0,0), 3*3, MPIUtil::ReduceSum);
-			mpiWorld->allReduce(&rc.Gamma[iMu](0,0), 3*3, MPIUtil::ReduceSum);
 			mpiWorld->allReduce(rc.g[iMu], MPIUtil::ReduceSum);
-			mpiWorld->allReduce(rc.tauInv[iMu], MPIUtil::ReduceSum);
+			mpiWorld->allReduce(rc.vSq[iMu], MPIUtil::ReduceSum);
+			mpiWorld->allReduce(rc.tau[iMu], MPIUtil::ReduceSum);
+			mpiWorld->allReduce(&rc.vvTau[iMu](0,0), 3*3, MPIUtil::ReduceSum);
 			//Apply normalizing factors:
-			rc.Tcur[iMu] *= prefacDOS;
 			rc.g[iMu] *= prefacDOS;
-			rc.Gamma[iMu] *= prefacDOS; rc.Gamma[iMu] = 0.5*(rc.Gamma[iMu] + (~rc.Gamma[iMu])); //symmetrize
-			rc.tauInv[iMu] *= prefacDOS;
-			slabConstrain(rc.Tcur[iMu], slabDir); //eliminate out-of-plane components if necessary
-			slabConstrain(rc.Gamma[iMu], slabDir); //eliminate out-of-plane components if necessary
+			rc.vSq[iMu] *= prefacDOS;
+			rc.tau[iMu] *= prefacDOS;
+			rc.vvTau[iMu] *= prefacDOS; rc.vvTau[iMu] = 0.5*(rc.vvTau[iMu] + (~rc.vvTau[iMu])); //symmetrize
+			slabConstrain(rc.vvTau[iMu], slabDir); //eliminate out-of-plane components if necessary
 			//Store relevant quantities:
-			Tarr[iMu][block] = rc.Tcur[iMu];
-			GammaArr[iMu][block] = rc.Gamma[iMu];
-			rhoArr[iMu][block] = Omega * (inv(rc.Tcur[iMu]) * rc.Gamma[iMu] * inv(rc.Tcur[iMu]));
-			rhoBarArr[iMu][block] = trace(rhoArr[iMu][block], slabDir) / (slabDir>=0 ? 2. : 3.);
-			tauArr[iMu][block] = rc.g[iMu] / rc.tauInv[iMu];
-			tauDrudeArr[iMu][block] = trace(rc.Tcur[iMu], slabDir) / trace(rc.Gamma[iMu], slabDir);
-			vFarr[iMu][block] = sqrt(trace(rc.Tcur[iMu], slabDir)/rc.g[iMu]);
-			gArr[iMu][block] = rc.g[iMu];
-			//Fix slab direction values physically:
+			rhoArr[iMu][block] = Omega * inv(rc.vvTau[iMu]);
 			if(slabDir>=0.)
-			{	Tarr[iMu][block](slabDir,slabDir) = 0.;
-				GammaArr[iMu][block](slabDir,slabDir) = 0.;
 				rhoArr[iMu][block](slabDir,slabDir) = INFINITY;
-			}
+			rhoBarArr[iMu][block] = trace(rhoArr[iMu][block], slabDir) / (slabDir>=0 ? 2. : 3.);
+			tauArr[iMu][block] = rc.tau[iMu] / rc.g[iMu];
+			tauDrudeArr[iMu][block] = trace(rc.vvTau[iMu], slabDir) / rc.vSq[iMu];
+			vFarr[iMu][block] = sqrt(rc.vSq[iMu] / rc.g[iMu]);
+			gArr[iMu][block] = rc.g[iMu];
 		}
 	}
 	
 	for(int iMu=0; iMu<dmuCount; iMu++)
 	{	logPrintf("\nResults for dmu = %lg eV:\n", dmu[iMu]/eV);
-		reportResult(Tarr[iMu], "T", 1, "");
-		reportResult(GammaArr[iMu], "Gamma", 1, "");
 		reportResult(rhoArr[iMu], rhoName, rhoUnit, rhoUnitName);
 		reportResult(rhoBarArr[iMu], rhoName, rhoUnit, rhoUnitName);
 		reportResult(tauDrudeArr[iMu], "tauDrude", fs, "fs");
