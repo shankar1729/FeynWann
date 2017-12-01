@@ -7,9 +7,19 @@
 WannierMCParams::WannierMCParams()
 : totalEprefix("Wannier/totalE"), phononPrefix("Wannier/phonon"), wannierPrefix("Wannier/wannier"),
 needSymmetries(false), needCellWeights(false), needPhonons(false), needVelocity(false),
-needLinewidthTot(false), needLinewidth_ee(false), needLinewidth_ePh(false), needLinewidthP_ePh(false)
+needLinewidth_ee(false), needLinewidth_ePh(false), needLinewidthP_ePh(false)
 {
 }
+
+//Fillings grid on [0,1] for which to calculate e-ph linewidths
+inline std::vector<double> getFgrid(int nInterp)
+{	std::vector<double> fGrid(nInterp+1);
+	double df = 1./nInterp;
+	for(int i=0; i<=nInterp; i++)
+		fGrid[i] = i*df;
+	return fGrid;
+}
+const std::vector<double> WannierMCParams::fGrid_ePh = getFgrid(4);
 
 InitParams WannierMC::initialize(int argc, char** argv, const char* description)
 {	InitParams ip;
@@ -274,23 +284,23 @@ WannierMC::WannierMC(const WannierMCParams& wmcp)
 	}
 	
 	//Linewidths:
-	if(wmcp.needLinewidth_ee || wmcp.needLinewidthTot)
+	if(wmcp.needLinewidth_ee)
 	{	//e-e:
 		fname = wmcp.wannierPrefix + ".mlwfImSigma_ee";
 		ImSigma_eeW = std::make_shared<DistributedMatrix>(fname, realOnly,
 			mpiGroup, nBands*nBands, cellMap, kfold, false);
 	}
-	if(wmcp.needLinewidth_ePh || wmcp.needLinewidthTot)
+	if(wmcp.needLinewidth_ePh)
 	{	//e-ph:
 		fname = wmcp.wannierPrefix + ".mlwfImSigma_ePh";
 		ImSigma_ePhW = std::make_shared<DistributedMatrix>(fname, realOnly,
-			mpiGroup, nBands*nBands, cellMap, kfold, false);
+			mpiGroup, nBands*nBands*WannierMCParams::fGrid_ePh.size(), cellMap, kfold, false);
 	}
 	if(wmcp.needLinewidthP_ePh)
 	{	//e-ph:
 		fname = wmcp.wannierPrefix + ".mlwfImSigmaP_ePh";
 		ImSigmaP_ePhW = std::make_shared<DistributedMatrix>(fname, realOnly,
-			mpiGroup, nBands*nBands, cellMap, kfold, false);
+			mpiGroup, nBands*nBands*WannierMCParams::fGrid_ePh.size(), cellMap, kfold, false);
 	}
 	
 	logPrintf("\n");
@@ -358,8 +368,8 @@ void WannierMC::eLoop(const vector3<>& k0, WannierMC::eProcessFunc eProcess, voi
 	Hw->transform(k0);
 	if(wmcp.needVelocity)
 		Pw->transform(k0);
-	if(wmcp.needLinewidth_ee || wmcp.needLinewidthTot) ImSigma_eeW->transform(k0);
-	if(wmcp.needLinewidth_ePh || wmcp.needLinewidthTot) ImSigma_ePhW->transform(k0);
+	if(wmcp.needLinewidth_ee) ImSigma_eeW->transform(k0);
+	if(wmcp.needLinewidth_ePh) ImSigma_ePhW->transform(k0);
 	if(wmcp.needLinewidthP_ePh) ImSigmaP_ePhW->transform(k0);
 	//Call eProcess for k-points on present process:
 	int ik = Hw->ikStart;
@@ -407,8 +417,8 @@ void WannierMC::ePhLoop(const vector3<>& k01, const vector3<>& k02, WannierMC::e
 		{	Hw->transform(k0##i); \
 			if(wmcp.needVelocity) \
 				Pw->transform(k0##i); \
-			if(wmcp.needLinewidth_ee || wmcp.needLinewidthTot) ImSigma_eeW->transform(k0##i); \
-			if(wmcp.needLinewidth_ePh || wmcp.needLinewidthTot) ImSigma_ePhW->transform(k0##i); \
+			if(wmcp.needLinewidth_ee) ImSigma_eeW->transform(k0##i); \
+			if(wmcp.needLinewidth_ePh) ImSigma_ePhW->transform(k0##i); \
 			if(wmcp.needLinewidthP_ePh) ImSigmaP_ePhW->transform(k0##i); \
 			int ik = Hw->ikStart; \
 			int ikStop = ik + Hw->nk; \
@@ -526,20 +536,22 @@ void WannierMC::setState(WannierMC::StateE& state)
 		}
 	}
 	//Linewidths, ad needed:
-	if(wmcp.needLinewidth_ee || wmcp.needLinewidthTot)
+	if(wmcp.needLinewidth_ee)
 		state.ImSigma_ee = diag(dagger(state.U) * getMatrix(ImSigma_eeW->getResult(state.ik), nBands, nBands) * state.U);
-	if(wmcp.needLinewidth_ePh || wmcp.needLinewidthTot)
-	{	state.ImSigma_ePh = diag(dagger(state.U) * getMatrix(ImSigma_ePhW->getResult(state.ik), nBands, nBands) * state.U);
-		for(double& x: state.ImSigma_ePh) x = exp(x); //e-ph linewidth interpolated in logarithm
+	if(wmcp.needLinewidth_ePh)
+	{	state.ImSigma_ePhArr.resize(WannierMCParams::fGrid_ePh.size());
+		for(unsigned iMat=0; iMat<state.ImSigma_ePhArr.size(); iMat++)
+		{	state.ImSigma_ePhArr[iMat] = diag(dagger(state.U) * getMatrix(ImSigma_ePhW->getResult(state.ik), nBands, nBands, iMat) * state.U);
+			for(double& x: state.ImSigma_ePhArr[iMat]) x = exp(x); //e-ph linewidth interpolated in logarithm
+		}
 	}
 	if(wmcp.needLinewidthP_ePh)
-	{	state.ImSigmaP_ePh = diag(dagger(state.U) * getMatrix(ImSigmaP_ePhW->getResult(state.ik), nBands, nBands) * state.U);
-		for(double& x: state.ImSigmaP_ePh) x = exp(x); //e-ph linewidth interpolated in logarithm
+	{	state.ImSigmaP_ePhArr.resize(WannierMCParams::fGrid_ePh.size());
+		for(unsigned iMat=0; iMat<state.ImSigmaP_ePhArr.size(); iMat++)
+		{	state.ImSigmaP_ePhArr[iMat] = diag(dagger(state.U) * getMatrix(ImSigmaP_ePhW->getResult(state.ik), nBands, nBands, iMat) * state.U);
+			for(double& x: state.ImSigmaP_ePhArr[iMat]) x = exp(x); //e-ph linewidth interpolated in logarithm
+		}
 	}
-	if(wmcp.needLinewidthTot)
-		state.ImSigma = state.ImSigma_ee + state.ImSigma_ePh;
-	if(!wmcp.needLinewidth_ee) state.ImSigma_ee.clear();
-	if(!wmcp.needLinewidth_ePh) state.ImSigma_ePh.clear();
 	watchRotations.stop();
 }
 
@@ -557,10 +569,9 @@ void WannierMC::bcastState(WannierMC::StateE& state, MPIUtil* mpiUtil, int root)
 		mpiUtil->bcast(&state.vVec[0][0], 3*nBands, root);
 	}
 	//Linewidths, if needed:
-	if(wmcp.needLinewidthTot) bcast(state.ImSigma, nBands, mpiUtil, root);
 	if(wmcp.needLinewidth_ee) bcast(state.ImSigma_ee, nBands, mpiUtil, root);
-	if(wmcp.needLinewidth_ePh) bcast(state.ImSigma_ePh, nBands, mpiUtil, root);
-	if(wmcp.needLinewidthP_ePh) bcast(state.ImSigmaP_ePh, nBands, mpiUtil, root);
+	if(wmcp.needLinewidth_ePh) for(diagMatrix& d: state.ImSigma_ePhArr) bcast(d, nBands, mpiUtil, root);
+	if(wmcp.needLinewidthP_ePh) for(diagMatrix& d: state.ImSigmaP_ePhArr) bcast(d, nBands, mpiUtil, root);
 }
 
 
@@ -577,4 +588,35 @@ void WannierMC::bcastState(WannierMC::StatePh& state, MPIUtil* mpiUtil, int root
 	mpiUtil->bcast(&state.q[0], 3, root);
 	bcast(state.omega, nModes, mpiUtil, root);
 	bcast(state.U, nModes, nModes, mpiUtil, root);
+}
+
+//----------- class WannierMC::StateE -------------
+inline double interpQuartic(const std::vector<diagMatrix>& Y, int n, double f)
+{	//Get bernstein coeffs
+	double a0 = Y[0][n];
+	double a4 = Y[4][n];
+	double a1 = (1./12)*(-13.*Y[0][n]+48.*Y[1][n]-36.*Y[2][n]+16.*Y[3][n]-3.*Y[4][n]);
+	double a3 = (1./12)*(-13.*Y[4][n]+48.*Y[3][n]-36.*Y[2][n]+16.*Y[1][n]-3.*Y[0][n]);
+	double a2 = (1./18)*(13.*(Y[0][n]+Y[4][n])-64.*(Y[1][n]+Y[3][n])+120.*Y[2][n]);
+	//Evaluate bernstein polynomial
+	//--- 1
+	double b0 = a0+f*(a1-a0);
+	double b1 = a1+f*(a2-a1);
+	double b2 = a2+f*(a3-a2);
+	double b3 = a3+f*(a4-a3);
+	//--- 2
+	double c0 = b0+f*(b1-b0);
+	double c1 = b1+f*(b2-b1);
+	double c2 = b2+f*(b3-b2);
+	//--- 3
+	double d0 = c0+f*(c1-c0);
+	double d1 = c1+f*(c2-c1);
+	//--- 4
+	return d0+f*(d1-d0);
+}
+double WannierMC::StateE::ImSigma_ePh(int n, double f) const
+{	return interpQuartic(ImSigma_ePhArr, n, f);
+}
+double WannierMC::StateE::ImSigmaP_ePh(int n, double f) const
+{	return interpQuartic(ImSigmaP_ePhArr, n, f);
 }

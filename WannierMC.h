@@ -12,10 +12,10 @@ struct WannierMCParams
 	bool needCellWeights; //!< whether to read mlwfCellWeights file (default: false)
 	bool needPhonons; //!< whether to initialize phonon-related quantities (default: false)
 	bool needVelocity; //!< whether to initialize velocity (momentum) matrix elements
-	bool needLinewidthTot; //!< whether to provide total line-width (default: false)
 	bool needLinewidth_ee; //!< whether to provide e-e line-width (default: false)
 	bool needLinewidth_ePh; //!< whether to provide e-ph line-width (default: false)
 	bool needLinewidthP_ePh; //!< whether to provide momentum-relaxation e-ph line-width (default: false)
+	static const std::vector<double> fGrid_ePh; //!< fillings grid used for e-ph linewidths
 	WannierMCParams();
 };
 
@@ -39,10 +39,13 @@ public:
 		matrix U; //!< rotation from Wannier to eiegen-basis
 		matrix v[3]; //!< velocity matrix elements in Cartesian coordinates, available if needVelocity = true
 		std::vector<vector3<>> vVec; //!< band velocities (diagonal part of v) in Cartesian coordinates, available if needVelocity = true
-		diagMatrix ImSigma; //!< total linewidth, available if needLinewidthTot = true
 		diagMatrix ImSigma_ee; //!< e-e linewidth, available if needLinewidth_ee = true
-		diagMatrix ImSigma_ePh; //!< e-ph linewidth, available if needLinewidth_ePh = true
-		diagMatrix ImSigmaP_ePh; //!< e-ph momentum-relaxation linewidth, available if needLinewidthP_ePh = true
+		double ImSigma_ePh(int n, double f) const; //!< get e-ph linewidth for band n given its occupation f, available if needLinewidth_ePh = true
+		double ImSigmaP_ePh(int n, double f) const; //!< get e-ph linewidth for band n given its occupation f, available if needLinewidthP_ePh = true
+	private:
+		std::vector<diagMatrix> ImSigma_ePhArr; //!< e-ph linewidth for each f in fGrid_ePh
+		std::vector<diagMatrix> ImSigmaP_ePhArr; //!< e-ph momentum-relaxation linewidth for each f in fGrid_ePh
+		friend class WannierMC;
 	};
 	
 	//! Phonon properties at a given wave vector

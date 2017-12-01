@@ -21,11 +21,13 @@ struct ResistivityCollect
 			const vector3<>& v = state.vVec[b];
 			matrix3<> vdotv = outer(v, v);
 			for(unsigned iMu=0; iMu<dmu.size(); iMu++)
-			{	double dFdE = -1./(T*std::pow(2*cosh((E-dmu[iMu])/(2*T)),2));
-				g[iMu] += (-dFdE);
-				vSq[iMu] += (-dFdE) * v.length_squared();
-				tau[iMu] += (-dFdE) / (2*state.ImSigma_ePh[b]);
-				vvTau[iMu] += ((-dFdE) / (2*state.ImSigmaP_ePh[b])) * vdotv;
+			{	double expTerm = exp((E-dmu[iMu])/T);
+				double f = 1./(1.+expTerm);
+				double dfdE = -expTerm/(T*std::pow(expTerm+1,2));
+				g[iMu] += (-dfdE);
+				vSq[iMu] += (-dfdE) * v.length_squared();
+				tau[iMu] += (-dfdE) / (2*state.ImSigma_ePh(b,f));
+				vvTau[iMu] += ((-dfdE) / (2*state.ImSigmaP_ePh(b,f))) * vdotv;
 			}
 		}
 	}

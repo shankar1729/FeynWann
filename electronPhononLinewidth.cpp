@@ -12,7 +12,8 @@ struct CollectEph
 	const double T;
 	const double prefacImSigma;
 	const double EconserveExpFac, EconservePrefac; //energy conserving Gaussian exponential and pre-factor
-	std::vector<diagMatrix> ImSigma, ImSigmaP; //e-ph linewidth without and with momentum direction factors
+	const std::vector<double>& f1grid; //grid of fillings ofr which e-ph linewidth is calculated
+	std::vector<std::vector<diagMatrix>> ImSigma; //e-ph linewidth for various f1, without and with momentum direction factors
 	std::vector<diagMatrix> E; //save electron energies on DFT mesh for later
 	double wOffsetCur; //weight factor of current offset (due to symmetry reduction)
 	
@@ -21,8 +22,8 @@ struct CollectEph
 		prefacImSigma(0.5 * 2*M_PI/(prod(wmc.kfold)*prod(NkMult))), //Factor of 0.5 in ImSigma because of psi^2 -> n
 		EconserveExpFac(-0.5/std::pow(EconserveWidth,2)),
 		EconservePrefac(1./(sqrt(2.*M_PI)*EconserveWidth)),
-		ImSigma(prod(wmc.kfold), diagMatrix(wmc.nBands)),
-		ImSigmaP(prod(wmc.kfold), diagMatrix(wmc.nBands)),
+		f1grid(WannierMCParams::fGrid_ePh),
+		ImSigma(2*f1grid.size(), std::vector<diagMatrix>(prod(wmc.kfold), diagMatrix(wmc.nBands))),
 		E(prod(wmc.kfold))
 	{
 	}
@@ -57,22 +58,24 @@ struct CollectEph
 			for(int b2=0; b2<nBands; b2++)
 			{	const double& E2 = e2.E[b2];
 				const vector3<>& v2 = e2.vVec[b2];
-				double f2 = wmc.nValence
-					? (b2<wmc.nValence ? 1. : 0.) //insulator/semiconductor
-					: 1./(exp(E2/T)+1); //metal (energies referenced to mu)
 				double cosThetaScatter = dot(v1, v2) / sqrt(std::max(1e-16, v1.length_squared() * v2.length_squared()));
 				//Loop over phonon modes:
 				for(int alpha=0; alpha<nModes; alpha++)
 				{	const double& omegaPh = ph.omega[alpha];
 					double nPh = 1./(exp(omegaPh/T) - 1.);
+					//Loop over absorption and emission:
 					for(int ae=-1; ae<=+1; ae+=2)
 					{	double EconserveExponent = EconserveExpFac * std::pow((E2-E1 - ae*omegaPh),2);
 						if(EconserveExponent < -15.) continue; //the exponential below will be negligible
 						double delta = EconservePrefac * exp(EconserveExponent);
-						double occFactors = (nPh+0.5 - ae*(0.5-f2));
-						double ImSigmaContrib = wOffsetCur * prefacImSigma * occFactors * delta * mEph.M[alpha](b2,b1).norm();
-						ImSigma[e1.ik][b1] += ImSigmaContrib;
-						ImSigmaP[e1.ik][b1] += ImSigmaContrib * (1.-cosThetaScatter);
+						double contribNum = wOffsetCur * prefacImSigma * delta * mEph.M[alpha](b2,b1).norm()
+							* nPh*(nPh+1); //contribution numerator before f1-dependent denominator
+						for(unsigned if1=0; if1<f1grid.size(); if1++)
+						{	unsigned if1p = if1 + f1grid.size(); //index for scattering version
+							double contrib = contribNum / (nPh+0.5 + ae*(0.5-f1grid[if1])); //net f1-dependent contribution
+							ImSigma[if1][e1.ik][b1] += contrib;
+							ImSigma[if1p][e1.ik][b1] += contrib * (1.-cosThetaScatter); //scattering version with angle factors
+						}
 					}
 				}
 			}
@@ -86,23 +89,25 @@ struct CollectEph
 	
 	//---- Wannierization ----
 	int cStart, cStop; //range of cells handled here
-	matrix mlwfImSigma, mlwfImSigmaP, phase;
+	matrix mlwfImSigma[2], phase;
 	
 	void wannierize(const WannierMC::StateE& state)
-	{	//Convert to log for the interpolation:
-		diagMatrix logImSigma(ImSigma[state.ik]); for(double& x: logImSigma) x = log(x);
-		diagMatrix logImSigmaP(ImSigmaP[state.ik]); for(double& x: logImSigmaP) x = log(x);
-		//Switch to Wannier basis:
-		matrix logImSigmaW = state.U * logImSigma * dagger(state.U);
-		matrix logImSigmaPW = state.U * logImSigmaP * dagger(state.U);
-		//Save as a column in a matrix containing all k:
-		int iCol = state.ik - wmc.Hw->ikStart;
-		int colLength = wmc.nBands * wmc.nBands;
-		eblas_copy(mlwfImSigma.data()+iCol*colLength, logImSigmaW.data(), colLength);
-		eblas_copy(mlwfImSigmaP.data()+iCol*colLength, logImSigmaPW.data(), colLength);
-		//Calculate corresponding phases for Fourier transform:
+	{	//Calculate for Fourier transform:
+		unsigned iCol = state.ik - wmc.Hw->ikStart;
 		for(int c=cStart; c<cStop; c++)
 			phase.set(iCol, c-cStart, cis(-2*M_PI*dot(state.k, wmc.cellMap[c])));
+		//For each matrix:
+		for(unsigned iP=0; iP<2; iP++) //without or with P factors
+			for(unsigned if1=0; if1<f1grid.size(); if1++)
+			{	//Convert to log for the interpolation:
+				diagMatrix logImSigma(ImSigma[if1+iP*f1grid.size()][state.ik]);
+				for(double& x: logImSigma) x = log(x);
+				//Switch to Wannier basis:
+				matrix logImSigmaW = state.U * logImSigma * dagger(state.U);
+				//Save as a column in a matrix containing all k:
+				unsigned colLength = wmc.nBands * wmc.nBands;
+				eblas_copy(mlwfImSigma[iP].data()+colLength*(iCol*f1grid.size()+if1), logImSigmaW.data(), colLength);
+			}
 	}
 	static void eProcess(const WannierMC::StateE& state, void* params)
 	{	((CollectEph*)params)->wannierize(state);
@@ -303,8 +308,9 @@ int main(int argc, char** argv)
 	logPrintf("done.\n"); logFlush();
 	
 	//Collect results from all processes:
-	for(diagMatrix& d: cEph.ImSigma) d.allReduce(MPIUtil::ReduceSum);
-	for(diagMatrix& d: cEph.ImSigmaP) d.allReduce(MPIUtil::ReduceSum);
+	for(std::vector<diagMatrix>& dArr: cEph.ImSigma)
+		for(diagMatrix& d: dArr)
+			d.allReduce(MPIUtil::ReduceSum);
 	
 	//Symmetrize:
 	std::vector<vector3<>> kmesh; //DFT k-point mesh
@@ -320,23 +326,22 @@ int main(int argc, char** argv)
 		if(!kDone[i0])
 		{	//Find orbit of this k-points under symmetries:
 			std::vector<int> iEquiv;
-			diagMatrix ImSigmaMean(wmc.nBands), ImSigmaMeanP(wmc.nBands);
+			std::vector<diagMatrix> ImSigmaMean(cEph.ImSigma.size(), diagMatrix(wmc.nBands));
 			for(int invert: invertList)
 				for(const SpaceGroupOp& op: wmc.sym)
 				{	size_t i = plook.find(invert * kmesh[i0] * op.rot);
 					if(i!=string::npos && (!kDone[i]))
 					{	kDone[i] = true; //i will be covered in i0's orbit
 						iEquiv.push_back(i);
-						ImSigmaMean += cEph.ImSigma[i];
-						ImSigmaMeanP += cEph.ImSigmaP[i];
+						for(unsigned iMat=0; iMat<ImSigmaMean.size(); iMat++)
+							ImSigmaMean[iMat] += cEph.ImSigma[iMat][i];
 					}
 				}
 			//Symmetrize within orbit:
-			ImSigmaMean *= (1./iEquiv.size());
-			ImSigmaMeanP *= (1./iEquiv.size());
-			for(int i: iEquiv)
-			{	cEph.ImSigma[i] = ImSigmaMean;
-				cEph.ImSigmaP[i] = ImSigmaMeanP;
+			for(unsigned iMat=0; iMat<ImSigmaMean.size(); iMat++)
+			{	ImSigmaMean[iMat] *= (1./iEquiv.size());
+				for(int i: iEquiv)
+					cEph.ImSigma[iMat][i] = ImSigmaMean[iMat];
 			}
 			iReduced.push_back(i0);
 		}
@@ -358,9 +363,11 @@ int main(int argc, char** argv)
 		FILE* fp = fopen(fname, "w");
 		for(int i: iReduced)
 			for(int b=0; b<wmc.nBands; b++)
-			{	fprintf(fp, "%+19.12le %19.12le %19.12le\n",
-					cEph.E[i][b], cEph.ImSigma[i][b], cEph.ImSigmaP[i][b]);
-				fr.addState(cEph.E[i][b], cEph.ImSigma[i][b]);
+			{	fprintf(fp, "%+16.12lf", cEph.E[i][b]);
+				for(unsigned iMat=0; iMat<cEph.ImSigma.size(); iMat++)
+					fprintf(fp, " %19.12le", cEph.ImSigma[iMat][i][b]);
+				fprintf(fp, "\n");
+				fr.addState(cEph.E[i][b], cEph.ImSigma[0][i][b]);
 			}
 		fclose(fp);
 		logPrintf("done.\n");
@@ -379,13 +386,13 @@ int main(int argc, char** argv)
 	int ncMine = std::max(1, cEph.cStop - cEph.cStart);
 	int nkMine = std::max(1, wmc.Hw->nk);
 	//--- Wannierize
-	cEph.mlwfImSigma = zeroes(wmc.nBands*wmc.nBands, nkMine);
-	cEph.mlwfImSigmaP = zeroes(wmc.nBands*wmc.nBands, nkMine);
+	for(unsigned iP=0; iP<2; iP++)
+		cEph.mlwfImSigma[iP] = zeroes(wmc.nBands*wmc.nBands*cEph.f1grid.size(), nkMine);
 	cEph.phase = zeroes(nkMine, ncMine);
 	wmc.eLoop(vector3<>(), CollectEph::eProcess, &cEph);
 	cEph.phase *= (1./kmesh.size()); //inverse transform normalizing factor
-	cEph.dumpWannierized(cEph.mlwfImSigma, wmcp.wannierPrefix + ".mlwfImSigma_ePh");
-	cEph.dumpWannierized(cEph.mlwfImSigmaP, wmcp.wannierPrefix + ".mlwfImSigmaP_ePh");
+	cEph.dumpWannierized(cEph.mlwfImSigma[0], wmcp.wannierPrefix + ".mlwfImSigma_ePh");
+	cEph.dumpWannierized(cEph.mlwfImSigma[1], wmcp.wannierPrefix + ".mlwfImSigmaP_ePh");
 	
 	wmc.free();
 	WannierMC::finalize();
