@@ -528,7 +528,7 @@ void WannierMC::setState(WannierMC::StateE& state)
 	if(wmcp.needVelocity)
 	{	state.vVec.resize(nBands);
 		for(int iDir=0; iDir<3; iDir++)
-		{	state.v[iDir] = complex(0,1) //Since P was stored with i omitted (to make it real when possible)
+		{	state.v[iDir] = complex(0,-1) //Since P was stored with -i omitted (to make it real when possible)
 				* (dagger(state.U) * getMatrix(Pw->getResult(state.ik), nBands, nBands, iDir) * state.U);
 			//Extract diagonal parts for convenience:
 			for(int b=0; b<nBands; b++)
