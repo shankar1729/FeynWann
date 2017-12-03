@@ -9,7 +9,7 @@ struct ResistivityCollect
 	std::vector<double> g, vSq, tau; //density of states, |v|^2 and e-ph life time
 	std::vector<matrix3<>> vvTau; //scattering time * velocity outer product
 
-	ResistivityCollect(const std::vector<double>& dmu, double T, double EconserveWidth) : dmu(dmu), T(T),
+	ResistivityCollect(const std::vector<double>& dmu, double T) : dmu(dmu), T(T),
 		g(dmu.size()), vSq(dmu.size()), tau(dmu.size()), vvTau(dmu.size())
 	{
 	}
@@ -69,7 +69,6 @@ int main(int argc, char** argv)
 	const int nOffsets = inputMap.get("nOffsets"); assert(nOffsets>0);
 	const int nBlocks = inputMap.get("nBlocks"); assert(nBlocks>0);
 	const double T = inputMap.get("T") * Kelvin;
-	const double EconserveWidth = inputMap.get("EconserveWidth", T/eV) * eV; //energy conservation width (default to T)
 	const double dmuMin = inputMap.get("dmuMin", 0.) * eV; //optional shift in chemical potential from neutral value; start of range (default to 0)
 	const double dmuMax = inputMap.get("dmuMax", 0.) * eV; //optional shift in chemical potential from neutral value; end of range (default to 0)
 	const int dmuCount = inputMap.get("dmuCount", 1); assert(dmuCount>0); //number of chemical potential shifts
@@ -79,7 +78,6 @@ int main(int argc, char** argv)
 	logPrintf("nOffsets = %d\n", nOffsets);
 	logPrintf("nBlocks = %d\n", nBlocks);
 	logPrintf("T = %lg\n", T);
-	logPrintf("EconserveWidth = %lg\n", EconserveWidth);
 	logPrintf("dmuMin = %lg\n", dmuMin);
 	logPrintf("dmuMax = %lg\n", dmuMax);
 	logPrintf("dmuCount = %d\n", dmuCount);
@@ -138,7 +136,7 @@ int main(int argc, char** argv)
 	#undef DeclareArray2D
 	for(int block=0; block<nBlocks; block++)
 	{	logPrintf("Working on block %d of %d: ", block+1, nBlocks); logFlush();
-		ResistivityCollect rc(dmu, T, EconserveWidth);
+		ResistivityCollect rc(dmu, T);
 		for(int o=0; o<noMine; o++)
 		{	Random::seed(block*nOffsetsPerBlock+o+oStart); //to make results independent of MPI division
 			//Process with a random offset:
