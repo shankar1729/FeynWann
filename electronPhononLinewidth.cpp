@@ -352,10 +352,10 @@ int main(int argc, char** argv)
 	
 	//Collect electronic energies on all processes:
 	for(int i: iReduced)
-	{	int root = cEph.E[i].size() ? mpiGroup->iProcess() : mpiGroup->nProcesses(); //my process ID or N, depending on whether I have E[i]
-		mpiGroup->allReduce(root, MPIUtil::ReduceMin); //lowest process number which has E[i] available
+	{	int root = cEph.E[i].size() ? mpiWorld->iProcess() : mpiWorld->nProcesses(); //my process ID or N, depending on whether I have E[i]
+		mpiWorld->allReduce(root, MPIUtil::ReduceMin); //lowest process number which has E[i] available
 		cEph.E[i].resize(wmc.nBands);
-		mpiGroup->bcast(cEph.E[i].data(), wmc.nBands, root);
+		mpiWorld->bcast(cEph.E[i].data(), wmc.nBands, root);
 	}
 	
 	//Output linewidths and energies in text file:
