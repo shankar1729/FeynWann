@@ -21,7 +21,9 @@ struct ResistivityCollect
 			const vector3<>& v = state.vVec[b];
 			matrix3<> vdotv = outer(v, v);
 			for(unsigned iMu=0; iMu<dmu.size(); iMu++)
-			{	double expTerm = exp((E-dmu[iMu])/T);
+			{	double expArg = (E-dmu[iMu])/T;
+				if(fabs(expArg)>30.) continue; //avoid over/underflow; negligible contribution
+				double expTerm = exp(expArg);
 				double f = 1./(1.+expTerm);
 				double dfdE = -expTerm/(T*std::pow(expTerm+1,2));
 				g[iMu] += (-dfdE);
