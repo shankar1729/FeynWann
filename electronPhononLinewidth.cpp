@@ -16,6 +16,7 @@ struct CollectEph
 	std::vector<std::vector<diagMatrix>> ImSigma; //e-ph linewidth for various f1, without and with momentum direction factors
 	std::vector<diagMatrix> E; //save electron energies on DFT mesh for later
 	double wOffsetCur; //weight factor of current offset (due to symmetry reduction)
+	const double omegaPhCut; //cut-off frequency to avoid zero/imaginary phonon frequencies
 	
 	CollectEph(const WannierMC& wmc, double T, double EconserveWidth, const vector3<int>& NkMult)
 	: wmc(wmc), T(T),
@@ -24,7 +25,8 @@ struct CollectEph
 		EconservePrefac(1./(sqrt(2.*M_PI)*EconserveWidth)),
 		f1grid(WannierMCParams::fGrid_ePh),
 		ImSigma(2*f1grid.size(), std::vector<diagMatrix>(prod(wmc.kfold), diagMatrix(wmc.nBands))),
-		E(prod(wmc.kfold))
+		E(prod(wmc.kfold)),
+		omegaPhCut(1e-6)
 	{
 	}
 	
@@ -62,6 +64,7 @@ struct CollectEph
 				//Loop over phonon modes:
 				for(int alpha=0; alpha<nModes; alpha++)
 				{	const double& omegaPh = ph.omega[alpha];
+					if(omegaPh < omegaPhCut) continue; //avoid 0./0. below
 					double nPh = 1./(exp(omegaPh/T) - 1.);
 					//Loop over absorption and emission:
 					for(int ae=-1; ae<=+1; ae+=2)
