@@ -110,7 +110,7 @@ WannierMC::WannierMC(const WannierMCParams& wmcp)
 			}
 			else die("Unrecognized truncation type '%s'\n", typeString.c_str());
 		}
-		else if(line.find("Initialization completed") != string::npos)
+		else if(line.find("Initialization completed") == 0)
 		{	initDone = true;
 		}
 		else if(initDone && (line.find("FillingsUpdate:") != string::npos))
