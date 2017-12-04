@@ -61,10 +61,10 @@ int main(int argc, char** argv)
 	//Collect mobility integrand on energy grid:
 	if(bs.nValence >= bs.nBands)
 		die("Could not find Wannier bands for empty states: needed to calculate electron mobility.\n");
-	logPrintf("Collectinging mobility integrands ... "); logFlush();
+	logPrintf("Collecting mobility integrands ... "); logFlush();
 	int nBunches = nKpts/(bunchSize*mpiWorld->nProcesses());
 	int iBunchInterval = std::max(1, int(round(nBunches/50.))); //interval for reporting progress
-	Histogram vSqTau(Emin, dE, Emax), g(Emin, dE, Emax); //collect v^2*tau and DOS by energy
+	Histogram vSqTauBy3(Emin, dE, Emax), g(Emin, dE, Emax); //collect v^2*tau/3 and DOS by energy
 	double EvMax = -DBL_MAX, EcMin = +DBL_MAX; //band edges
 	for(int iBunch=0; iBunch<nBunches; iBunch++)
 	{	//Random block of kpoints:
@@ -82,10 +82,10 @@ int main(int argc, char** argv)
 			//Update band edges:
 			EvMax = std::max(EvMax, E[bs.nValence-1]);
 			EcMin = std::min(EcMin, E[bs.nValence]);
-			//Collect vSqTau and DOS:
+			//Collect vSqTauBy3 and DOS:
 			for(int b=0; b<bs.nBands; b++)
 			{	double tau_ePh = 0.5/ImSigma_ePh[b];
-				vSqTau.addEvent(E[b], v[b].length_squared() * tau_ePh);
+				vSqTauBy3.addEvent(E[b], (1./3) * v[b].length_squared() * tau_ePh);
 				g.addEvent(E[b], 1.);
 			}
 		}
@@ -97,7 +97,7 @@ int main(int argc, char** argv)
 	}
 	mpiWorld->allReduce(EvMax, MPIUtil::ReduceMax);
 	mpiWorld->allReduce(EcMin, MPIUtil::ReduceMin);
-	vSqTau.allReduce(MPIUtil::ReduceSum);
+	vSqTauBy3.allReduce(MPIUtil::ReduceSum);
 	g.allReduce(MPIUtil::ReduceSum);
 	logPrintf("done.\n\n"); logFlush();
 	logPrintf("Band edges:  EvMax: %lg  EcMin: %lg\n\n", EvMax, EcMin);
@@ -110,13 +110,13 @@ int main(int argc, char** argv)
 		if(E<EvMax) //hole:
 		{	double denWeight = exp((E-EvMax)/T); //limit of (1-f) with scale factor
 			double numWeight = (1./T)*denWeight; //limit of -(1-f)' with scale factor
-			hMobilityNum += numWeight * vSqTau.out[ie] * dE;
+			hMobilityNum += numWeight * vSqTauBy3.out[ie] * dE;
 			hMobilityDen += denWeight * g.out[ie] * dE;
 		}
 		if(E>EcMin) //electron:
 		{	double denWeight = exp((EcMin-E)/T); //limit of f with scale factor
 			double numWeight = (1./T)*denWeight; //limit of -f' with scale factor
-			eMobilityNum += numWeight * vSqTau.out[ie] * dE;
+			eMobilityNum += numWeight * vSqTauBy3.out[ie] * dE;
 			eMobilityDen += denWeight * g.out[ie] * dE;
 		}
 	}
