@@ -6,11 +6,11 @@
 struct ResistivityCollect
 {	std::vector<double> dmu; //doping levels
 	double T; //temperature
-	std::vector<double> g, vSq, tau; //density of states, |v|^2 and e-ph life time
+	std::vector<double> n, g, vSq, tau; //carrier number, density of states, |v|^2 and e-ph life time
 	std::vector<matrix3<>> vvTau; //scattering time * velocity outer product
 
 	ResistivityCollect(const std::vector<double>& dmu, double T) : dmu(dmu), T(T),
-		g(dmu.size()), vSq(dmu.size()), tau(dmu.size()), vvTau(dmu.size())
+		n(dmu.size()), g(dmu.size()), vSq(dmu.size()), tau(dmu.size()), vvTau(dmu.size())
 	{
 	}
 	
@@ -22,10 +22,14 @@ struct ResistivityCollect
 			matrix3<> vdotv = outer(v, v);
 			for(unsigned iMu=0; iMu<dmu.size(); iMu++)
 			{	double expArg = (E-dmu[iMu])/T;
-				if(fabs(expArg)>30.) continue; //avoid over/underflow; negligible contribution
+				if(fabs(expArg)>30.) //avoid over/underflow
+				{	if(expArg<0.) n[iMu] += 1.; //still need to count towards n if occupied
+					continue; //negligible contribution to rest
+				}
 				double expTerm = exp(expArg);
 				double f = 1./(1.+expTerm);
 				double dfdE = -expTerm/(T*std::pow(expTerm+1,2));
+				n[iMu] += f;
 				g[iMu] += (-dfdE);
 				vSq[iMu] += (-dfdE) * v.length_squared();
 				tau[iMu] += (-dfdE) / (2*state.ImSigma_ePh(b,f));
@@ -71,6 +75,7 @@ int main(int argc, char** argv)
 	const int nOffsets = inputMap.get("nOffsets"); assert(nOffsets>0);
 	const int nBlocks = inputMap.get("nBlocks"); assert(nBlocks>0);
 	const double T = inputMap.get("T") * Kelvin;
+	double Ztot = inputMap.get("Ztot", -1.); //optional nuclear charge per unit cell for counting carriers (default to nElectrons in DFT i.e. assume DFT calculation was neutral)
 	const double dmuMin = inputMap.get("dmuMin", 0.) * eV; //optional shift in chemical potential from neutral value; start of range (default to 0)
 	const double dmuMax = inputMap.get("dmuMax", 0.) * eV; //optional shift in chemical potential from neutral value; end of range (default to 0)
 	const int dmuCount = inputMap.get("dmuCount", 1); assert(dmuCount>0); //number of chemical potential shifts
@@ -80,6 +85,7 @@ int main(int argc, char** argv)
 	logPrintf("nOffsets = %d\n", nOffsets);
 	logPrintf("nBlocks = %d\n", nBlocks);
 	logPrintf("T = %lg\n", T);
+	logPrintf("Ztot = %lg\n", Ztot);
 	logPrintf("dmuMin = %lg\n", dmuMin);
 	logPrintf("dmuMax = %lg\n", dmuMax);
 	logPrintf("dmuCount = %d\n", dmuCount);
@@ -92,6 +98,11 @@ int main(int argc, char** argv)
 	wmcp.needLinewidthP_ePh = true;
 	WannierMC wmc(wmcp);
 	
+	if(Ztot < 0.)
+	{	Ztot = wmc.nElectrons;
+		logPrintf("Setting Ztot = nElectrons = %lg\n", Ztot);
+	}
+	
 	//dmu array:
 	std::vector<double> dmu(dmuCount, dmuMin); //set first value here
 	for(int iMu=1; iMu<dmuCount; iMu++) //set remaining values (if any)
@@ -102,11 +113,17 @@ int main(int argc, char** argv)
 	double rhoUnit = 1e-9*Ohm*meter;
 	string rhoUnitName="nOhm-m";
 	string rhoName = "Resistivity";
+	const double cm = 1e-2*meter;
+	const double cm2byVs = cm*cm/(Volt*sec);
+	double densityUnit = std::pow(cm,-3);
+	string densityUnitName = "cm^-3";
 	if(slabDir>=0)
 	{	Omega /= wmc.R.column(slabDir).length(); //convert to area excluding this dimension
 		rhoUnit = Ohm;
 		rhoUnitName = "Ohm";
 		rhoName = "SheetResistance";
+		densityUnit = std::pow(cm,-2);
+		densityUnitName = "cm^-2";
 	}
 	
 	//Initialize sampling parameters:
@@ -132,9 +149,10 @@ int main(int argc, char** argv)
 	//Compute resistivity:
 	double prefacDOS = wmc.spinWeight*(1./nKptsPerBlock);
 	#define DeclareArray2D(type, name) std::vector<std::vector<type>> name(dmuCount, std::vector<type>(nBlocks))
-	DeclareArray2D(matrix3<>, rhoArr);
-	DeclareArray2D(double, rhoBarArr); DeclareArray2D(double, tauArr); DeclareArray2D(double, tauDrudeArr);
-	DeclareArray2D(double, vFarr); DeclareArray2D(double, gArr); 
+	DeclareArray2D(matrix3<>, rhoArr); DeclareArray2D(matrix3<>, mobArr);
+	DeclareArray2D(double, rhoBarArr); DeclareArray2D(double, mobBarArr); 
+	DeclareArray2D(double, tauArr); DeclareArray2D(double, tauDrudeArr);
+	DeclareArray2D(double, vFarr); DeclareArray2D(double, gArr); DeclareArray2D(double, nArr);
 	#undef DeclareArray2D
 	for(int block=0; block<nBlocks; block++)
 	{	logPrintf("Working on block %d of %d: ", block+1, nBlocks); logFlush();
@@ -150,11 +168,13 @@ int main(int argc, char** argv)
 		logPrintf("done.\n"); logFlush();
 		for(int iMu=0; iMu<dmuCount; iMu++)
 		{	//Accumulate between processes:
+			mpiWorld->allReduce(rc.n[iMu], MPIUtil::ReduceSum);
 			mpiWorld->allReduce(rc.g[iMu], MPIUtil::ReduceSum);
 			mpiWorld->allReduce(rc.vSq[iMu], MPIUtil::ReduceSum);
 			mpiWorld->allReduce(rc.tau[iMu], MPIUtil::ReduceSum);
 			mpiWorld->allReduce(&rc.vvTau[iMu](0,0), 3*3, MPIUtil::ReduceSum);
 			//Apply normalizing factors:
+			rc.n[iMu] *= prefacDOS; rc.n[iMu] -= Ztot; //convert to number of free carriers per unit cell
 			rc.g[iMu] *= prefacDOS;
 			rc.vSq[iMu] *= prefacDOS;
 			rc.tau[iMu] *= prefacDOS;
@@ -162,24 +182,33 @@ int main(int argc, char** argv)
 			slabConstrain(rc.vvTau[iMu], slabDir); //eliminate out-of-plane components if necessary
 			//Store relevant quantities:
 			rhoArr[iMu][block] = Omega * inv(rc.vvTau[iMu]);
+			mobArr[iMu][block] = rc.vvTau[iMu]/fabs(rc.n[iMu]);
 			if(slabDir>=0.)
-				rhoArr[iMu][block](slabDir,slabDir) = INFINITY;
+			{	rhoArr[iMu][block](slabDir,slabDir) = INFINITY;
+				mobArr[iMu][block](slabDir,slabDir) = 0.;
+			}
 			rhoBarArr[iMu][block] = trace(rhoArr[iMu][block], slabDir) / (slabDir>=0 ? 2. : 3.);
+			mobBarArr[iMu][block] = trace(mobArr[iMu][block], slabDir) / (slabDir>=0 ? 2. : 3.);
 			tauArr[iMu][block] = rc.tau[iMu] / rc.g[iMu];
 			tauDrudeArr[iMu][block] = trace(rc.vvTau[iMu], slabDir) / rc.vSq[iMu];
 			vFarr[iMu][block] = sqrt(rc.vSq[iMu] / rc.g[iMu]);
 			gArr[iMu][block] = rc.g[iMu];
+			nArr[iMu][block] = rc.n[iMu];
 		}
 	}
 	
 	for(int iMu=0; iMu<dmuCount; iMu++)
 	{	logPrintf("\nResults for dmu = %lg eV:\n", dmu[iMu]/eV);
 		reportResult(rhoArr[iMu], rhoName, rhoUnit, rhoUnitName);
+		reportResult(mobArr[iMu], "Mobility", cm2byVs, "cm^2/(V.s)");
 		reportResult(rhoBarArr[iMu], rhoName, rhoUnit, rhoUnitName);
+		reportResult(mobBarArr[iMu], "Mobility", cm2byVs, "cm^2/(V.s)");
 		reportResult(tauDrudeArr[iMu], "tauDrude", fs, "fs");
 		reportResult(tauArr[iMu], "tau", fs, "fs");
 		reportResult(vFarr[iMu], "vF", 1, "");
 		reportResult(gArr[iMu], "g(eF)", 1, "");
+		reportResult(nArr[iMu], "Ncarriers", 1, "cell^-1");
+		reportResult(nArr[iMu], "nCarriers", (Omega*densityUnit), densityUnitName);
 	}
 	
 	wmc.free();
