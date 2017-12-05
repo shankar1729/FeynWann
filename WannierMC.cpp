@@ -53,7 +53,7 @@ void readMatrix(matrix& m, string fname, int spinWeight)
 }
 
 WannierMC::WannierMC(const WannierMCParams& wmcp)
-: wmcp(wmcp), spinWeight(0), mu(NAN), nElectrons(0), nValence(0)
+: wmcp(wmcp), spinWeight(0), mu(NAN), nElectrons(0)
 {	
 	//Read relevant parameters from totalE.out:
 	string fname = wmcp.totalEprefix + ".out";
@@ -61,6 +61,7 @@ WannierMC::WannierMC(const WannierMCParams& wmcp)
 	ifstream ifs(fname); if(!ifs.is_open()) die("could not open file.\n");
 	bool initDone = false; //whether finished reading the initialization part of totalE.out
 	int nBandsDFT = 0; //number of DFT bands (>= this->nBands = # Wannier bands)
+	int nStatesDFT = 0; //number of reduced k-pts * spins in DFT
 	while(!ifs.eof())
 	{	string line; getline(ifs, line);
 		if(line.find("Initializing the grid") != string::npos)
@@ -134,17 +135,26 @@ WannierMC::WannierMC(const WannierMCParams& wmcp)
 		}
 		else if(line.find("nElectrons:") == 0) //nElectrons, nBands, nStates line
 		{	istringstream iss(line); string buf;
-			iss >> buf >> nElectrons >> buf >> nBandsDFT;
+			iss >> buf >> nElectrons >> buf >> nBandsDFT >> buf >> nStatesDFT;
 		}
 	}
 	ifs.close();
 	logPrintf("done.\n"); logFlush();
 	if(std::isnan(mu))
-	{	mu = 0.;
-		logPrintf("NOTE: mu unavailable (setting to zero); must be semiconductor/insulator.\n");
-		nValence = int(round(nElectrons/spinWeight)); //nValence is set to zero when mu is available
+	{	logPrintf("NOTE: mu unavailable; assuming semiconductor/insulator and setting to VBM.\n");
+		int nValence = int(round(nElectrons/spinWeight)); //number of valence bands
 		if(fabs(nValence*spinWeight-nElectrons > 1e-6))
 			die("Number of electrons incompatible with semiconductor / insulator.\n");
+		//Read DFT eigenvalues file:
+		ManagedArray<double> Edft; Edft.init(nBandsDFT*nStatesDFT);
+		fname = wmcp.totalEprefix + ".eigenvals";
+		logPrintf("Reading '%s' ... ", fname.c_str()); logFlush();
+		Edft.read(fname.c_str());
+		logPrintf("done.\n");
+		//Find VBM:
+		mu = -DBL_MAX;
+		for(int q=0; q<nStatesDFT; q++)
+			mu = std::max(mu, Edft.data()[q*nBandsDFT+nValence-1]); //highest valence eigenvalue at each q
 	}
 	logPrintf("mu = %lg\n", mu);
 	logPrintf("nElectrons = %lg\n", nElectrons);

@@ -95,7 +95,8 @@ public:
 	vector3<bool> isTruncated; //!< whether each direction is truncated
 	std::vector<SpaceGroupOp> sym; //!< symmetries of DFT calculation
 	int nBands, spinWeight; //!< number of Wannier bands for the electrons and weight per spin channel
-	double mu, nElectrons, nValence; //!< chemical potential (if a metal), number of electrons per unit cell and number of valence bands (if insulator)
+	double mu; //!< chemical potential if DFT calculation had smearing, else VBM
+	double nElectrons; //!< number of electrons per unit cell in DFT calculation
 	double eMinMain, eMaxMain; //!< energy range for main window (within which eigenvalues should be exact compared to DFT)
 	int nModes; //!< number of phonon modes (polarizations)
 	
