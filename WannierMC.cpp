@@ -526,6 +526,21 @@ void WannierMC::ePhLoop(const vector3<>& k01, const vector3<>& k02, WannierMC::e
 	}
 }
 
+void WannierMC::symmetrize(matrix3<>& m) const
+{	matrix3<> mOut;
+	matrix3<> invR = inv(R);
+	for(const SpaceGroupOp& op: sym)
+	{	matrix3<> rot = R * op.rot * invR; //convert to Cartesian
+		mOut += rot * m * (~rot);
+	}
+	m = mOut *(1./sym.size());
+	//Set near-zero to exact zero:
+	double mCut = 1e-14*sqrt(trace((~m)*m));
+	for(int i=0; i<3; i++)
+		for(int j=0; j<3; j++)
+			if(fabs(m(i,j)) < mCut)
+				m(i,j) = 0.;
+}
 
 void WannierMC::setState(WannierMC::StateE& state)
 {	static StopWatch watchRotations("WannierMC::setState:rotations");

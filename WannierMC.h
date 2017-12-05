@@ -84,6 +84,8 @@ public:
 	void ePhLoop(const vector3<>& k01, const vector3<>& k02, ePhProcessFunc ePhProcess, void* params);
 	size_t ePhCountPerOffset() const { return Hw->nkTot * Hw->nkTot; } //!< number of k-pairs sampled per offset
 	
+	void symmetrize(matrix3<>& m) const; //!< symmetrize a tensor in Cartesian coordinates (available if needSymmetries = true)
+	
 	//DFT / Wannier / Phonon parameters:
 	matrix3<> R; //!< lattice vectors
 	std::vector<vector3<>> atpos; //!< atomic positions

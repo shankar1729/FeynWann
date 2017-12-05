@@ -93,6 +93,7 @@ int main(int argc, char** argv)
 	
 	//Initialize WannierMC:
 	WannierMCParams wmcp;
+	wmcp.needSymmetries = true;
 	wmcp.needVelocity = true;
 	wmcp.needLinewidth_ePh = true;
 	wmcp.needLinewidthP_ePh = true;
@@ -178,7 +179,8 @@ int main(int argc, char** argv)
 			rc.g[iMu] *= prefacDOS;
 			rc.vSq[iMu] *= prefacDOS;
 			rc.tau[iMu] *= prefacDOS;
-			rc.vvTau[iMu] *= prefacDOS; rc.vvTau[iMu] = 0.5*(rc.vvTau[iMu] + (~rc.vvTau[iMu])); //symmetrize
+			rc.vvTau[iMu] *= prefacDOS;
+			wmc.symmetrize(rc.vvTau[iMu]); //follow symmetries of unit cell
 			slabConstrain(rc.vvTau[iMu], slabDir); //eliminate out-of-plane components if necessary
 			//Store relevant quantities:
 			rhoArr[iMu][block] = Omega * inv(rc.vvTau[iMu]);
