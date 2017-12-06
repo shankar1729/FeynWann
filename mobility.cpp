@@ -56,7 +56,7 @@ int main(int argc, char** argv)
 	}
 	mpiWorld->allReduce(Emin, MPIUtil::ReduceMin);
 	mpiWorld->allReduce(Emax, MPIUtil::ReduceMax);
-	double dE = 0.1*T;
+	double dE = 0.01*T;
 	
 	//Collect mobility integrand on energy grid:
 	if(bs.nValence >= bs.nBands)
@@ -64,7 +64,7 @@ int main(int argc, char** argv)
 	logPrintf("Collecting mobility integrands ... "); logFlush();
 	int nBunches = nKpts/(bunchSize*mpiWorld->nProcesses());
 	int iBunchInterval = std::max(1, int(round(nBunches/50.))); //interval for reporting progress
-	Histogram vSqTauBy3(Emin, dE, Emax), g(Emin, dE, Emax); //collect v^2*tau/3 and DOS by energy
+	Histogram vSqTauBy3(Emin, dE, Emax), vSq(Emin, dE, Emax), tau(Emin, dE, Emax), g(Emin, dE, Emax); //collect v^2*tau/3 and DOS by energy
 	double EvMax = -DBL_MAX, EcMin = +DBL_MAX; //band edges
 	for(int iBunch=0; iBunch<nBunches; iBunch++)
 	{	//Random block of kpoints:
@@ -86,6 +86,8 @@ int main(int argc, char** argv)
 			for(int b=0; b<bs.nBands; b++)
 			{	double tau_ePh = 0.5/ImSigma_ePh[b];
 				vSqTauBy3.addEvent(E[b], (1./3) * v[b].length_squared() * tau_ePh);
+				vSq.addEvent(E[b],  v[b].length_squared());
+				tau.addEvent(E[b],  tau_ePh);
 				g.addEvent(E[b], 1.);
 			}
 		}
@@ -98,31 +100,43 @@ int main(int argc, char** argv)
 	mpiWorld->allReduce(EvMax, MPIUtil::ReduceMax);
 	mpiWorld->allReduce(EcMin, MPIUtil::ReduceMin);
 	vSqTauBy3.allReduce(MPIUtil::ReduceSum);
+	vSq.allReduce(MPIUtil::ReduceSum);
+	tau.allReduce(MPIUtil::ReduceSum);
 	g.allReduce(MPIUtil::ReduceSum);
 	logPrintf("done.\n\n"); logFlush();
 	logPrintf("Band edges:  EvMax: %lg  EcMin: %lg\n\n", EvMax, EcMin);
 	
 	//Calculate and report mobilities:
-	double hMobilityNum = 0., hMobilityDen = 0.;
-	double eMobilityNum = 0., eMobilityDen = 0.;
+	double hMobNum = 0., hVsqNum = 0., hTauNum = 0., hDen = 0.;
+	double eMobNum = 0., eVsqNum = 0., eTauNum = 0., eDen = 0.;
 	for(size_t ie=0; ie<g.out.size(); ie++)
 	{	double E = Emin + ie*dE;
-		if(E<EvMax) //hole:
+		if(E<=EvMax) //hole:
 		{	double denWeight = exp((E-EvMax)/T); //limit of (1-f) with scale factor
 			double numWeight = (1./T)*denWeight; //limit of -(1-f)' with scale factor
-			hMobilityNum += numWeight * vSqTauBy3.out[ie] * dE;
-			hMobilityDen += denWeight * g.out[ie] * dE;
+			hMobNum += numWeight * vSqTauBy3.out[ie] * dE;
+			hVsqNum += denWeight * vSq.out[ie] * dE;
+			hTauNum += denWeight * tau.out[ie] * dE;
+			hDen += denWeight * g.out[ie] * dE;
 		}
-		if(E>EcMin) //electron:
+		if(E>=EcMin) //electron:
 		{	double denWeight = exp((EcMin-E)/T); //limit of f with scale factor
 			double numWeight = (1./T)*denWeight; //limit of -f' with scale factor
-			eMobilityNum += numWeight * vSqTauBy3.out[ie] * dE;
-			eMobilityDen += denWeight * g.out[ie] * dE;
+			eMobNum += numWeight * vSqTauBy3.out[ie] * dE;
+			eVsqNum += denWeight * vSq.out[ie] * dE;
+			eTauNum += denWeight * tau.out[ie] * dE;
+			eDen += denWeight * g.out[ie] * dE;
 		}
 	}
 	double mobUnit = std::pow(1e-2*meter,2)/(Volt*sec);
-	logPrintf("hMobility = %lg cm^2/(V.s)\n", (hMobilityNum/hMobilityDen)/mobUnit);
-	logPrintf("eMobility = %lg cm^2/(V.s)\n", (eMobilityNum/eMobilityDen)/mobUnit);
-
+	logPrintf("hMobility = %lg cm^2/(V.s)\n", (hMobNum/hDen)/mobUnit);
+	logPrintf("eMobility = %lg cm^2/(V.s)\n", (eMobNum/eDen)/mobUnit);
+	logPrintf("vF_h = %lg\n", sqrt(hVsqNum/hDen));
+	logPrintf("vF_e = %lg\n", sqrt(eVsqNum/eDen));
+	logPrintf("tau_h = %lg fs\n", (hTauNum/hDen)/fs);
+	logPrintf("tau_e = %lg fs\n", (eTauNum/eDen)/fs);
+	logPrintf("tauDrude_h = %lg fs\n", (3.*T*hMobNum/hVsqNum)/fs);
+	logPrintf("tauDrude_e = %lg fs\n", (3.*T*eMobNum/eVsqNum)/fs);
+	
 	finalizeSystem();
 }
