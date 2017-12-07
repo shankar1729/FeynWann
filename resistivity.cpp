@@ -16,19 +16,20 @@ struct ResistivityCollect
 	
 	void collect(const WannierMC::StateE& state)
 	{	const int nBands = state.E.nRows();
+		double invT = 1./T;
 		for(int b=0; b<nBands; b++)
 		{	const double& E = state.E[b];
 			const vector3<>& v = state.vVec[b];
 			matrix3<> vdotv = outer(v, v);
 			for(unsigned iMu=0; iMu<dmu.size(); iMu++)
-			{	double expArg = (E-dmu[iMu])/T;
+			{	double expArg = (E-dmu[iMu])*invT;
 				if(fabs(expArg)>30.) //avoid over/underflow
 				{	if(expArg<0.) n[iMu] += 1.; //still need to count towards n if occupied
 					continue; //negligible contribution to rest
 				}
 				double expTerm = exp(expArg);
 				double f = 1./(1.+expTerm);
-				double dfdE = -expTerm/(T*std::pow(expTerm+1,2));
+				double dfdE = -f*f*expTerm*invT;
 				n[iMu] += f;
 				g[iMu] += (-dfdE);
 				vSq[iMu] += (-dfdE) * v.length_squared();
@@ -75,7 +76,7 @@ int main(int argc, char** argv)
 	const int nOffsets = inputMap.get("nOffsets"); assert(nOffsets>0);
 	const int nBlocks = inputMap.get("nBlocks"); assert(nBlocks>0);
 	const double T = inputMap.get("T") * Kelvin;
-	double Ztot = inputMap.get("Ztot", -1.); //optional nuclear charge per unit cell for counting carriers (default to nElectrons in DFT i.e. assume DFT calculation was neutral)
+	double Nconduction = inputMap.get("Nconduction", 0.); //optional number of DFT electrons to be counted as conduction (default to 0); set for metal mobility calc
 	const double dmuMin = inputMap.get("dmuMin", 0.) * eV; //optional shift in chemical potential from neutral value; start of range (default to 0)
 	const double dmuMax = inputMap.get("dmuMax", 0.) * eV; //optional shift in chemical potential from neutral value; end of range (default to 0)
 	const int dmuCount = inputMap.get("dmuCount", 1); assert(dmuCount>0); //number of chemical potential shifts
@@ -85,7 +86,7 @@ int main(int argc, char** argv)
 	logPrintf("nOffsets = %d\n", nOffsets);
 	logPrintf("nBlocks = %d\n", nBlocks);
 	logPrintf("T = %lg\n", T);
-	logPrintf("Ztot = %lg\n", Ztot);
+	logPrintf("Nconduction = %lg\n", Nconduction);
 	logPrintf("dmuMin = %lg\n", dmuMin);
 	logPrintf("dmuMax = %lg\n", dmuMax);
 	logPrintf("dmuCount = %d\n", dmuCount);
@@ -98,11 +99,6 @@ int main(int argc, char** argv)
 	wmcp.needLinewidth_ePh = true;
 	wmcp.needLinewidthP_ePh = true;
 	WannierMC wmc(wmcp);
-	
-	if(Ztot < 0.)
-	{	Ztot = wmc.nElectrons;
-		logPrintf("Setting Ztot = nElectrons = %lg\n", Ztot);
-	}
 	
 	//dmu array:
 	std::vector<double> dmu(dmuCount, dmuMin); //set first value here
@@ -175,13 +171,14 @@ int main(int argc, char** argv)
 			mpiWorld->allReduce(rc.tau[iMu], MPIUtil::ReduceSum);
 			mpiWorld->allReduce(&rc.vvTau[iMu](0,0), 3*3, MPIUtil::ReduceSum);
 			//Apply normalizing factors:
-			rc.n[iMu] *= prefacDOS; rc.n[iMu] -= Ztot; //convert to number of free carriers per unit cell
+			rc.n[iMu] *= prefacDOS;
+			rc.n[iMu] -= (wmc.nElectrons - Nconduction); //convert to number of free carriers per unit cell
 			rc.g[iMu] *= prefacDOS;
 			rc.vSq[iMu] *= prefacDOS;
 			rc.tau[iMu] *= prefacDOS;
 			rc.vvTau[iMu] *= prefacDOS;
-			wmc.symmetrize(rc.vvTau[iMu]); //follow symmetries of unit cell
 			slabConstrain(rc.vvTau[iMu], slabDir); //eliminate out-of-plane components if necessary
+			wmc.symmetrize(rc.vvTau[iMu]); //follow symmetries of unit cell
 			//Store relevant quantities:
 			rhoArr[iMu][block] = Omega * inv(rc.vvTau[iMu]);
 			mobArr[iMu][block] = rc.vvTau[iMu]/fabs(rc.n[iMu]);

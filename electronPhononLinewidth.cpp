@@ -2,6 +2,7 @@
 #include "InputMap.h"
 #include <core/Units.h>
 #include <core/LatticeUtils.h>
+#include <electronic/TetrahedralDOS.h>
 #include <algorithm>
 
 template<typename T> T prod(const vector3<T>& v) { return v[0]*v[1]*v[2]; }
@@ -14,7 +15,8 @@ struct CollectEph
 	const double EconserveExpFac, EconservePrefac; //energy conserving Gaussian exponential and pre-factor
 	const std::vector<double>& f1grid; //grid of fillings ofr which e-ph linewidth is calculated
 	std::vector<std::vector<diagMatrix>> ImSigma; //e-ph linewidth for various f1, without and with momentum direction factors
-	std::vector<diagMatrix> E; //save electron energies on DFT mesh for later
+	std::vector<diagMatrix> E; //save electron energies on DFT mesh for final outputs
+	std::vector<vector3<>> kmesh; //DFT k-point mesh (full version i.e. unreduced)
 	double wOffsetCur; //weight factor of current offset (due to symmetry reduction)
 	const double omegaPhCut; //cut-off frequency to avoid zero/imaginary phonon frequencies
 	
@@ -25,24 +27,16 @@ struct CollectEph
 		EconservePrefac(1./(sqrt(2.*M_PI)*EconserveWidth)),
 		f1grid(WannierMCParams::fGrid_ePh),
 		ImSigma(2*f1grid.size(), std::vector<diagMatrix>(prod(wmc.kfold), diagMatrix(wmc.nBands))),
-		E(prod(wmc.kfold)),
+		E(prod(wmc.kfold)), kmesh(prod(wmc.kfold)),
 		omegaPhCut(1e-6)
 	{
 	}
 	
-	//---- Max group velocity calculation for NkMult hint ----
-	vector3<> dEdkMax; //w.r.t k in reciprocal lattice coordinates
-	void vgMaxCollect(const WannierMC::StateE& state)
-	{	matrix3<> G = (2*M_PI)*inv(wmc.R);
-		for(int b=0; b<wmc.nBands; b++)
-			if(fabs(state.E[b]) < 5*eV) //only consider states in medium proximity to Fermi level
-			{	vector3<> dEdk = G * state.vVec[b]; //w.r.t k in reciprocal lattice coordinates
-				for(int iDir=0; iDir<3; iDir++)
-					dEdkMax[iDir] = std::max(dEdkMax[iDir], fabs(dEdk[iDir]));
-			}
-	}
-	static void vgMaxProcess(const WannierMC::StateE& state, void* params)
-	{	((CollectEph*)params)->vgMaxCollect(state);
+	//---- Collect energies and kmesh ----
+	static void collectE(const WannierMC::StateE& state, void* params)
+	{	CollectEph& cEph = *((CollectEph*)params);
+		cEph.E[state.ik] = state.E;
+		cEph.kmesh[state.ik] = state.k;
 	}
 	
 	//---- Main e-ph scattering linewidth kernel ----
@@ -83,8 +77,6 @@ struct CollectEph
 				}
 			}
 		}
-		//Save E1 for final output:
-		if(!E[e1.ik].size()) E[e1.ik] = e1.E;
 	}
 	static void ePhProcess(const WannierMC::MatrixEph& mEph, void* params)
 	{	((CollectEph*)params)->process(mEph);
@@ -162,7 +154,6 @@ public:
 	}
 };
 
-
 int main(int argc, char** argv)
 {   InitParams ip =  WannierMC::initialize(argc, argv, "Electron-phonon scattering contribution to electron linewidth.");
 
@@ -226,18 +217,55 @@ int main(int argc, char** argv)
 	logPrintf("Effective interpolated k-mesh dimensions: ");
 	NkFine.print(globalLog, " %d ");
 	
-	//Initialize collect helper class:
+	//Collect energies and k-point  mesh:
 	CollectEph cEph(wmc, T, EconserveWidth, NkMult);
-	//Estimate minimum NkMult:
-	wmc.eLoop(vector3<>(), CollectEph::vgMaxProcess, &cEph);
-	mpiGroup->allReduce(&cEph.dEdkMax[0], 3, MPIUtil::ReduceMax);
-	vector3<int> NkMultMin;
-	for(int iDir=0; iDir<3; iDir++)
-	{	double dkMax = EconserveWidth / cEph.dEdkMax[iDir]; //max dk in recip coords such that dE within EconserveWidth
-		NkMultMin[iDir] = ceil(1./(wmc.kfold[iDir]*dkMax)); //multiplication factor that will keep dk of mesh smaller than that
+	wmc.eLoop(vector3<>(), CollectEph::collectE, &cEph);
+	//--- make available on all processes:
+	for(unsigned i=0; i<cEph.E.size(); i++)
+	{	int root = cEph.E[i].size() ? mpiGroup->iProcess() : mpiGroup->nProcesses(); //my process ID or N, depending on whether I have E[i]
+		mpiGroup->allReduce(root, MPIUtil::ReduceMin); //lowest process number which has E[i] available
+		cEph.E[i].resize(wmc.nBands);
+		mpiGroup->bcast(cEph.E[i].data(), wmc.nBands, root);
 	}
-	logPrintf("\nFor dE ~ EconserveWidth, NkMult ~ ");
-	NkMultMin.print(globalLog, " %d ");
+	mpiGroup->allReduce(&cEph.kmesh[0][0], 3*cEph.kmesh.size(), MPIUtil::ReduceSum);
+	
+	//Get density of states:
+	TetrahedralDOS dosEval(cEph.kmesh, std::vector<int>(), wmc.R, Diag(wmc.kfold), 1, wmc.nBands, 1);
+	double Etol = 1e-4;
+	dosEval.setEigs(cEph.E);
+	dosEval.weldEigenvalues(Etol);
+	TetrahedralDOS::Lspline dos = dosEval.getDOS(0, Etol);
+	TetrahedralDOS::Lspline dosSmooth = dosEval.gaussSmooth(dos, EconserveWidth); //dos within EconserveWidth of each energy
+	
+	//Estimate minimum NkMult:
+	{	//--- find minimum DOS at each DFT eigenvalue
+		double Ecut = 5*eV; //only include states ~ 5 eV from fermi level / VBM
+		double dosMin = DBL_MAX;
+		double E0 = dosSmooth[0].first;
+		double dEinv = 1./(dosSmooth[1].first-E0);
+		int ikStart, ikStop; TaskDivision(cEph.E.size(), mpiWorld).myRange(ikStart, ikStop);
+		for(int ik=ikStart; ik<ikStop; ik++)
+			for(double E: cEph.E[ik])
+				if(fabs(E) < Ecut)
+				{	double t = dEinv*(E-E0);
+					int i = floor(t); t -= i;
+					double dosCur = dosSmooth[i].second[0]*(1.-t) + dosSmooth[i+1].second[0]*t;
+					dosMin = std::min(dosMin, dosCur);
+				}
+		mpiWorld->allReduce(dosMin, MPIUtil::ReduceMin);
+		//--- calculate minimum folding such that minimum average states per EconserveWidth
+		double prodNkFineMin = 1000./(dosMin * EconserveWidth);
+		int nDim = 0;
+		for(int iDir=0; iDir<3; iDir++)
+			if(NkFine[iDir]>1)
+				nDim++; //only count directions which have more than one k-point
+		int NkMultDim = round(std::pow(prodNkFineMin/cEph.kmesh.size(), 1./nDim));
+		vector3<int> NkMultMin;
+		for(int iDir=0; iDir<3; iDir++)
+			NkMultMin[iDir] = (NkFine[iDir]>1) ? NkMultDim : 1;
+		logPrintf("\nFor 1000 states within EconserveWidth, NkMult ~ ");
+		NkMultMin.print(globalLog, " %d ");
+	}
 	
 	//Reduce under symmetries (simplified version of Symmetries::reduceKmesh from JDFTx):
 	std::vector<vector3<>> k02; //array of k2-mesh offsets
@@ -316,23 +344,17 @@ int main(int argc, char** argv)
 			d.allReduce(MPIUtil::ReduceSum);
 	
 	//Symmetrize:
-	std::vector<vector3<>> kmesh; //DFT k-point mesh
-	vector3<int> ikmesh;
-	for(ikmesh[0]=0; ikmesh[0]<wmc.kfold[0]; ikmesh[0]++)
-	for(ikmesh[1]=0; ikmesh[1]<wmc.kfold[1]; ikmesh[1]++)
-	for(ikmesh[2]=0; ikmesh[2]<wmc.kfold[2]; ikmesh[2]++)
-		kmesh.push_back(kfoldInv * ikmesh);
-	PeriodicLookup<vector3<>> plook(kmesh, GGT);
-	std::vector<bool> kDone(kmesh.size(), false);
+	PeriodicLookup<vector3<>> plook(cEph.kmesh, GGT);
+	std::vector<bool> kDone(cEph.kmesh.size(), false);
 	std::vector<int> iReduced;
-	for(size_t i0=0; i0<kmesh.size(); i0++)
+	for(size_t i0=0; i0<cEph.kmesh.size(); i0++)
 		if(!kDone[i0])
 		{	//Find orbit of this k-points under symmetries:
 			std::vector<int> iEquiv;
 			std::vector<diagMatrix> ImSigmaMean(cEph.ImSigma.size(), diagMatrix(wmc.nBands));
 			for(int invert: invertList)
 				for(const SpaceGroupOp& op: wmc.sym)
-				{	size_t i = plook.find(invert * kmesh[i0] * op.rot);
+				{	size_t i = plook.find(invert * cEph.kmesh[i0] * op.rot);
 					if(i!=string::npos && (!kDone[i]))
 					{	kDone[i] = true; //i will be covered in i0's orbit
 						iEquiv.push_back(i);
@@ -348,15 +370,7 @@ int main(int argc, char** argv)
 			}
 			iReduced.push_back(i0);
 		}
-	logPrintf("Symmetrized ImSigma for %lu k-points in mesh in %lu orbits.\n", kmesh.size(), iReduced.size());
-	
-	//Collect electronic energies on all processes:
-	for(int i: iReduced)
-	{	int root = cEph.E[i].size() ? mpiWorld->iProcess() : mpiWorld->nProcesses(); //my process ID or N, depending on whether I have E[i]
-		mpiWorld->allReduce(root, MPIUtil::ReduceMin); //lowest process number which has E[i] available
-		cEph.E[i].resize(wmc.nBands);
-		mpiWorld->bcast(cEph.E[i].data(), wmc.nBands, root);
-	}
+	logPrintf("Symmetrized ImSigma for %lu k-points in mesh in %lu orbits.\n", cEph.kmesh.size(), iReduced.size());
 	
 	//Output linewidths and energies in text file:
 	if(mpiWorld->isHead())
@@ -393,7 +407,7 @@ int main(int argc, char** argv)
 		cEph.mlwfImSigma[iP] = zeroes(wmc.nBands*wmc.nBands*cEph.f1grid.size(), nkMine);
 	cEph.phase = zeroes(nkMine, ncMine);
 	wmc.eLoop(vector3<>(), CollectEph::eProcess, &cEph);
-	cEph.phase *= (1./kmesh.size()); //inverse transform normalizing factor
+	cEph.phase *= (1./cEph.kmesh.size()); //inverse transform normalizing factor
 	cEph.dumpWannierized(cEph.mlwfImSigma[0], wmcp.wannierPrefix + ".mlwfImSigma_ePh");
 	cEph.dumpWannierized(cEph.mlwfImSigma[1], wmcp.wannierPrefix + ".mlwfImSigmaP_ePh");
 	
