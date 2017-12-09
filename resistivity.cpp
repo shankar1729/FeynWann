@@ -149,7 +149,8 @@ int main(int argc, char** argv)
 	DeclareArray2D(matrix3<>, rhoArr); DeclareArray2D(matrix3<>, mobArr);
 	DeclareArray2D(double, rhoBarArr); DeclareArray2D(double, mobBarArr); 
 	DeclareArray2D(double, tauArr); DeclareArray2D(double, tauDrudeArr);
-	DeclareArray2D(double, vFarr); DeclareArray2D(double, gArr); DeclareArray2D(double, nArr);
+	DeclareArray2D(double, mEffArr); DeclareArray2D(double, vFarr);
+	DeclareArray2D(double, gArr); DeclareArray2D(double, nArr);
 	#undef DeclareArray2D
 	for(int block=0; block<nBlocks; block++)
 	{	logPrintf("Working on block %d of %d: ", block+1, nBlocks); logFlush();
@@ -190,6 +191,7 @@ int main(int argc, char** argv)
 			mobBarArr[iMu][block] = trace(mobArr[iMu][block], slabDir) / (slabDir>=0 ? 2. : 3.);
 			tauArr[iMu][block] = rc.tau[iMu] / rc.g[iMu];
 			tauDrudeArr[iMu][block] = trace(rc.vvTau[iMu], slabDir) / rc.vSq[iMu];
+			mEffArr[iMu][block] = tauDrudeArr[iMu][block] / mobBarArr[iMu][block]; //mobility-effective-mass
 			vFarr[iMu][block] = sqrt(rc.vSq[iMu] / rc.g[iMu]);
 			gArr[iMu][block] = rc.g[iMu];
 			nArr[iMu][block] = rc.n[iMu];
@@ -204,6 +206,7 @@ int main(int argc, char** argv)
 		reportResult(mobBarArr[iMu], "Mobility", cm2byVs, "cm^2/(V.s)");
 		reportResult(tauDrudeArr[iMu], "tauDrude", fs, "fs");
 		reportResult(tauArr[iMu], "tau", fs, "fs");
+		reportResult(mEffArr[iMu], "mEff", 1, "");
 		reportResult(vFarr[iMu], "vF", 1, "");
 		reportResult(gArr[iMu], "g(eF)", 1, "");
 		reportResult(nArr[iMu], "Ncarriers", 1, "cell^-1");
