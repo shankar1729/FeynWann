@@ -85,44 +85,23 @@ struct CollectEph
 	//---- Wannierization ----
 	int cStart, cStop; //range of cells handled here
 	matrix mlwfImSigma[2], phase;
-	TetrahedralDOS::Lspline ImSigmaBar; //energy-averaged ImSigma_ePh (used for normalization)
-	static inline bool LsplineElemLess(const double x, TetrahedralDOS::LsplineElem elem) { return x < elem.first; }
 	
 	void wannierize(const WannierMC::StateE& state)
 	{	//Calculate for Fourier transform:
 		unsigned iCol = state.ik - wmc.Hw->ikStart;
 		for(int c=cStart; c<cStop; c++)
 			phase.set(iCol, c-cStart, cis(-2*M_PI*dot(state.k, wmc.cellMap[c])));
-		//Calculate log-normalized matrices at curent ik:
-		std::vector<diagMatrix> normImSigma(ImSigma.size(), diagMatrix(wmc.nBands));
-		for(int b=0; b<wmc.nBands; b++)
-		{	const double& Eb = E[state.ik][b];
-			int iE = 0; double tE = 0.;
-			if(Eb <= ImSigmaBar.front().first) { iE = 0; tE = 0.; }
-			else if(Eb >= ImSigmaBar.back().first) { iE = ImSigmaBar.size()-2; tE = 1.; }
-			else
-			{	iE = (std::upper_bound(ImSigmaBar.begin(), ImSigmaBar.end(), Eb, LsplineElemLess) - ImSigmaBar.begin()) - 1;
-				tE = (Eb - ImSigmaBar[iE].first) / (ImSigmaBar[iE+1].first - ImSigmaBar[iE].first);
-			}
-			for(unsigned if1=0; if1<f1grid.size(); if1++)
-			{	double logImSigmaBar = (1.-tE)*ImSigmaBar[iE].second[if1] + tE*ImSigmaBar[iE+1].second[if1];
-				for(unsigned iP=0; iP<2; iP++)
-				{	unsigned iMat = if1+iP*f1grid.size();
-					normImSigma[iMat][b] = log(ImSigma[iMat][state.ik][b]) - logImSigmaBar;
-				}
-			}
-		}
-		
-		normImSigma.back() = E[state.ik]; //HACK
-		
 		//For each matrix:
 		for(unsigned iP=0; iP<2; iP++) //without or with P factors
 			for(unsigned if1=0; if1<f1grid.size(); if1++)
-			{	//Switch to Wannier basis:
-				matrix normImSigmaW = state.U * normImSigma[if1+iP*f1grid.size()] * dagger(state.U);
+			{	//Convert to log for the interpolation:
+				diagMatrix logImSigma(ImSigma[if1+iP*f1grid.size()][state.ik]);
+				for(double& x: logImSigma) x = log(x);
+				//Switch to Wannier basis:
+				matrix logImSigmaW = state.U * logImSigma * dagger(state.U);
 				//Save as a column in a matrix containing all k:
 				unsigned colLength = wmc.nBands * wmc.nBands;
-				eblas_copy(mlwfImSigma[iP].data()+colLength*(iCol*f1grid.size()+if1), normImSigmaW.data(), colLength);
+				eblas_copy(mlwfImSigma[iP].data()+colLength*(iCol*f1grid.size()+if1), logImSigmaW.data(), colLength);
 			}
 	}
 	static void eProcess(const WannierMC::StateE& state, void* params)
@@ -416,50 +395,6 @@ int main(int argc, char** argv)
 		logPrintf("\nEnergy and ImSigma [Eh] for few states closest to Fermi level:\n");
 		fr.report();
 		logPrintf("HINT: check convergence of above numbers with NkMult.\n\n");
-	}
-	
-	//Calculate energy-averaged logImSigma:
-	{	TetrahedralDOS dosEval(cEph.kmesh, std::vector<int>(), wmc.R, Diag(wmc.kfold), 1, wmc.nBands, cEph.f1grid.size()+1);
-		double Etol = 1e-4;
-		dosEval.setEigs(cEph.E);
-		for(unsigned if1=0; if1<cEph.f1grid.size(); if1++)
-			for(unsigned ik=0; ik<cEph.kmesh.size(); ik++)
-				for(int b=0; b<wmc.nBands; b++)
-					dosEval.w(if1, ik, b) = log(cEph.ImSigma[if1][ik][b]);
-		dosEval.weldEigenvalues(Etol);
-		TetrahedralDOS::Lspline ImSigmaBarNum = dosEval.getDOS(0, Etol);
-		//Normalize to last channel (unweighted DOS) to get energy average ImSigma:
-		for(TetrahedralDOS::LsplineElem& elem: ImSigmaBarNum)
-			if(elem.second.back()) //zero entries handled below
-			{	double normFac = 1./elem.second.back(); //last weight was 1, so last channel contains un-weighted DOS
-				for(double& x: elem.second)
-					x *= normFac; //now contains average ImSigma at current energy
-			}
-		//Handle 0/0 near band edges:
-		int nNodesIn = ImSigmaBarNum.size();
-		cEph.ImSigmaBar.clear();
-		cEph.ImSigmaBar.reserve(nNodesIn);
-		for(int i=0; i<nNodesIn; i++)
-		{	if(ImSigmaBarNum[i].second.back())
-				cEph.ImSigmaBar.push_back(ImSigmaBarNum[i]); //non-0/0; use as is
-			else
-			{	//0/0 entry; use limit from adjacent interval if available:
-				if(i>0 && ImSigmaBarNum[i-1].second.back())
-				{	cEph.ImSigmaBar.push_back(ImSigmaBarNum[i-1]); //use value from left
-					cEph.ImSigmaBar.back().first = ImSigmaBarNum[i].first; //(but with current energy)
-				}
-				else if(i+1<nNodesIn && ImSigmaBarNum[i+1].second.back())
-				{	cEph.ImSigmaBar.push_back(ImSigmaBarNum[i+1]); //use value from right
-					cEph.ImSigmaBar.back().first = ImSigmaBarNum[i].first; //(but with current energy)
-				}
-				//else drop
-			}
-		}
-		ostringstream ossHeader; ossHeader << "#E";
-		for(double f1: cEph.f1grid)
-			ossHeader << " logImSigmaBar[f1=" << f1 << "]";
-		ossHeader << " Unused";
-		dosEval.printDOS(cEph.ImSigmaBar, wmcp.wannierPrefix + ".mlwfImSigma_ePhBar", ossHeader.str());
 	}
 	
 	//Wannierize output:
