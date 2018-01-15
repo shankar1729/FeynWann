@@ -12,7 +12,8 @@ struct Histogram
 	double Emin, dE, dEinv;
 	int nE;
 	std::vector<double> out;
-
+	inline double Emax() const { return Emin + (nE-1)*dE; }
+	
 	Histogram(double Emin, double dE, double Emax);
 	void addEvent(double E, double weight);
 	void allReduce(MPIUtil::ReduceOp op, bool safeMode=false); //collect over MPI

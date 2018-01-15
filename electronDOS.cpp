@@ -49,13 +49,13 @@ int main(int argc, char** argv)
 
 	//Initialize WannierMC:
 	WannierMCParams wmcp; //default parametres suffice
-	WannierMC wmc(wmcp);
-	size_t nKpts = nOffsets * wmc.eCountPerOffset();  
+	std::shared_ptr<WannierMC> wmc = std::make_shared<WannierMC>(wmcp);
+	size_t nKpts = nOffsets * wmc->eCountPerOffset();  
 	logPrintf("Effectively sampled nKpts: %lu\n", nKpts);
 	
 	if(ip.dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
-		wmc.free();
+		wmc = 0;
 		WannierMC::finalize();
 		return 0;
 	}
@@ -67,40 +67,86 @@ int main(int argc, char** argv)
 		Tarr[iT] = Tmin + Tstep*iT;
 	logPrintf("Initialized temperature grid: %lg to %lg K with %lu points.\n", Tarr.front()/Kelvin, Tarr.back()/Kelvin, Tarr.size());
 	
-	//Initialize energy grid:
-	EnergyRange er = { DBL_MAX, -DBL_MAX };
-	wmc.eLoop(vector3<>(), EnergyRange::eProcess, &er);
-	mpiWorld->allReduce(er.Emin, MPIUtil::ReduceMin);
-	mpiWorld->allReduce(er.Emax, MPIUtil::ReduceMax);
-	er.Emin -= 10*dE; //add some margin
-	er.Emax += 10*dE;
-	Histogram dos(er.Emin, dE, er.Emax); //density of states
-	logPrintf("Initialized energy grid: %lg to %lg eV with %lu points.\n", er.Emin/eV, (er.Emin+dE*(dos.out.size()-1))/eV, dos.out.size());
-	
-	//Initialize sampling parameters:
-	int oStart=0, oStop=0;
-	if(mpiGroup->isHead())
-		TaskDivision(nOffsets, mpiGroupHead).myRange(oStart, oStop);
-	mpiGroup->bcast(oStart);
-	mpiGroup->bcast(oStop);
-	int noMine = oStop-oStart; //number of offsets handled by current group
-	int oInterval = std::max(1, int(round(noMine/50.))); //interval for reporting progress
-	
-	logPrintf("\nCollecting DOS: "); logFlush();
-	CollectDOS cd;
-	cd.dos = &dos;
-	cd.weight = wmc.spinWeight*(1./nKpts);
-	for(int o=0; o<noMine; o++)
-	{	Random::seed(o+oStart); //to make results independent of MPI division
-		//Process with a random offset:
-		vector3<> k0 = wmc.randomVector(mpiGroup); //must be constant across group
-		wmc.eLoop(k0, CollectDOS::eProcess, &cd);
-		//Print progress:
-		if((o+1)%oInterval==0) { logPrintf("%d%% ", int(round((o+1)*100./noMine))); logFlush(); }
+	std::vector<std::shared_ptr<Histogram>> dosArr(wmc->nSpins);
+	for(int iSpin=0; iSpin<wmc->nSpins; iSpin++)
+	{	//Update WannierMC for spin channel if necessary:
+		if(iSpin>0)
+		{	wmcp.iSpin = iSpin;
+			wmc = std::make_shared<WannierMC>(wmcp);
+		}
+		
+		//Initialize energy grid:
+		EnergyRange er = { DBL_MAX, -DBL_MAX };
+		wmc->eLoop(vector3<>(), EnergyRange::eProcess, &er);
+		mpiWorld->allReduce(er.Emin, MPIUtil::ReduceMin);
+		mpiWorld->allReduce(er.Emax, MPIUtil::ReduceMax);
+		er.Emin = dE * (floor(er.Emin/dE) - 10); //add some margin and ensure grid contains 0
+		er.Emax = dE * (ceil(er.Emax/dE) + 10);
+		dosArr[iSpin] = std::make_shared<Histogram>(er.Emin, dE, er.Emax); //density of states for current spin channel
+		Histogram& dos = *dosArr[iSpin];
+		logPrintf("Initialized energy grid: %lg to %lg eV with %d points.\n", dos.Emin/eV, dos.Emax()/eV, dos.nE);
+		
+		//Initialize sampling parameters:
+		int oStart=0, oStop=0;
+		if(mpiGroup->isHead())
+			TaskDivision(nOffsets, mpiGroupHead).myRange(oStart, oStop);
+		mpiGroup->bcast(oStart);
+		mpiGroup->bcast(oStop);
+		int noMine = oStop-oStart; //number of offsets handled by current group
+		int oInterval = std::max(1, int(round(noMine/50.))); //interval for reporting progress
+		
+		logPrintf("\nCollecting DOS: "); logFlush();
+		CollectDOS cd;
+		cd.dos = &dos;
+		cd.weight = wmc->spinWeight*(1./nKpts);
+		for(int o=0; o<noMine; o++)
+		{	Random::seed(o+oStart); //to make results independent of MPI division
+			//Process with a random offset:
+			vector3<> k0 = wmc->randomVector(mpiGroup); //must be constant across group
+			wmc->eLoop(k0, CollectDOS::eProcess, &cd);
+			//Print progress:
+			if((o+1)%oInterval==0) { logPrintf("%d%% ", int(round((o+1)*100./noMine))); logFlush(); }
+		}
+		logPrintf("done.\n"); logFlush();
+		dos.allReduce(MPIUtil::ReduceSum);
 	}
-	logPrintf("done.\n"); logFlush();
-	dos.allReduce(MPIUtil::ReduceSum);
-	dos.print("eDOS.dat", 1./eV, eV);
+	
+	//Output DOS, combining spin channels if necessary
+	if(wmc->nSpins == 1)
+		dosArr[0]->print("eDOS.dat", 1./eV, eV);
+	else
+	{	//Combined energy range:
+		double Emin = DBL_MAX, Emax = -DBL_MAX;
+		for(const auto& dos: dosArr)
+		{	Emin = std::min(Emin, dos->Emin);
+			Emax = std::max(Emax, dos->Emax());
+		}
+		//Convert DOS to combined energy grid and collect total:
+		std::shared_ptr<Histogram> dosTot = std::make_shared<Histogram>(Emin, dE, Emax);
+		logPrintf("\nCombined energy grid: %lg to %lg eV with %d points.\n", dosTot->Emin/eV, dosTot->Emax()/eV, dosTot->nE);
+		for(auto& dos: dosArr)
+		{	std::shared_ptr<Histogram> dosNew = std::make_shared<Histogram>(Emin, dE, Emax);
+			int iOffset = round((dos->Emin - Emin)/dE);
+			for(int i=0; i<dos->nE; i++)
+			{	dosNew->out[i+iOffset] += dos->out[i];
+				dosTot->out[i+iOffset] += dos->out[i];
+			}
+			std::swap(dos, dosNew);
+		}
+		//Output combined result along with individual ones:
+		if(mpiWorld->isHead())
+		{	ofstream ofs("eDOS.dat");
+			double Escale = 1./eV, histScale=eV;
+			for(int i=0; i<dosTot->nE; i++)
+			{	ofs << (Emin+i*dE)*Escale << "\t" << dosTot->out[i]*histScale;
+				for(const auto& dos: dosArr)
+					ofs << "\t" << dos->out[i]*histScale;
+				ofs << '\n';
+			}
+		}
+		dosArr.push_back(dosTot); //add total DOS as last channel
+	}
+	const Histogram& dos = *dosArr.back(); //last channel is total DOS (irrespective of spin)
 	
 	//Calculate mu and Ce at each temperature:
 	diagMatrix dmu(Tarr.size(), 0.), Ce(Tarr.size(), 0.);
@@ -108,33 +154,33 @@ int main(int argc, char** argv)
 	double Zmax = 0.;
 	for(const double& g: dos.out)
 		Zmax += dE * g;
-	if(Zmax < wmc.nElectrons)
-		die("Current DOS can only support %lg electrons > %lg electrons specified.\n", Zmax, wmc.nElectrons);
+	if(Zmax < wmc->nElectrons)
+		die("Current DOS can only support %lg electrons > %lg electrons specified.\n", Zmax, wmc->nElectrons);
 	int iTstart, iTstop; TaskDivision(Tarr.size(), mpiWorld).myRange(iTstart, iTstop);
 	for(int iT=iTstart; iT<iTstop; iT++)
 	{	const double T = Tarr[iT], invT = 1./T;
 		//Bisect for chemical potential:
 		double& dmuCur = dmu[iT];
-		double dmuMin = er.Emin - 10*T;
-		double dmuMax = er.Emax + 10*T;
+		double dmuMin = dos.Emin - 10*T;
+		double dmuMax = dos.Emax() + 10*T;
 		dmuCur = 0.5*(dmuMin + dmuMax);
 		const double tol = 1e-9*T;
 		while(dmuMax-dmuMin > tol)
 		{	//calculate number of electrons at current Z:
 			double nElectrons = 0.;
-			for(size_t ie=0; ie<dos.out.size(); ie++)
-			{	double Ei = er.Emin + ie*dE;
+			for(int ie=0; ie<dos.nE; ie++)
+			{	double Ei = dos.Emin + ie*dE;
 				double fi = fermi(invT*(Ei - dmuCur));
 				nElectrons += dE * dos.out[ie] * fi;
 			}
-			((nElectrons>wmc.nElectrons) ? dmuMax : dmuMin) = dmuCur;
+			((nElectrons>wmc->nElectrons) ? dmuMax : dmuMin) = dmuCur;
 			dmuCur = 0.5*(dmuMin + dmuMax);
 		}
 		//Calculate electronic specific heat:
 		double& CeCur = Ce[iT];
 		CeCur = 0.;
-		for(size_t ie=0; ie<dos.out.size(); ie++)
-		{	double Ei = er.Emin + ie*dE;
+		for(int ie=0; ie<dos.nE; ie++)
+		{	double Ei = dos.Emin + ie*dE;
 			double x = invT*(Ei-dmuCur);
 			double dfdT = fermiPrime(x) * (-x*invT);
 			CeCur += dE * Ei * dos.out[ie] * dfdT;
@@ -150,10 +196,10 @@ int main(int argc, char** argv)
 		ofs << "#T[K] Ce[J/m^3K] dmu[eV]\n";
 		for(size_t iT=0; iT<Tarr.size(); iT++)
 			ofs << Tarr[iT]/Kelvin << '\t'
-				<< Ce[iT]/(wmc.Omega*CeSI) << '\t'
+				<< Ce[iT]/(wmc->Omega*CeSI) << '\t'
 				<< dmu[iT]/eV << '\n';
 	}
 	
-	wmc.free();
+	wmc->free();
 	WannierMC::finalize();
 }
