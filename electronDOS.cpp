@@ -71,7 +71,8 @@ int main(int argc, char** argv)
 	for(int iSpin=0; iSpin<wmc->nSpins; iSpin++)
 	{	//Update WannierMC for spin channel if necessary:
 		if(iSpin>0)
-		{	wmcp.iSpin = iSpin;
+		{	wmc = 0; //free memory from previous spin
+			wmcp.iSpin = iSpin;
 			wmc = std::make_shared<WannierMC>(wmcp);
 		}
 		
@@ -200,6 +201,6 @@ int main(int argc, char** argv)
 				<< dmu[iT]/eV << '\n';
 	}
 	
-	wmc->free();
+	wmc = 0;
 	WannierMC::finalize();
 }
