@@ -5,7 +5,7 @@
 #include "config.h"
 
 WannierMCParams::WannierMCParams()
-: totalEprefix("Wannier/totalE"), phononPrefix("Wannier/phonon"), wannierPrefix("Wannier/wannier"),
+: iSpin(0), totalEprefix("Wannier/totalE"), phononPrefix("Wannier/phonon"), wannierPrefix("Wannier/wannier"),
 needSymmetries(false), needCellWeights(false), needPhonons(false), needVelocity(false),
 needLinewidth_ee(false), needLinewidth_ePh(false), needLinewidthP_ePh(false)
 {
@@ -45,15 +45,22 @@ vector3<> WannierMC::randomVector(MPIUtil* mpiUtil)
 	return v;
 }
 
-//Read matrix from file accounting for real-only or complex storage based on spinWeight
-void readMatrix(matrix& m, string fname, int spinWeight)
+std::vector<vector3<int>> readCellMap(string fname)
 {	logPrintf("Reading '%s' ... ", fname.c_str()); logFlush();
-	if(spinWeight==1) m.read(fname.c_str()); else m.read_real(fname.c_str());
-	logPrintf("done.\n"); logFlush();
+	ifstream ifs(fname); if(!ifs.is_open()) die("could not open file.\n");
+	string headerLine; getline(ifs, headerLine); //read and ignore header line
+	std::vector<vector3<int>> cellMap;
+	vector3<int> cm; //lattice coords version (store)
+	vector3<> Rcm; //cartesian version (ignore)
+	while(ifs >> cm[0] >> cm[1] >> cm[2] >> Rcm[0] >> Rcm[1] >> Rcm[2])
+		cellMap.push_back(cm);
+	ifs.close();
+	logPrintf("done.\n");
+	return cellMap;
 }
 
 WannierMC::WannierMC(const WannierMCParams& wmcp)
-: wmcp(wmcp), spinWeight(0), mu(NAN), nElectrons(0)
+: wmcp(wmcp), nSpins(0), nSpinor(0), spinWeight(0), mu(NAN), nElectrons(0)
 {	
 	//Read relevant parameters from totalE.out:
 	string fname = wmcp.totalEprefix + ".out";
@@ -80,11 +87,20 @@ WannierMC::WannierMC(const WannierMCParams& wmcp)
 		{	istringstream iss(line); string buf, spinString;
 			iss >> buf >> spinString;
 			if(spinString == "no-spin")
-				spinWeight = 2;
-			else if(spinString == "spin-orbit")
-				spinWeight = 1;
-			else
-				die("Spin-polarized modes not yet supported.\n");
+			{	nSpins = 1;
+				nSpinor = 1;
+			}
+			else if(spinString == "z-spin")
+			{	nSpins = 2;
+				nSpinor = 1;
+			}
+			else //non-collinear modes
+			{	nSpins = 1;
+				nSpinor = 2;
+			}
+			spinWeight = 2/(nSpins*nSpinor);
+			assert(wmcp.iSpin>=0 && wmcp.iSpin<nSpins);
+			spinSuffix = (nSpins==1 ? "" : (wmcp.iSpin==0 ? "Up" : "Dn"));
 		}
 		else if(line.find("coulomb-interaction") != string::npos)
 		{	istringstream iss(line); string cmdName, typeString, dirString;
@@ -140,10 +156,12 @@ WannierMC::WannierMC(const WannierMCParams& wmcp)
 	}
 	ifs.close();
 	logPrintf("done.\n"); logFlush();
+	if(!nSpins)
+		die("Could not determine spin configuration from DFT output file.");
 	if(std::isnan(mu))
 	{	logPrintf("NOTE: mu unavailable; assuming semiconductor/insulator and setting to VBM.\n");
-		int nValence = int(round(nElectrons/spinWeight)); //number of valence bands
-		if(fabs(nValence*spinWeight-nElectrons > 1e-6))
+		int nValence = int(round(nElectrons/(nSpins*spinWeight))); //number of valence bands
+		if(fabs(nValence*nSpins*spinWeight-nElectrons > 1e-6))
 			die("Number of electrons incompatible with semiconductor / insulator.\n");
 		//Read DFT eigenvalues file:
 		ManagedArray<double> Edft; Edft.init(nBandsDFT*nStatesDFT);
@@ -159,7 +177,9 @@ WannierMC::WannierMC(const WannierMCParams& wmcp)
 	logPrintf("mu = %lg\n", mu);
 	logPrintf("nElectrons = %lg\n", nElectrons);
 	logPrintf("nBandsDFT = %d\n", nBandsDFT);
-	logPrintf("spinWeight = %d\n", spinWeight);
+	logPrintf("nSpins = %d\n", nSpins);
+	logPrintf("nSpinor = %d\n", nSpinor);
+	logPrintf("spinSuffix = '%s'\n", spinSuffix.c_str());
 	logPrintf("kfold = "); kfold.print(globalLog, " %d ");
 	logPrintf("isTruncated = "); isTruncated.print(globalLog, " %d ");
 	logPrintf("R:\n");
@@ -187,19 +207,10 @@ WannierMC::WannierMC(const WannierMCParams& wmcp)
 	}
 	
 	//Read cell map
-	fname = wmcp.wannierPrefix + ".mlwfCellMap";
-	logPrintf("Reading '%s' ... ", fname.c_str()); logFlush();
-	ifs.open(fname); if(!ifs.is_open()) die("could not open file.\n");
-	string headerLine; getline(ifs, headerLine); //read and ignore header line
-	vector3<int> cm;
-	double x,y,z;
-	while(ifs >> cm[0] >> cm[1] >> cm[2] >> x >> y >> z)
-		cellMap.push_back(cm);
-	ifs.close();
-	logPrintf("done.\n");
+	cellMap = readCellMap(wmcp.wannierPrefix + ".mlwfCellMap" + spinSuffix);
 	
 	//Find number of wannier centers from Wannier band contrib file:
-	{	fname = wmcp.wannierPrefix + ".mlwfBandContrib";
+	{	fname = wmcp.wannierPrefix + ".mlwfBandContrib" + spinSuffix;
 		logPrintf("Reading '%s' ... ", fname.c_str()); logFlush();
 		FILE* fp = fopen(fname.c_str(), "r");
 		if(!fp) die("could not open file.\n");
@@ -217,14 +228,14 @@ WannierMC::WannierMC(const WannierMCParams& wmcp)
 	logPrintf("\n");
 	
 	//Read wannier hamiltonian
-	bool realOnly = (spinWeight==2);
-	fname = wmcp.wannierPrefix + ".mlwfH";
+	bool realOnly = (nSpinor==1);
+	fname = wmcp.wannierPrefix + ".mlwfH" + spinSuffix;
 	Hw = std::make_shared<DistributedMatrix>(fname, realOnly,
 		mpiGroup, nBands*nBands, cellMap, kfold, false);
 	
 	//Read cell weights (if needed):
 	if(wmcp.needCellWeights)
-	{	fname = wmcp.wannierPrefix + ".mlwfCellWeights";
+	{	fname = wmcp.wannierPrefix + ".mlwfCellWeights" + spinSuffix;
 		logPrintf("Reading '%s' ... ", fname.c_str()); logFlush();
 		cellWeights.init(nBands*nBands, cellMap.size());
 		cellWeights.read_real(fname.c_str());
@@ -266,29 +277,22 @@ WannierMC::WannierMC(const WannierMCParams& wmcp)
 		logPrintf("\n");
 		
 		//Read phonon cell map
-		fname = wmcp.wannierPrefix + ".mlwfCellMapPh";
-		logPrintf("Reading '%s' ... ", fname.c_str()); logFlush();
-		ifs.open(fname.c_str()); if(!ifs.is_open()) die("could not open file.\n");
-		getline(ifs, headerLine); //read and ignore header line
-		while(ifs >> cm[0] >> cm[1] >> cm[2] >> x >> y >> z)
-			phononCellMap.push_back(cm);
-		ifs.close();
-		logPrintf("done.\n"); logFlush();
+		phononCellMap = readCellMap(wmcp.wannierPrefix + ".mlwfCellMapPh" + spinSuffix);
 		
 		//Read phonon force matrix
-		fname = wmcp.wannierPrefix + ".mlwfOmegaSqPh";
+		fname = wmcp.wannierPrefix + ".mlwfOmegaSqPh" + spinSuffix;
 		OsqW = std::make_shared<DistributedMatrix>(fname, true, //phonon omegaSq is always real
 			mpiGroup, nModes*nModes, phononCellMap, phononSup, false);
 		
 		//Read electron-phonon matrix elements
-		fname = wmcp.wannierPrefix + ".mlwfHePh";
+		fname = wmcp.wannierPrefix + ".mlwfHePh" + spinSuffix;
 		HePhW = std::make_shared<DistributedMatrix>(fname, realOnly,
 			mpiGroup, nModes*nBands*nBands, phononCellMap, phononSup, true);
 	}
 	
 	//Velocity matrix elements
 	if(wmcp.needVelocity)
-	{	fname = wmcp.wannierPrefix + ".mlwfP";
+	{	fname = wmcp.wannierPrefix + ".mlwfP" + spinSuffix;
 		Pw = std::make_shared<DistributedMatrix>(fname, realOnly,
 			mpiGroup, 3*nBands*nBands, cellMap, kfold, false);
 	}
@@ -296,19 +300,19 @@ WannierMC::WannierMC(const WannierMCParams& wmcp)
 	//Linewidths:
 	if(wmcp.needLinewidth_ee)
 	{	//e-e:
-		fname = wmcp.wannierPrefix + ".mlwfImSigma_ee";
+		fname = wmcp.wannierPrefix + ".mlwfImSigma_ee" + spinSuffix;
 		ImSigma_eeW = std::make_shared<DistributedMatrix>(fname, realOnly,
 			mpiGroup, nBands*nBands, cellMap, kfold, false);
 	}
 	if(wmcp.needLinewidth_ePh)
 	{	//e-ph:
-		fname = wmcp.wannierPrefix + ".mlwfImSigma_ePh";
+		fname = wmcp.wannierPrefix + ".mlwfImSigma_ePh" + spinSuffix;
 		ImSigma_ePhW = std::make_shared<DistributedMatrix>(fname, realOnly,
 			mpiGroup, nBands*nBands*WannierMCParams::fGrid_ePh.size(), cellMap, kfold, false);
 	}
 	if(wmcp.needLinewidthP_ePh)
 	{	//e-ph:
-		fname = wmcp.wannierPrefix + ".mlwfImSigmaP_ePh";
+		fname = wmcp.wannierPrefix + ".mlwfImSigmaP_ePh" + spinSuffix;
 		ImSigmaP_ePhW = std::make_shared<DistributedMatrix>(fname, realOnly,
 			mpiGroup, nBands*nBands*WannierMCParams::fGrid_ePh.size(), cellMap, kfold, false);
 	}

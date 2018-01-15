@@ -5,7 +5,8 @@
 
 //! Parameters for initializing Wannier
 struct WannierMCParams
-{	string totalEprefix; //!< filename prefix for DFT outputs (default: Wannier/totalE)
+{	int iSpin; //!< current spin channel: 0(up) or 1(dn) for z-spin calculations; must be 0 for all other spin types
+	string totalEprefix; //!< filename prefix for DFT outputs (default: Wannier/totalE)
 	string phononPrefix; //!< filename prefix for phonon outputs (default: Wannier/phonon)
 	string wannierPrefix; //!< filename prefix for wannier outputs (default: Wannier/wannier)
 	bool needSymmetries; //!< whether to read symmetries from .sym file from JDFTx (default: false)
@@ -96,7 +97,9 @@ public:
 	vector3<int> kfoldSup; //!< k-point folding of phonon supercell i.e. kfold / phononSup
 	vector3<bool> isTruncated; //!< whether each direction is truncated
 	std::vector<SpaceGroupOp> sym; //!< symmetries of DFT calculation
-	int nBands, spinWeight; //!< number of Wannier bands for the electrons and weight per spin channel
+	int nBands; //!< number of Wannier bands for the electrons
+	int nSpins, nSpinor, spinWeight; //!< number of spin channels, spinor components and weight per spin channel
+	string spinSuffix; //filename suffix for current spin channel (if any)
 	double mu; //!< chemical potential if DFT calculation had smearing, else VBM
 	double nElectrons; //!< number of electrons per unit cell in DFT calculation
 	double eMinMain, eMaxMain; //!< energy range for main window (within which eigenvalues should be exact compared to DFT)
