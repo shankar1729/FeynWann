@@ -99,6 +99,7 @@ public:
 	std::vector<SpaceGroupOp> sym; //!< symmetries of DFT calculation
 	int nBands; //!< number of Wannier bands for the electrons
 	int nSpins, nSpinor, spinWeight; //!< number of spin channels, spinor components and weight per spin channel
+	bool realPartOnly; //!< whether wannier Hamiltonians / matrix elements in files are stored with real parts alone
 	string spinSuffix; //filename suffix for current spin channel (if any)
 	double mu; //!< chemical potential if DFT calculation had smearing, else VBM
 	double nElectrons; //!< number of electrons per unit cell in DFT calculation

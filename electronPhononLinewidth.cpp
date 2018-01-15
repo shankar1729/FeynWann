@@ -128,7 +128,7 @@ struct CollectEph
 			mpiGroupHead->allReduce(mEx.data(), mEx.nData(), MPIUtil::ReduceSum);
 			//Output from world head:
 			if(mpiGroupHead->isHead())
-				mEx.dump(fname.c_str(), wmc.spinWeight==2); //Output
+				mEx.dump(fname.c_str(), wmc.realPartOnly); //Output
 		}
 	}
 };
@@ -167,6 +167,7 @@ int main(int argc, char** argv)
 	InputMap inputMap(ip.inputFilename);
 	const double T = inputMap.get("T") * Kelvin;
 	const double EconserveWidth = inputMap.get("EconserveWidth") * eV;
+	const int iSpin = inputMap.get("iSpin", 0); //spin channel (default 0)
 	const int NkMultAll = int(round(inputMap.get("NkMult"))); //increase in number of k-points for phonon mesh
 	vector3<int> NkMult;
 	NkMult[0] = inputMap.get("NkxMult", NkMultAll); //override increase in x direction
@@ -176,10 +177,12 @@ int main(int argc, char** argv)
 	logPrintf("\nInputs after conversion to atomic units:\n");
 	logPrintf("T = %lg\n", T);
 	logPrintf("EconserveWidth = %lg\n", EconserveWidth);
+	logPrintf("iSpin = %d\n", iSpin);
 	logPrintf("NkMult = "); NkMult.print(globalLog, " %d ");
 	
 	//Initialize WannierMC:
 	WannierMCParams wmcp;
+	wmcp.iSpin = iSpin;
 	wmcp.needSymmetries = true;
 	wmcp.needCellWeights = true;
 	wmcp.needPhonons = true;
@@ -379,9 +382,9 @@ int main(int argc, char** argv)
 	//Output linewidths and energies in text file:
 	if(mpiWorld->isHead())
 	{	FermiImSigmaReport fr(10);
-		const char* fname = "ImSigma_ePh.dat";
-		logPrintf("Dumping '%s' ... ", fname); fflush(globalLog);
-		FILE* fp = fopen(fname, "w");
+		string fname = "ImSigma_ePh" + wmc.spinSuffix + ".dat";
+		logPrintf("Dumping '%s' ... ", fname.c_str()); fflush(globalLog);
+		FILE* fp = fopen(fname.c_str(), "w");
 		for(int i: iReduced)
 			for(int b=0; b<wmc.nBands; b++)
 			{	fprintf(fp, "%+16.12lf", cEph.E[i][b]);
@@ -412,8 +415,8 @@ int main(int argc, char** argv)
 	cEph.phase = zeroes(nkMine, ncMine);
 	wmc.eLoop(vector3<>(), CollectEph::eProcess, &cEph);
 	cEph.phase *= (1./cEph.kmesh.size()); //inverse transform normalizing factor
-	cEph.dumpWannierized(cEph.mlwfImSigma[0], wmcp.wannierPrefix + ".mlwfImSigma_ePh");
-	cEph.dumpWannierized(cEph.mlwfImSigma[1], wmcp.wannierPrefix + ".mlwfImSigmaP_ePh");
+	cEph.dumpWannierized(cEph.mlwfImSigma[0], wmcp.wannierPrefix + ".mlwfImSigma_ePh" + wmc.spinSuffix);
+	cEph.dumpWannierized(cEph.mlwfImSigma[1], wmcp.wannierPrefix + ".mlwfImSigmaP_ePh" + wmc.spinSuffix);
 	
 	wmc.free();
 	WannierMC::finalize();

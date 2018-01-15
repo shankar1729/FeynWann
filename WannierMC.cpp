@@ -99,7 +99,8 @@ WannierMC::WannierMC(const WannierMCParams& wmcp)
 				nSpinor = 2;
 			}
 			spinWeight = 2/(nSpins*nSpinor);
-			assert(wmcp.iSpin>=0 && wmcp.iSpin<nSpins);
+			if(wmcp.iSpin<0 || wmcp.iSpin>=nSpins)
+				die("iSpin = %d not in interval [0,nSpins), where nSpins = %d for this system.\n\n", wmcp.iSpin, nSpins);
 			spinSuffix = (nSpins==1 ? "" : (wmcp.iSpin==0 ? "Up" : "Dn"));
 		}
 		else if(line.find("coulomb-interaction") != string::npos)
@@ -228,9 +229,9 @@ WannierMC::WannierMC(const WannierMCParams& wmcp)
 	logPrintf("\n");
 	
 	//Read wannier hamiltonian
-	bool realOnly = (nSpinor==1);
+	realPartOnly = (nSpinor==1);
 	fname = wmcp.wannierPrefix + ".mlwfH" + spinSuffix;
-	Hw = std::make_shared<DistributedMatrix>(fname, realOnly,
+	Hw = std::make_shared<DistributedMatrix>(fname, realPartOnly,
 		mpiGroup, nBands*nBands, cellMap, kfold, false);
 	
 	//Read cell weights (if needed):
@@ -286,14 +287,14 @@ WannierMC::WannierMC(const WannierMCParams& wmcp)
 		
 		//Read electron-phonon matrix elements
 		fname = wmcp.wannierPrefix + ".mlwfHePh" + spinSuffix;
-		HePhW = std::make_shared<DistributedMatrix>(fname, realOnly,
+		HePhW = std::make_shared<DistributedMatrix>(fname, realPartOnly,
 			mpiGroup, nModes*nBands*nBands, phononCellMap, phononSup, true);
 	}
 	
 	//Velocity matrix elements
 	if(wmcp.needVelocity)
 	{	fname = wmcp.wannierPrefix + ".mlwfP" + spinSuffix;
-		Pw = std::make_shared<DistributedMatrix>(fname, realOnly,
+		Pw = std::make_shared<DistributedMatrix>(fname, realPartOnly,
 			mpiGroup, 3*nBands*nBands, cellMap, kfold, false);
 	}
 	
@@ -301,19 +302,19 @@ WannierMC::WannierMC(const WannierMCParams& wmcp)
 	if(wmcp.needLinewidth_ee)
 	{	//e-e:
 		fname = wmcp.wannierPrefix + ".mlwfImSigma_ee" + spinSuffix;
-		ImSigma_eeW = std::make_shared<DistributedMatrix>(fname, realOnly,
+		ImSigma_eeW = std::make_shared<DistributedMatrix>(fname, realPartOnly,
 			mpiGroup, nBands*nBands, cellMap, kfold, false);
 	}
 	if(wmcp.needLinewidth_ePh)
 	{	//e-ph:
 		fname = wmcp.wannierPrefix + ".mlwfImSigma_ePh" + spinSuffix;
-		ImSigma_ePhW = std::make_shared<DistributedMatrix>(fname, realOnly,
+		ImSigma_ePhW = std::make_shared<DistributedMatrix>(fname, realPartOnly,
 			mpiGroup, nBands*nBands*WannierMCParams::fGrid_ePh.size(), cellMap, kfold, false);
 	}
 	if(wmcp.needLinewidthP_ePh)
 	{	//e-ph:
 		fname = wmcp.wannierPrefix + ".mlwfImSigmaP_ePh" + spinSuffix;
-		ImSigmaP_ePhW = std::make_shared<DistributedMatrix>(fname, realOnly,
+		ImSigmaP_ePhW = std::make_shared<DistributedMatrix>(fname, realPartOnly,
 			mpiGroup, nBands*nBands*WannierMCParams::fGrid_ePh.size(), cellMap, kfold, false);
 	}
 	
