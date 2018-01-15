@@ -143,18 +143,13 @@ int main(int argc, char** argv)
 	}
 	logPrintf("\n");
 	
-	//Compute resistivity:
+	//Collect integrals involved in resistivity:
 	double prefacDOS = wmc.spinWeight*(1./nKptsPerBlock);
-	#define DeclareArray2D(type, name) std::vector<std::vector<type>> name(dmuCount, std::vector<type>(nBlocks))
-	DeclareArray2D(matrix3<>, rhoArr); DeclareArray2D(matrix3<>, mobArr);
-	DeclareArray2D(double, rhoBarArr); DeclareArray2D(double, mobBarArr); 
-	DeclareArray2D(double, tauArr); DeclareArray2D(double, tauDrudeArr);
-	DeclareArray2D(double, mEffArr); DeclareArray2D(double, vFarr);
-	DeclareArray2D(double, gArr); DeclareArray2D(double, nArr);
-	#undef DeclareArray2D
+	std::vector<std::shared_ptr<ResistivityCollect>> rcArr(nBlocks);
 	for(int block=0; block<nBlocks; block++)
 	{	logPrintf("Working on block %d of %d: ", block+1, nBlocks); logFlush();
-		ResistivityCollect rc(dmu, T);
+		rcArr[block] = std::make_shared<ResistivityCollect>(dmu, T);
+		ResistivityCollect& rc = *rcArr[block];
 		for(int o=0; o<noMine; o++)
 		{	Random::seed(block*nOffsetsPerBlock+o+oStart); //to make results independent of MPI division
 			//Process with a random offset:
@@ -163,7 +158,6 @@ int main(int argc, char** argv)
 			//Print progress:
 			if((o+1)%oInterval==0) { logPrintf("%d%% ", int(round((o+1)*100./noMine))); logFlush(); }
 		}
-		logPrintf("done.\n"); logFlush();
 		for(int iMu=0; iMu<dmuCount; iMu++)
 		{	//Accumulate between processes:
 			mpiWorld->allReduce(rc.n[iMu], MPIUtil::ReduceSum);
@@ -173,44 +167,55 @@ int main(int argc, char** argv)
 			mpiWorld->allReduce(&rc.vvTau[iMu](0,0), 3*3, MPIUtil::ReduceSum);
 			//Apply normalizing factors:
 			rc.n[iMu] *= prefacDOS;
-			rc.n[iMu] -= (wmc.nElectrons - Nconduction); //convert to number of free carriers per unit cell
+			rc.n[iMu] -= (wmc.nElectrons - Nconduction)/wmc.nSpins; //convert to number of free carriers per unit cell
 			rc.g[iMu] *= prefacDOS;
 			rc.vSq[iMu] *= prefacDOS;
 			rc.tau[iMu] *= prefacDOS;
 			rc.vvTau[iMu] *= prefacDOS;
 			slabConstrain(rc.vvTau[iMu], slabDir); //eliminate out-of-plane components if necessary
 			wmc.symmetrize(rc.vvTau[iMu]); //follow symmetries of unit cell
-			//Store relevant quantities:
-			rhoArr[iMu][block] = Omega * inv(rc.vvTau[iMu]);
-			mobArr[iMu][block] = rc.vvTau[iMu]/fabs(rc.n[iMu]);
-			if(slabDir>=0.)
-			{	rhoArr[iMu][block](slabDir,slabDir) = INFINITY;
-				mobArr[iMu][block](slabDir,slabDir) = 0.;
-			}
-			rhoBarArr[iMu][block] = trace(rhoArr[iMu][block], slabDir) / (slabDir>=0 ? 2. : 3.);
-			mobBarArr[iMu][block] = trace(mobArr[iMu][block], slabDir) / (slabDir>=0 ? 2. : 3.);
-			tauArr[iMu][block] = rc.tau[iMu] / rc.g[iMu];
-			tauDrudeArr[iMu][block] = trace(rc.vvTau[iMu], slabDir) / rc.vSq[iMu];
-			mEffArr[iMu][block] = tauDrudeArr[iMu][block] / mobBarArr[iMu][block]; //mobility-effective-mass
-			vFarr[iMu][block] = sqrt(rc.vSq[iMu] / rc.g[iMu]);
-			gArr[iMu][block] = rc.g[iMu];
-			nArr[iMu][block] = rc.n[iMu];
 		}
+		logPrintf("done.\n"); logFlush();
 	}
 	
+	//Compute resistivity and related quantities along with statistics for each mu:
 	for(int iMu=0; iMu<dmuCount; iMu++)
-	{	logPrintf("\nResults for dmu = %lg eV:\n", dmu[iMu]/eV);
-		reportResult(rhoArr[iMu], rhoName, rhoUnit, rhoUnitName);
-		reportResult(mobArr[iMu], "Mobility", cm2byVs, "cm^2/(V.s)");
-		reportResult(rhoBarArr[iMu], rhoName, rhoUnit, rhoUnitName);
-		reportResult(mobBarArr[iMu], "Mobility", cm2byVs, "cm^2/(V.s)");
-		reportResult(tauDrudeArr[iMu], "tauDrude", fs, "fs");
-		reportResult(tauArr[iMu], "tau", fs, "fs");
-		reportResult(mEffArr[iMu], "mEff", 1, "");
-		reportResult(vFarr[iMu], "vF", 1, "");
-		reportResult(gArr[iMu], "g(eF)", 1, "");
-		reportResult(nArr[iMu], "Ncarriers", 1, "cell^-1");
-		reportResult(nArr[iMu], "nCarriers", (Omega*densityUnit), densityUnitName);
+	{	//Compute quantities for each block:
+		std::vector<matrix3<>> rhoArr(nBlocks), mobArr(nBlocks);
+		std::vector<double> rhoBarArr(nBlocks), mobBarArr(nBlocks); 
+		std::vector<double> tauArr(nBlocks), tauDrudeArr(nBlocks);
+		std::vector<double> mEffArr(nBlocks), vFarr(nBlocks);
+		std::vector<double> gArr(nBlocks), nArr(nBlocks);
+		for(int block=0; block<nBlocks; block++)
+		{	const ResistivityCollect& rc = *rcArr[block];
+			rhoArr[block] = Omega * inv(rc.vvTau[iMu]);
+			mobArr[block] = rc.vvTau[iMu]/fabs(rc.n[iMu]);
+			if(slabDir>=0.)
+			{	rhoArr[block](slabDir,slabDir) = INFINITY;
+				mobArr[block](slabDir,slabDir) = 0.;
+			}
+			rhoBarArr[block] = trace(rhoArr[block], slabDir) / (slabDir>=0 ? 2. : 3.);
+			mobBarArr[block] = trace(mobArr[block], slabDir) / (slabDir>=0 ? 2. : 3.);
+			tauArr[block] = rc.tau[iMu] / rc.g[iMu];
+			tauDrudeArr[block] = trace(rc.vvTau[iMu], slabDir) / rc.vSq[iMu];
+			mEffArr[block] = tauDrudeArr[block] / mobBarArr[block]; //mobility-effective-mass
+			vFarr[block] = sqrt(rc.vSq[iMu] / rc.g[iMu]);
+			gArr[block] = rc.g[iMu];
+			nArr[block] = rc.n[iMu];
+		}
+		//Report with statistics:
+		logPrintf("\nResults for dmu = %lg eV:\n", dmu[iMu]/eV);
+		reportResult(rhoArr, rhoName, rhoUnit, rhoUnitName);
+		reportResult(mobArr, "Mobility", cm2byVs, "cm^2/(V.s)");
+		reportResult(rhoBarArr, rhoName, rhoUnit, rhoUnitName);
+		reportResult(mobBarArr, "Mobility", cm2byVs, "cm^2/(V.s)");
+		reportResult(tauDrudeArr, "tauDrude", fs, "fs");
+		reportResult(tauArr, "tau", fs, "fs");
+		reportResult(mEffArr, "mEff", 1, "");
+		reportResult(vFarr, "vF", 1, "");
+		reportResult(gArr, "g(eF)", 1, "");
+		reportResult(nArr, "Ncarriers", 1, "cell^-1");
+		reportResult(nArr, "nCarriers", (Omega*densityUnit), densityUnitName);
 	}
 	
 	wmc.free();
