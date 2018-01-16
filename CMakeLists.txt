@@ -102,8 +102,9 @@ macro(add_WannierMC_executable targetName)
 	set_target_properties(${targetName} PROPERTIES LINK_FLAGS "${MPI_CXX_LINK_FLAGS}")
 endmacro()
 
-add_WannierMC_executable(resistivity)
-add_WannierMC_executable(electronPhononLinewidth)
-add_WannierMC_executable(electronDOS)
 add_WannierMC_executable(phononDOS)
+add_WannierMC_executable(electronDOS)
+add_WannierMC_executable(electronPhononLinewidth)
+add_WannierMC_executable(resistivity)
+add_WannierMC_executable(ImEps)
 

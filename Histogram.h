@@ -25,6 +25,8 @@ struct Histogram2D
 	double Emin, dE, dEinv, omegaMin, domega, domegaInv;
 	int nE, nomega;
 	std::vector<double> out; //nE by nomega with E inner dimension and omega outer
+	inline double Emax() const { return Emin + (nE-1)*dE; }
+	inline double omegaMax() const { return omegaMin + (nomega-1)*domega; }
 
 	Histogram2D(double Emin, double dE, double Emax, double omegaMin, double domega, double omegaMax);
 	void addEvent(double E, double omega, double weight);

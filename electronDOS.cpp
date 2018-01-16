@@ -60,6 +60,15 @@ int main(int argc, char** argv)
 		return 0;
 	}
 	logPrintf("\n");
+
+	//Initialize sampling parameters:
+	int oStart=0, oStop=0;
+	if(mpiGroup->isHead())
+		TaskDivision(nOffsets, mpiGroupHead).myRange(oStart, oStop);
+	mpiGroup->bcast(oStart);
+	mpiGroup->bcast(oStop);
+	int noMine = oStop-oStart; //number of offsets handled by current group
+	int oInterval = std::max(1, int(round(noMine/50.))); //interval for reporting progress
 	
 	//Initialize temperature grid:
 	std::vector<double> Tarr(int(ceil((Tmax-Tmin)/Tstep)));
@@ -86,15 +95,6 @@ int main(int argc, char** argv)
 		dosArr[iSpin] = std::make_shared<Histogram>(er.Emin, dE, er.Emax); //density of states for current spin channel
 		Histogram& dos = *dosArr[iSpin];
 		logPrintf("Initialized energy grid: %lg to %lg eV with %d points.\n", dos.Emin/eV, dos.Emax()/eV, dos.nE);
-		
-		//Initialize sampling parameters:
-		int oStart=0, oStop=0;
-		if(mpiGroup->isHead())
-			TaskDivision(nOffsets, mpiGroupHead).myRange(oStart, oStop);
-		mpiGroup->bcast(oStart);
-		mpiGroup->bcast(oStop);
-		int noMine = oStop-oStart; //number of offsets handled by current group
-		int oInterval = std::max(1, int(round(noMine/50.))); //interval for reporting progress
 		
 		logPrintf("\nCollecting DOS: "); logFlush();
 		CollectDOS cd;
