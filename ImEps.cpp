@@ -128,11 +128,12 @@ struct CollectImEps
 						//Effective matrix elements
 						std::vector<complex> Meff(nExtrap, 0.);
 						for(int i=0; i<nBands; i++) // sum over the intermediate states
-						{	for(int z=0; z<nExtrap; z++)
-							{	complex iEta(0, (z+1)*eta);
-								Meff[z] += 
-									( P2(c,i) * mat.M[alpha](i,v) / (E2[i]+iEta - (E2[c] - omega))
-									+ mat.M[alpha](c,i) * P1(i,v) / (E1[i]+iEta - (E1[v] + omega)) );
+						{	complex numA = P2(c,i) * mat.M[alpha](i,v); double denA = E2[i] - (E2[c] - omega);
+							complex numB = mat.M[alpha](c,i) * P1(i,v); double denB = E1[i] - (E1[v] + omega);
+							double zEta = eta;
+							for(int z=0; z<nExtrap; z++)
+							{	Meff[z] += ( numA / complex(denA,zEta) + numB / complex(denB,zEta) );
+								zEta += eta; //contains (z+1)*eta when evaluating above
 							}
 						}
 						//Singularity extrapolation:
