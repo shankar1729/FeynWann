@@ -600,8 +600,14 @@ void WannierMC::bcastState(WannierMC::StateE& state, MPIUtil* mpiUtil, int root)
 	}
 	//Linewidths, if needed:
 	if(wmcp.needLinewidth_ee) bcast(state.ImSigma_ee, nBands, mpiUtil, root);
-	if(wmcp.needLinewidth_ePh) for(diagMatrix& d: state.ImSigma_ePhArr) bcast(d, nBands, mpiUtil, root);
-	if(wmcp.needLinewidthP_ePh) for(diagMatrix& d: state.ImSigmaP_ePhArr) bcast(d, nBands, mpiUtil, root);
+	if(wmcp.needLinewidth_ePh)
+	{	state.ImSigma_ePhArr.resize(WannierMCParams::fGrid_ePh.size());
+		for(diagMatrix& d: state.ImSigma_ePhArr) bcast(d, nBands, mpiUtil, root);
+	}
+	if(wmcp.needLinewidthP_ePh)
+	{	state.ImSigmaP_ePhArr.resize(WannierMCParams::fGrid_ePh.size());
+		for(diagMatrix& d: state.ImSigmaP_ePhArr) bcast(d, nBands, mpiUtil, root);
+	}
 }
 
 
