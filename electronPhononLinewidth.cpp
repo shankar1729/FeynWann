@@ -18,7 +18,6 @@ struct CollectEph
 	std::vector<diagMatrix> E; //save electron energies on DFT mesh for final outputs
 	std::vector<vector3<>> kmesh; //DFT k-point mesh (full version i.e. unreduced)
 	double wOffsetCur; //weight factor of current offset (due to symmetry reduction)
-	const double omegaPhCut; //cut-off frequency to avoid zero/imaginary phonon frequencies
 	
 	CollectEph(const WannierMC& wmc, double T, double EconserveWidth, const vector3<int>& NkMult)
 	: wmc(wmc), T(T),
@@ -27,8 +26,7 @@ struct CollectEph
 		EconservePrefac(1./(sqrt(2.*M_PI)*EconserveWidth)),
 		f1grid(WannierMCParams::fGrid_ePh),
 		ImSigma(2*f1grid.size(), std::vector<diagMatrix>(prod(wmc.kfold), diagMatrix(wmc.nBands))),
-		E(prod(wmc.kfold)), kmesh(prod(wmc.kfold)),
-		omegaPhCut(1e-6)
+		E(prod(wmc.kfold)), kmesh(prod(wmc.kfold))
 	{
 	}
 	
@@ -58,8 +56,12 @@ struct CollectEph
 				//Loop over phonon modes:
 				for(int alpha=0; alpha<nModes; alpha++)
 				{	const double& omegaPh = ph.omega[alpha];
-					if(omegaPh < omegaPhCut) continue; //avoid 0./0. below
-					double nPh = 1./(exp(omegaPh/T) - 1.);
+					double omegaPhByT = omegaPh/T;
+					if(omegaPhByT < 1e-3) continue; //avoid 0./0. below
+					double nPh = omegaPhByT>36
+						? 0. //avoid overflow
+						: 1./(exp(omegaPhByT) - 1.);
+					if(!nPh) continue; //no contribution below
 					//Loop over absorption and emission:
 					for(int ae=-1; ae<=+1; ae+=2)
 					{	double EconserveExponent = EconserveExpFac * std::pow((E2-E1 - ae*omegaPh),2);
