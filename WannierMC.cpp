@@ -514,9 +514,10 @@ void WannierMC::ePhLoop(const vector3<>& k01, const vector3<>& k02, WannierMC::e
 						m.e1 = &e1[ik1net];
 						m.e2 = &e2[ik2net];
 						//Extract matrices for each phonon mode:
+						const double omegaPhCut = 1e-6;
 						m.M.resize(nModes);
 						for(int iMode=0; iMode<nModes; iMode++)
-							m.M[iMode] = sqrt(0.5/m.ph->omega[iMode]) //frequency-dependent phonon amplitude
+							m.M[iMode] = sqrt(m.ph->omega[iMode]<omegaPhCut ? 0. : 0.5/m.ph->omega[iMode]) //frequency-dependent phonon amplitude
 								* (dagger(m.e1->U) * getMatrix(Mall.data(), nBands, nBands, iMode) * m.e2->U); //to E1 and E2 eigenbasis
 						watchRotations.stop();
 						//Invoke call-back function:

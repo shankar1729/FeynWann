@@ -117,7 +117,7 @@ struct CollectImEps
 		int nModes = omegaPh.nRows();
 		diagMatrix nPh(nModes);
 		for(int iMode=0; iMode<nModes; iMode++)
-			nPh[iMode] = 1./(exp(std::max(1e-4, omegaPh[iMode]/T)) - 1.); //avoid 0/0 for zero phonon frequencies
+			nPh[iMode] = 1./(exp(std::max(1e-3, omegaPh[iMode]/T)) - 1.); //avoid 0/0 for zero phonon frequencies
 		//Collect
 		for(int v=0; v<nBands; v++) if(E1[v]<EvMax)
 		{	for(int c=0; c<nBands; c++) if(E2[c]>EcMin)
