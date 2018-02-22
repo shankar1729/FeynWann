@@ -44,8 +44,8 @@ public:
 		double ImSigma_ePh(int n, double f) const; //!< get e-ph linewidth for band n given its occupation f, available if needLinewidth_ePh = true
 		double ImSigmaP_ePh(int n, double f) const; //!< get e-ph linewidth for band n given its occupation f, available if needLinewidthP_ePh = true
 	private:
-		std::vector<diagMatrix> ImSigma_ePhArr; //!< e-ph linewidth for each f in fGrid_ePh
-		std::vector<diagMatrix> ImSigmaP_ePhArr; //!< e-ph momentum-relaxation linewidth for each f in fGrid_ePh
+		std::vector<diagMatrix> logImSigma_ePhArr; //!< e-ph linewidth for each f in fGrid_ePh
+		std::vector<diagMatrix> logImSigmaP_ePhArr; //!< e-ph momentum-relaxation linewidth for each f in fGrid_ePh
 		friend class WannierMC;
 	};
 	

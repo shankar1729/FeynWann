@@ -570,18 +570,14 @@ void WannierMC::setState(WannierMC::StateE& state)
 	if(wmcp.needLinewidth_ee)
 		state.ImSigma_ee = diag(dagger(state.U) * getMatrix(ImSigma_eeW->getResult(state.ik), nBands, nBands) * state.U);
 	if(wmcp.needLinewidth_ePh)
-	{	state.ImSigma_ePhArr.resize(WannierMCParams::fGrid_ePh.size());
-		for(unsigned iMat=0; iMat<state.ImSigma_ePhArr.size(); iMat++)
-		{	state.ImSigma_ePhArr[iMat] = diag(dagger(state.U) * getMatrix(ImSigma_ePhW->getResult(state.ik), nBands, nBands, iMat) * state.U);
-			for(double& x: state.ImSigma_ePhArr[iMat]) x = exp(x); //e-ph linewidth interpolated in logarithm
-		}
+	{	state.logImSigma_ePhArr.resize(WannierMCParams::fGrid_ePh.size());
+		for(unsigned iMat=0; iMat<state.logImSigma_ePhArr.size(); iMat++)
+			state.logImSigma_ePhArr[iMat] = diag(dagger(state.U) * getMatrix(ImSigma_ePhW->getResult(state.ik), nBands, nBands, iMat) * state.U);
 	}
 	if(wmcp.needLinewidthP_ePh)
-	{	state.ImSigmaP_ePhArr.resize(WannierMCParams::fGrid_ePh.size());
-		for(unsigned iMat=0; iMat<state.ImSigmaP_ePhArr.size(); iMat++)
-		{	state.ImSigmaP_ePhArr[iMat] = diag(dagger(state.U) * getMatrix(ImSigmaP_ePhW->getResult(state.ik), nBands, nBands, iMat) * state.U);
-			for(double& x: state.ImSigmaP_ePhArr[iMat]) x = exp(x); //e-ph linewidth interpolated in logarithm
-		}
+	{	state.logImSigmaP_ePhArr.resize(WannierMCParams::fGrid_ePh.size());
+		for(unsigned iMat=0; iMat<state.logImSigmaP_ePhArr.size(); iMat++)
+			state.logImSigmaP_ePhArr[iMat] = diag(dagger(state.U) * getMatrix(ImSigmaP_ePhW->getResult(state.ik), nBands, nBands, iMat) * state.U);
 	}
 	watchRotations.stop();
 }
@@ -602,12 +598,12 @@ void WannierMC::bcastState(WannierMC::StateE& state, MPIUtil* mpiUtil, int root)
 	//Linewidths, if needed:
 	if(wmcp.needLinewidth_ee) bcast(state.ImSigma_ee, nBands, mpiUtil, root);
 	if(wmcp.needLinewidth_ePh)
-	{	state.ImSigma_ePhArr.resize(WannierMCParams::fGrid_ePh.size());
-		for(diagMatrix& d: state.ImSigma_ePhArr) bcast(d, nBands, mpiUtil, root);
+	{	state.logImSigma_ePhArr.resize(WannierMCParams::fGrid_ePh.size());
+		for(diagMatrix& d: state.logImSigma_ePhArr) bcast(d, nBands, mpiUtil, root);
 	}
 	if(wmcp.needLinewidthP_ePh)
-	{	state.ImSigmaP_ePhArr.resize(WannierMCParams::fGrid_ePh.size());
-		for(diagMatrix& d: state.ImSigmaP_ePhArr) bcast(d, nBands, mpiUtil, root);
+	{	state.logImSigmaP_ePhArr.resize(WannierMCParams::fGrid_ePh.size());
+		for(diagMatrix& d: state.logImSigmaP_ePhArr) bcast(d, nBands, mpiUtil, root);
 	}
 }
 
@@ -652,8 +648,8 @@ inline double interpQuartic(const std::vector<diagMatrix>& Y, int n, double f)
 	return d0+f*(d1-d0);
 }
 double WannierMC::StateE::ImSigma_ePh(int n, double f) const
-{	return interpQuartic(ImSigma_ePhArr, n, f);
+{	return exp(interpQuartic(logImSigma_ePhArr, n, f));
 }
 double WannierMC::StateE::ImSigmaP_ePh(int n, double f) const
-{	return interpQuartic(ImSigmaP_ePhArr, n, f);
+{	return exp(interpQuartic(logImSigmaP_ePhArr, n, f));
 }
