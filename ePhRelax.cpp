@@ -52,12 +52,6 @@ struct ePhRelax
 		logPrintf("runName = %s\n", runName.c_str());
 		logPrintf("R:\n");
 		R.print(globalLog, " %lg ");
-		if(ip.dryRun)
-		{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
-			finalizeSystem();
-			exit(0);
-		}
-		logPrintf("\n");
 		
 		//Read electron and phonon DOS (and convert to atomic units and per-unit volume):
 		dos.init("dos.dat", eV, 1./(detR*eV));
@@ -130,6 +124,13 @@ struct ePhRelax
 		ieStart += ieMin;
 		ieStop += ieMin;
 		logPrintf("Active energy grid: [%d,%d) of total %d points, with [%d,%d) on current process.\n", ieMin, ieMax, nE, ieStart, ieStop);
+		
+		if(ip.dryRun)
+		{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
+			finalizeSystem();
+			exit(0);
+		}
+		logPrintf("\n");
 	}
 	
 	//Bisect for chemical potential:
