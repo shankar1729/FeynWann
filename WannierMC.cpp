@@ -410,6 +410,7 @@ void WannierMC::phLoop(const vector3<>& q0, WannierMC::phProcessFunc phProcess, 
 	StatePh state;
 	PartialLoop3D(phononSup, iq, iqStop, state.q, q0,
 		state.iq = iq;
+		state.iqFine = 0; //Only meaningful in ePhLoop
 		setState(state);
 		watchCallback.start();
 		phProcess(state, params);
@@ -446,9 +447,7 @@ void WannierMC::ePhLoop(const vector3<>& k01, const vector3<>& k02, WannierMC::e
 			{	watchBcast.start(); \
 				for(int whose=0; whose<mpiGroup->nProcesses(); whose++) \
 					for(int ik=Hw->ikStartProc[whose]; ik<Hw->ikStartProc[whose+1]; ik++) \
-					{	e##i[ik].ik = ik; \
 						bcastState(e##i[ik], mpiGroup, whose); \
-					} \
 				watchBcast.stop(); \
 			} \
 		}
@@ -469,6 +468,7 @@ void WannierMC::ePhLoop(const vector3<>& k01, const vector3<>& k02, WannierMC::e
 			int iqStop = iq + OsqW->nk;
 			PartialLoop3D(phononSup, iq, iqStop, ph[iq].q, q0,
 				ph[iq].iq = iq;
+				ph[iq].iqFine = calculateIndex(iqSup + elemwiseProd(kfoldSup, iqv), kfold);
 				setState(ph[iq]);
 			)
 			//Make available on all processes of group:
@@ -476,9 +476,7 @@ void WannierMC::ePhLoop(const vector3<>& k01, const vector3<>& k02, WannierMC::e
 			{	watchBcast.start();
 				for(int whose=0; whose<mpiGroup->nProcesses(); whose++)
 					for(int iq=OsqW->ikStartProc[whose]; iq<OsqW->ikStartProc[whose+1]; iq++)
-					{	ph[iq].iq = iq;
 						bcastState(ph[iq], mpiGroup, whose);
-					}
 				watchBcast.stop();
 			}
 		}
@@ -584,6 +582,7 @@ void WannierMC::setState(WannierMC::StateE& state)
 
 void WannierMC::bcastState(WannierMC::StateE& state, MPIUtil* mpiUtil, int root)
 {	if(mpiUtil->nProcesses()==1) return; //no communictaion needed
+	mpiUtil->bcast(state.ik, root);
 	mpiUtil->bcast(&state.k[0], 3, root);
 	//Energy and eigenvectors:
 	bcast(state.E, nBands, mpiUtil, root);
@@ -618,6 +617,8 @@ void WannierMC::setState(WannierMC::StatePh& state)
 
 void WannierMC::bcastState(WannierMC::StatePh& state, MPIUtil* mpiUtil, int root)
 {	if(mpiUtil->nProcesses()==1) return; //no communictaion needed
+	mpiUtil->bcast(state.iq, root);
+	mpiUtil->bcast(state.iqFine, root);
 	mpiUtil->bcast(&state.q[0], 3, root);
 	bcast(state.omega, nModes, mpiUtil, root);
 	bcast(state.U, nModes, nModes, mpiUtil, root);
