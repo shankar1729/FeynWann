@@ -13,8 +13,8 @@ struct CollectEph
 	const double prefacG;
 	const double EconserveExpFac, EconservePrefac; //energy conserving (fermi-surface constraining) Gaussian exponential and pre-factor
 	std::vector<diagMatrix> G; //Fermi-surface integrated e-ph coupling (for each phonon mode on DFT electronic k-mesh)
-	std::vector<diagMatrix> omegaPh; //save phonon energies on DFT electronic k-mesh for final outputs
-	std::vector<vector3<>> kmesh; //DFT k-point mesh (full version i.e. unreduced)
+	std::vector<diagMatrix> omegaPh; //save phonon energies on full qmesh for final outputs
+	std::vector<vector3<>> qmesh; //phonon q-mesh (full version i.e. unreduced)
 	double wOffsetCur; //weight factor of current offset (due to symmetry reduction)
 	
 	CollectEph(const WannierMC& wmc, double EconserveWidth, const vector3<int>& NkMult)
@@ -24,7 +24,7 @@ struct CollectEph
 		EconservePrefac(1./(sqrt(2.*M_PI)*EconserveWidth)),
 		G(prod(wmc.kfold), diagMatrix(wmc.nModes)),
 		omegaPh(prod(wmc.kfold), diagMatrix(wmc.nModes)),
-		kmesh(prod(wmc.kfold))
+		qmesh(prod(wmc.kfold))
 	{
 	}
 	
@@ -46,7 +46,7 @@ struct CollectEph
 		const WannierMC::StateE& e2 = *(mEph.e2);
 		const WannierMC::StatePh& ph = *(mEph.ph);
 		//Svae phonon wave-vectors and frequencies for final outputs
-		kmesh[ph.iqFine] = ph.q;
+		qmesh[ph.iqFine] = ph.q;
 		omegaPh[ph.iqFine] = ph.omega;
 		//Calculate Fermi-surface-constraining delta functions:
 		bool hasContrib = false;
@@ -206,20 +206,22 @@ int main(int argc, char** argv)
 	//Collect results from all processes:
 	for(diagMatrix& g: cEph.G) g.allReduce(MPIUtil::ReduceSum);
 	for(diagMatrix& o: cEph.omegaPh) o.allReduce(MPIUtil::ReduceMax);
-	mpiWorld->allReduce(&cEph.kmesh[0][0], 3*cEph.kmesh.size(), MPIUtil::ReduceMax);
+	mpiWorld->allReduce(&cEph.qmesh[0][0], 3*cEph.qmesh.size(), MPIUtil::ReduceMax);
 	
 	//Symmetrize:
-	PeriodicLookup<vector3<>> plook(cEph.kmesh, GGT);
-	std::vector<bool> kDone(cEph.kmesh.size(), false);
+	PeriodicLookup<vector3<>> plook(cEph.qmesh, GGT);
+	std::vector<bool> kDone(cEph.qmesh.size(), false);
 	std::vector<int> iReduced;
-	for(size_t i0=0; i0<cEph.kmesh.size(); i0++)
+	std::vector<vector3<>> qReduced;
+	std::vector<double> qWeight;
+	for(size_t i0=0; i0<cEph.qmesh.size(); i0++)
 		if(!kDone[i0])
 		{	//Find orbit of this k-points under symmetries:
 			std::vector<int> iEquiv;
 			diagMatrix Gmean(wmc.nModes);
 			for(int invert: invertList)
 				for(const SpaceGroupOp& op: wmc.sym)
-				{	size_t i = plook.find(invert * cEph.kmesh[i0] * op.rot);
+				{	size_t i = plook.find(invert * cEph.qmesh[i0] * op.rot);
 					if(i!=string::npos && (!kDone[i]))
 					{	kDone[i] = true; //i will be covered in i0's orbit
 						iEquiv.push_back(i);
@@ -231,8 +233,10 @@ int main(int argc, char** argv)
 			for(int i: iEquiv)
 				cEph.G[i] = Gmean;
 			iReduced.push_back(i0);
+			qReduced.push_back(cEph.qmesh[i0]);
+			qWeight.push_back(iEquiv.size()*(1./cEph.qmesh.size()));
 		}
-	logPrintf("Symmetrized Gph for %lu k-points in mesh in %lu orbits.\n", cEph.kmesh.size(), iReduced.size());
+	logPrintf("Symmetrized Gph for %lu k-points in mesh in %lu orbits.\n", cEph.qmesh.size(), iReduced.size());
 	
 	//Output linewidths and energies in text file:
 	if(mpiWorld->isHead())
@@ -242,6 +246,15 @@ int main(int argc, char** argv)
 		for(int i: iReduced)
 			for(int b=0; b<wmc.nModes; b++)
 				fprintf(fp, "%+16.12lf %16.12lf\n", cEph.omegaPh[i][b], cEph.G[i][b]);
+		fclose(fp);
+		logPrintf("done.\n");
+		//q-mesh and weights:
+		fname = "Gph" + wmc.spinSuffix + ".qList";
+		logPrintf("Dumping '%s' ... ", fname.c_str()); fflush(globalLog);
+		fp = fopen(fname.c_str(), "w");
+		for(size_t i=0; i<qReduced.size(); i++)
+			fprintf(fp, "%12.10lf %12.10lf %12.10lf  %14.12lf\n",
+				qReduced[i][0], qReduced[i][1], qReduced[i][2], qWeight[i]);
 		fclose(fp);
 		logPrintf("done.\n");
 	}
