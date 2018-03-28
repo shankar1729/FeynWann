@@ -14,6 +14,7 @@ struct ePhRelax
 {
 	Interp1 dos, dosPh;
 	diagMatrix f0, fPert; //Initial Fermi and photon-perturbed distributions
+	double dt, tMax; //time step for output and max time
 	double Z, detR; //electrons and volume per unit cell
 	double T, dos0; //initial temperature and density of states at the Fermi level
 	double De, scaledDe; //De, and De scaled by g(eF)**-3
@@ -33,7 +34,9 @@ struct ePhRelax
 		InitParams ip = BandStruct::initialize(argc, argv, "Electron-phonon relaxation using Boltzmann equation");
 
 		//Get the system parameters (mu, T, lattice vectors etc.)
-		InputMap inputMap(ip.inputFilename);	
+		InputMap inputMap(ip.inputFilename);
+		dt = inputMap.get("dt") * fs; //output time step in fs
+		tMax = inputMap.get("tMax") * fs; //max time in fs
 		Z = inputMap.get("Z"); //number of electrons per unit cell
 		T = inputMap.get("T") * Kelvin; //initial temperature in Kelvin (electron and lattice)
 		const double Uabs = inputMap.get("Uabs") * Joule/std::pow(meter,3); //absorbed laser energy per unit volume in Joule/meter^3
@@ -44,6 +47,8 @@ struct ePhRelax
 		detR = fabs(det(R));
 		
 		logPrintf("\nInputs after conversion to atomic units:\n");
+		logPrintf("dt = %lg\n", dt);
+		logPrintf("tMax = %lg\n", tMax);
 		logPrintf("Z = %lg\n", Z);
 		logPrintf("T = %lg\n", T);
 		logPrintf("Uabs = %lg\n", Uabs);
@@ -266,27 +271,31 @@ int main(int argc, char** argv)
 {	ePhRelax e(argc, argv);
 	
 	//Solve time dependence:
+	std::vector<diagMatrix> fArr;
 	StopWatch watchSolve("Solve"); watchSolve.start();
 	gsl_odeiv2_system odeSystem = {fdot_wrapper, NULL, size_t(e.nE+1), &e };
 	gsl_odeiv2_driver* odeDriver = gsl_odeiv2_driver_alloc_y_new(&odeSystem, gsl_odeiv2_step_msadams, 1e-6, 1e-6, 0.0);
-	double tMax = 10000.*fs, dt = 50.*fs;
 	double Ee0 = e.Ee(e.f0), El0 = e.El(e.T);
-	double t = 0.;
-	diagMatrix f = e.fPert; f.push_back(e.T);
-	std::vector<diagMatrix> fArr;
+	//--- t = -dt: just before absorption
+	double t = -e.dt;
+	diagMatrix f = e.f0; f.push_back(e.T);
+	fArr.push_back(f);
+	//--- t = 0: just after absorption
+	t = 0;
+	f = e.fPert; f.push_back(e.T);
 	fArr.push_back(f);
 	logPrintf("\nSolving boltzmann eqn:\n");
 	logPrintf("%5s  %19s  %19s  %19s  %7s  %s\n", "t[fs]",  "Ee[J/m^3]", "El[J/m^3]", "(El+Ee)[J/m^3]", "Tl[K]", "Progress");
 	logFlush();
-	while(t < tMax)
-	{	int status = gsl_odeiv2_driver_apply(odeDriver, &t, t+dt, f.data());
+	while(t < e.tMax-1e-3*e.dt)
+	{	int status = gsl_odeiv2_driver_apply(odeDriver, &t, t+e.dt, f.data());
 		if(status != GSL_SUCCESS) die("Error %d in ODE propagation", status)
 		fArr.push_back(f);
 		
 		//Print progress:
 		const double Eunits = Joule/pow(meter,3);
 		double dEe = e.Ee(f)-Ee0, dEl = e.El(f.back())-El0;
-		logPrintf("%5g  %19.13le  %19.13le  %19.13le  %7.2lf  %.1f%%\n", t/fs, dEe/Eunits, dEl/Eunits, (dEe+dEl)/Eunits, f.back()/Kelvin, 100.*t/tMax);
+		logPrintf("%5g  %19.13le  %19.13le  %19.13le  %7.2lf  %.1f%%\n", t/fs, dEe/Eunits, dEl/Eunits, (dEe+dEl)/Eunits, f.back()/Kelvin, 100.*t/e.tMax);
 		logFlush();
 	}
 	logPrintf("done.\n"); logFlush();
@@ -310,8 +319,8 @@ int main(int argc, char** argv)
 		ofs.open((e.runName+".Tl").c_str());
 		ofs.precision(10);
 		ofs << "#t[fs] Tl[K]\n";
-		for(size_t it=0; it<fArr.size(); it++)
-			ofs << (it*dt)/fs << '\t' << fArr[it].back()/Kelvin << '\n';
+		for(int it=0; it<int(fArr.size()); it++)
+			ofs << ((it-1)*e.dt)/fs << '\t' << fArr[it].back()/Kelvin << '\n';
 		ofs.close();
 		
 		//Distributions [dimensionless]
@@ -319,8 +328,8 @@ int main(int argc, char** argv)
 		ofs.precision(10);
 		//--- Header
 		ofs << "#E[ev]\\t[fs]";
-		for(size_t it=0; it<fArr.size(); it++)
-			ofs << '\t' << (it*dt)/fs;
+		for(int it=0; it<int(fArr.size()); it++)
+			ofs << '\t' << ((it-1)*e.dt)/fs;
 		ofs << '\n';
 		//--- Data
 		for(int ie=0; ie<e.nE; ie++)
@@ -336,8 +345,8 @@ int main(int argc, char** argv)
 		ofs.precision(10);
 		//--- Header
 		ofs << "#E[ev]\\t[fs]";
-		for(size_t it=0; it<fArr.size(); it++)
-			ofs << '\t' << (it*dt)/fs;
+		for(int it=0; it<int(fArr.size()); it++)
+			ofs << '\t' << ((it-1)*e.dt)/fs;
 		ofs << '\n';
 		//--- Data
 		for(int ie=0; ie<e.nE; ie++)
