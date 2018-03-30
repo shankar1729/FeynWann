@@ -291,8 +291,10 @@ int main(int argc, char** argv)
 
 	if(mpiWorld->isHead())
 	{	//Print calculated ImEps contributions:
-		writeImEps("ImEps_directNontherm.dat", ImEpsDirectBroad, fInterp.headerVals);
-		writeImEps("ImEps_phononNontherm.dat", ImEpsPhononBroad, fInterp.headerVals);
+		string fName1 = "ImEps_directNontherm_"+runName+".dat" ;
+		writeImEps(fName1.c_str(), ImEpsDirectBroad, fInterp.headerVals);
+		string fName2 = "ImEps_phononNontherm_"+runName+".dat" ;
+		writeImEps(fName2.c_str(), ImEpsPhononBroad, fInterp.headerVals);
 		
 		//Print experimental dielectric function (at room temperature):
 		ofstream ofsExpt("ImEps_expt.dat");
@@ -308,7 +310,8 @@ int main(int argc, char** argv)
 		}
 
 		//Print Linewidth correction at each time:
-		ofstream ofs("LWcorrection.dat");
+		string fName3 = "LWcorrection_"+runName+".dat";
+		ofstream ofs(fName3);
 		ofs << "#LinewidthCorrection[eV]\n";
 		for(int iT=0; iT<numTimes; iT++)
 		{	ofs << lwInterp(iT,0)/eV << '\n';
