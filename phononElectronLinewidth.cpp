@@ -10,6 +10,7 @@ template<typename T> T prod(const vector3<T>& v) { return v[0]*v[1]*v[2]; }
 struct CollectEph
 {	
 	const WannierMC& wmc;
+	const double dmu;
 	const double prefacG;
 	const double EconserveExpFac, EconservePrefac; //energy conserving (fermi-surface constraining) Gaussian exponential and pre-factor
 	std::vector<diagMatrix> G; //Fermi-surface integrated e-ph coupling (for each phonon mode on DFT electronic k-mesh)
@@ -17,8 +18,8 @@ struct CollectEph
 	std::vector<vector3<>> qmesh; //phonon q-mesh (full version i.e. unreduced)
 	double wOffsetCur; //weight factor of current offset (due to symmetry reduction)
 	
-	CollectEph(const WannierMC& wmc, double EconserveWidth, const vector3<int>& NkMult)
-	: wmc(wmc),
+	CollectEph(const WannierMC& wmc, double EconserveWidth, const vector3<int>& NkMult, double dmu)
+	: wmc(wmc), dmu(dmu),
 		prefacG(wmc.spinWeight * 2*M_PI/(prod(wmc.kfold)*prod(NkMult))),
 		EconserveExpFac(-0.5/std::pow(EconserveWidth,2)),
 		EconservePrefac(1./(sqrt(2.*M_PI)*EconserveWidth)),
@@ -32,7 +33,7 @@ struct CollectEph
 	diagMatrix delta(diagMatrix E, bool& hasContrib)
 	{	diagMatrix result(E.nRows());
 		for(int b=0; b<E.nRows(); b++)
-		{	double deltaExponent = EconserveExpFac * (E[b]*E[b]);
+		{	double deltaExponent = EconserveExpFac * std::pow(E[b]-dmu, 2);
 			if(deltaExponent < -15.) continue; //the exponential below will be negligible
 			result[b] = EconservePrefac * exp(deltaExponent);
 			hasContrib = true;
@@ -74,6 +75,7 @@ int main(int argc, char** argv)
 	//Read input file:
 	InputMap inputMap(ip.inputFilename);
 	const double EconserveWidth = inputMap.get("EconserveWidth") * eV;
+	const double dmu = inputMap.get("dmu", 0.) * eV; //shift in electron Fermi level in eV (default: 0 => neutral)
 	const int iSpin = inputMap.get("iSpin", 0); //spin channel (default 0)
 	const int NkMultAll = int(round(inputMap.get("NkMult"))); //increase in number of k-points for phonon mesh
 	vector3<int> NkMult;
@@ -83,6 +85,7 @@ int main(int argc, char** argv)
 	
 	logPrintf("\nInputs after conversion to atomic units:\n");
 	logPrintf("EconserveWidth = %lg\n", EconserveWidth);
+	logPrintf("dmu = %lg\n", dmu);
 	logPrintf("iSpin = %d\n", iSpin);
 	logPrintf("NkMult = "); NkMult.print(globalLog, " %d ");
 	
@@ -193,7 +196,7 @@ int main(int argc, char** argv)
 	
 	//Collect results for each offset
 	logPrintf("Collecting Gph: "); logFlush();
-	CollectEph cEph(wmc, EconserveWidth, NkMult);
+	CollectEph cEph(wmc, EconserveWidth, NkMult, dmu);
 	for(int o=oStart; o<oStop; o++)
 	{	//Process with selected offset:
 		cEph.wOffsetCur = wk0[o];
