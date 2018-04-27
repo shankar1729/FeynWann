@@ -14,6 +14,7 @@ struct CollectEph
 	const double prefacG;
 	const double EconserveExpFac, EconservePrefac; //energy conserving (fermi-surface constraining) Gaussian exponential and pre-factor
 	std::vector<diagMatrix> G; //Fermi-surface integrated e-ph coupling (for each phonon mode on DFT electronic k-mesh)
+	std::vector<diagMatrix> Gp; //Same as G, except weighted by velocity change factor (momentum-relaxation version)
 	std::vector<diagMatrix> omegaPh; //save phonon energies on full qmesh for final outputs
 	std::vector<vector3<>> qmesh; //phonon q-mesh (full version i.e. unreduced)
 	double wOffsetCur; //weight factor of current offset (due to symmetry reduction)
@@ -24,6 +25,7 @@ struct CollectEph
 		EconserveExpFac(-0.5/std::pow(EconserveWidth,2)),
 		EconservePrefac(1./(sqrt(2.*M_PI)*EconserveWidth)),
 		G(prod(wmc.kfold), diagMatrix(wmc.nModes)),
+		Gp(prod(wmc.kfold), diagMatrix(wmc.nModes)),
 		omegaPh(prod(wmc.kfold), diagMatrix(wmc.nModes)),
 		qmesh(prod(wmc.kfold))
 	{
@@ -55,12 +57,17 @@ struct CollectEph
 		diagMatrix delta2 = delta(e2.E, hasContrib); if(!hasContrib) return; //both k's must have a band at Ef
 		//Loop over electronic state 1:
 		for(int b1=0; b1<wmc.nBands; b1++) if(delta1[b1])
-		{	//Loop over electronic state 2:
+		{	const vector3<>& v1 = e1.vVec[b1];
+			//Loop over electronic state 2:
 			for(int b2=0; b2<wmc.nBands; b2++) if(delta2[b2])
 			{	double contrib = wOffsetCur * prefacG * delta1[b1] * delta2[b2];
+				const vector3<>& v2 = e2.vVec[b2];
+				double cosThetaScatter = dot(v1, v2) / sqrt(std::max(1e-16, v1.length_squared() * v2.length_squared()));
 				//Loop over phonon modes:
 				for(int alpha=0; alpha<wmc.nModes; alpha++)
-					G[ph.iqFine][alpha] += contrib * mEph.M[alpha](b2,b1).norm();
+				{	G[ph.iqFine][alpha] += contrib * mEph.M[alpha](b2,b1).norm();
+					Gp[ph.iqFine][alpha] += contrib * mEph.M[alpha](b2,b1).norm() * (1.-cosThetaScatter);
+				}
 			}
 		}
 	}
@@ -95,6 +102,7 @@ int main(int argc, char** argv)
 	wmcp.needSymmetries = true;
 	wmcp.needCellWeights = true;
 	wmcp.needPhonons = true;
+	wmcp.needVelocity = true;
 	WannierMC wmc(wmcp);
 	
 	//Check NkMult compatibility with symmetries:
@@ -208,6 +216,7 @@ int main(int argc, char** argv)
 	
 	//Collect results from all processes:
 	for(diagMatrix& g: cEph.G) g.allReduce(MPIUtil::ReduceSum);
+	for(diagMatrix& g: cEph.Gp) g.allReduce(MPIUtil::ReduceSum);
 	for(diagMatrix& o: cEph.omegaPh) o.allReduce(MPIUtil::ReduceMax);
 	mpiWorld->allReduce(&cEph.qmesh[0][0], 3*cEph.qmesh.size(), MPIUtil::ReduceMax);
 	
@@ -221,7 +230,7 @@ int main(int argc, char** argv)
 		if(!kDone[i0])
 		{	//Find orbit of this k-points under symmetries:
 			std::vector<int> iEquiv;
-			diagMatrix Gmean(wmc.nModes);
+			diagMatrix Gmean(wmc.nModes), GpMean(wmc.nModes);
 			for(int invert: invertList)
 				for(const SpaceGroupOp& op: wmc.sym)
 				{	size_t i = plook.find(invert * cEph.qmesh[i0] * op.rot);
@@ -229,12 +238,16 @@ int main(int argc, char** argv)
 					{	kDone[i] = true; //i will be covered in i0's orbit
 						iEquiv.push_back(i);
 						Gmean += cEph.G[i];
+						GpMean += cEph.Gp[i];
 					}
 				}
 			//Symmetrize within orbit:
 			Gmean *= (1./iEquiv.size());
+			GpMean *= (1./iEquiv.size());
 			for(int i: iEquiv)
-				cEph.G[i] = Gmean;
+			{	cEph.G[i] = Gmean;
+				cEph.Gp[i] = GpMean;
+			}
 			iReduced.push_back(i0);
 			qReduced.push_back(cEph.qmesh[i0]);
 			qWeight.push_back(iEquiv.size()*(1./cEph.qmesh.size()));
@@ -248,7 +261,7 @@ int main(int argc, char** argv)
 		FILE* fp = fopen(fname.c_str(), "w");
 		for(int i: iReduced)
 			for(int b=0; b<wmc.nModes; b++)
-				fprintf(fp, "%+16.12lf %16.12lf\n", cEph.omegaPh[i][b], cEph.G[i][b]);
+				fprintf(fp, "%+16.12lf %16.12lf %16.12lf\n", cEph.omegaPh[i][b], cEph.G[i][b], cEph.Gp[i][b]);
 		fclose(fp);
 		logPrintf("done.\n");
 		//q-mesh and weights:
