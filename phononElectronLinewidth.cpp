@@ -11,10 +11,12 @@ struct CollectEph
 {	
 	const WannierMC& wmc;
 	const double dmu;
-	const double prefacG;
+	const double prefacG, prefacDOS;
 	const double EconserveExpFac, EconservePrefac; //energy conserving (fermi-surface constraining) Gaussian exponential and pre-factor
 	std::vector<diagMatrix> G; //Fermi-surface integrated e-ph coupling (for each phonon mode on DFT electronic k-mesh)
 	std::vector<diagMatrix> Gp; //Same as G, except weighted by velocity change factor (momentum-relaxation version)
+	double g; //Density of states / unit cell
+	matrix3<> vv; //Outer product of velocities
 	std::vector<diagMatrix> omegaPh; //save phonon energies on full qmesh for final outputs
 	std::vector<vector3<>> qmesh; //phonon q-mesh (full version i.e. unreduced)
 	double wOffsetCur; //weight factor of current offset (due to symmetry reduction)
@@ -22,10 +24,12 @@ struct CollectEph
 	CollectEph(const WannierMC& wmc, double EconserveWidth, const vector3<int>& NkMult, double dmu)
 	: wmc(wmc), dmu(dmu),
 		prefacG(wmc.spinWeight * 2*M_PI/(prod(wmc.kfold)*prod(NkMult))),
+		prefacDOS(wmc.spinWeight * 1./(prod(wmc.kfold)*prod(NkMult))),
 		EconserveExpFac(-0.5/std::pow(EconserveWidth,2)),
 		EconservePrefac(1./(sqrt(2.*M_PI)*EconserveWidth)),
 		G(prod(wmc.kfold), diagMatrix(wmc.nModes)),
 		Gp(prod(wmc.kfold), diagMatrix(wmc.nModes)),
+		g(0.),
 		omegaPh(prod(wmc.kfold), diagMatrix(wmc.nModes)),
 		qmesh(prod(wmc.kfold))
 	{
@@ -68,6 +72,12 @@ struct CollectEph
 				{	G[ph.iqFine][alpha] += contrib * mEph.M[alpha](b2,b1).norm();
 					Gp[ph.iqFine][alpha] += contrib * mEph.M[alpha](b2,b1).norm() * (1.-cosThetaScatter);
 				}
+			}
+			//Collect DOS and related (function of k1 alone):
+			if(!e2.ik) //avoid multiply counting due to second k-point
+			{	double contrib = wOffsetCur * prefacDOS * delta1[b1];
+				g += contrib;
+				vv += contrib * outer(v1, v1);
 			}
 		}
 	}
@@ -217,6 +227,8 @@ int main(int argc, char** argv)
 	//Collect results from all processes:
 	for(diagMatrix& g: cEph.G) g.allReduce(MPIUtil::ReduceSum);
 	for(diagMatrix& g: cEph.Gp) g.allReduce(MPIUtil::ReduceSum);
+	mpiWorld->allReduce(cEph.g, MPIUtil::ReduceSum);
+	mpiWorld->allReduce(&cEph.vv(0,0), 9, MPIUtil::ReduceSum);
 	for(diagMatrix& o: cEph.omegaPh) o.allReduce(MPIUtil::ReduceMax);
 	mpiWorld->allReduce(&cEph.qmesh[0][0], 3*cEph.qmesh.size(), MPIUtil::ReduceMax);
 	
@@ -253,12 +265,14 @@ int main(int argc, char** argv)
 			qWeight.push_back(iEquiv.size()*(1./cEph.qmesh.size()));
 		}
 	logPrintf("Symmetrized Gph for %lu k-points in mesh in %lu orbits.\n", cEph.qmesh.size(), iReduced.size());
+	wmc.symmetrize(cEph.vv); //symmetrize vSq
 	
 	//Output linewidths and energies in text file:
 	if(mpiWorld->isHead())
 	{	string fname = "Gph" + wmc.spinSuffix + ".dat";
 		logPrintf("Dumping '%s' ... ", fname.c_str()); fflush(globalLog);
 		FILE* fp = fopen(fname.c_str(), "w");
+		fprintf(fp, "#omegaPh[Eh] G Gp\n");
 		for(int i: iReduced)
 			for(int b=0; b<wmc.nModes; b++)
 				fprintf(fp, "%+16.12lf %16.12lf %16.12lf\n", cEph.omegaPh[i][b], cEph.G[i][b], cEph.Gp[i][b]);
@@ -268,12 +282,20 @@ int main(int argc, char** argv)
 		fname = "Gph" + wmc.spinSuffix + ".qList";
 		logPrintf("Dumping '%s' ... ", fname.c_str()); fflush(globalLog);
 		fp = fopen(fname.c_str(), "w");
+		fprintf(fp, "#q0 q1 q2 wq\n");
 		for(size_t i=0; i<qReduced.size(); i++)
 			fprintf(fp, "%12.10lf %12.10lf %12.10lf  %14.12lf\n",
 				qReduced[i][0], qReduced[i][1], qReduced[i][2], qWeight[i]);
 		fclose(fp);
 		logPrintf("done.\n");
 	}
+	
+	//Report overall moments (used for AC conductivity calculations):
+	logPrintf("\nFermi level integrals in atomic units:\n");
+	logPrintf("gEf = %lf\n", cEph.g);
+	logPrintf("vvEf:\n"); cEph.vv.print(globalLog, " %lf ");
+	logPrintf("Omega = %lf\n", fabs(det(wmc.R))); //unit cell volume
+	logPrintf("\n");
 	
 	wmc.free();
 	WannierMC::finalize();
