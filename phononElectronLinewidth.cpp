@@ -24,7 +24,7 @@ struct CollectEph
 	CollectEph(const WannierMC& wmc, double EconserveWidth, const vector3<int>& NkMult, double dmu)
 	: wmc(wmc), dmu(dmu),
 		prefacG(wmc.spinWeight * 2*M_PI/(prod(wmc.kfold)*prod(NkMult))),
-		prefacDOS(wmc.spinWeight * 1./(prod(wmc.kfold)*prod(NkMult))),
+		prefacDOS(wmc.spinWeight * 1./(2*prod(wmc.kfold)*prod(NkMult))), //2 in denominator <= use both regular and offset meshes below
 		EconserveExpFac(-0.5/std::pow(EconserveWidth,2)),
 		EconservePrefac(1./(sqrt(2.*M_PI)*EconserveWidth)),
 		G(prod(wmc.kfold), diagMatrix(wmc.nModes)),
@@ -36,13 +36,12 @@ struct CollectEph
 	}
 	
 	//Calculate Fermi-surface delta function and set hasContrib=true if any non-zero
-	diagMatrix delta(diagMatrix E, bool& hasContrib)
+	diagMatrix delta(diagMatrix E)
 	{	diagMatrix result(E.nRows());
 		for(int b=0; b<E.nRows(); b++)
 		{	double deltaExponent = EconserveExpFac * std::pow(E[b]-dmu, 2);
 			if(deltaExponent < -15.) continue; //the exponential below will be negligible
 			result[b] = EconservePrefac * exp(deltaExponent);
-			hasContrib = true;
 		}
 		return result;
 	}
@@ -56,13 +55,23 @@ struct CollectEph
 		qmesh[ph.iqFine] = ph.q;
 		omegaPh[ph.iqFine] = ph.omega;
 		//Calculate Fermi-surface-constraining delta functions:
-		bool hasContrib = false;
-		diagMatrix delta1 = delta(e1.E, hasContrib); if(!hasContrib) return; //both k's must have a band at Ef
-		diagMatrix delta2 = delta(e2.E, hasContrib); if(!hasContrib) return; //both k's must have a band at Ef
-		//Loop over electronic state 1:
+		diagMatrix delta1 = delta(e1.E);
+		diagMatrix delta2 = delta(e2.E);
+		//Collect DOS and related (function of single k):
+		#define collectDOS(i, iOther) \
+			if(!e##iOther.ik) /*avoid multiple counting due to other k-point*/ \
+			{	for(int b=0; b<wmc.nBands; b++) if(delta##i[b]) \
+				{	const vector3<>& v = e##i.vVec[b]; \
+					double contrib = wOffsetCur * prefacDOS * delta##i[b]; \
+					g += contrib; \
+					vv += contrib * outer(v, v); \
+				} \
+			}
+		collectDOS(1, 2) //collect on e1 k-mesh (offset)
+		collectDOS(2, 1) //collect on e2 k-mesh (Gamma-centered)
+		//Collect e-ph coupling weight (function of both k's):
 		for(int b1=0; b1<wmc.nBands; b1++) if(delta1[b1])
 		{	const vector3<>& v1 = e1.vVec[b1];
-			//Loop over electronic state 2:
 			for(int b2=0; b2<wmc.nBands; b2++) if(delta2[b2])
 			{	double contrib = wOffsetCur * prefacG * delta1[b1] * delta2[b2];
 				const vector3<>& v2 = e2.vVec[b2];
@@ -72,12 +81,6 @@ struct CollectEph
 				{	G[ph.iqFine][alpha] += contrib * mEph.M[alpha](b2,b1).norm();
 					Gp[ph.iqFine][alpha] += contrib * mEph.M[alpha](b2,b1).norm() * (1.-cosThetaScatter);
 				}
-			}
-			//Collect DOS and related (function of k1 alone):
-			if(!e2.ik) //avoid multiply counting due to second k-point
-			{	double contrib = wOffsetCur * prefacDOS * delta1[b1];
-				g += contrib;
-				vv += contrib * outer(v1, v1);
 			}
 		}
 	}
@@ -170,17 +173,20 @@ int main(int argc, char** argv)
 	{	//compile kpoint map:
 		PeriodicLookup<vector3<>> plook(kMult, GGT);
 		std::vector<bool> kDone(kMult.size(), false);
+		vector3<> q0mult = Diag(q0) * wmc.kfold;
 		for(size_t iSrc=0; iSrc<kMult.size(); iSrc++)
 			if(!kDone[iSrc])
-			{	double w = 0.; //weight of current point
+			{	double w = 0.; //weight of current offset
 				for(int invert: invertList)
 					for(const SpaceGroupOp& op: wmc.sym)
-					{	size_t iDest = plook.find(invert * kMult[iSrc] * op.rot);
-						if(iDest!=string::npos && (!kDone[iDest]))
-						{	kDone[iDest] = true; //iDest in iSrc's orbit
-							w += 1.; //increase weight of iSrc
+						for(int swap=0; swap<2; swap++) //whether symmetry maps k and offset k meshes separately, or to each other
+						{	size_t iDest = plook.find(invert * kMult[iSrc] * op.rot - q0mult*swap);
+							size_t iDestOff = plook.find(invert * (kMult[iSrc] + q0mult) * op.rot - q0mult*(1-swap));
+							if(iDest!=string::npos && (!kDone[iDest]) && iDestOff==iDest)
+							{	kDone[iDest] = true; //iDest in iSrc's orbit
+								w += 1.; //increase weight of iSrc
+							}
 						}
-					}
 				//add corresponding offset:
 				k0.push_back(kfoldInv * kMult[iSrc]);
 				wk0.push_back(w);
