@@ -64,10 +64,12 @@ sP = np.sin(polPhi); cP = np.cos(polPhi)
 pol = np.array([ sT*cP, sT*sP, cT ])
 
 #Evaluate scattering rate for various frequencies:
-def boseEnergy(x):
+def b(x):
 	xReg = np.where(np.abs(x)<1e-6, 1e-6, x)
 	return xReg/(1. - np.exp(-beta*xReg))
-tauInv = (2*np.pi/(gEf*boseEnergy(omega))) * np.sum(np.sum(wq[None,:,None] * Gph[None,...] * boseEnergy(omega[:,None,None]-omegaPh[None,...]), axis=-1), axis=-1)
+bDen = ( np.sum(np.sum(wq[None,:,None] * Gph[None,...] * b(omega[:,None,None]+omegaPh[None,...]), axis=-1), axis=-1)
+	/ np.sum(np.sum(wq[None,:,None] * Gph[None,...], axis=-1), axis=-1) )
+tauInv = (2*np.pi/(gEf*bDen)) * np.sum(np.sum(wq[None,:,None] * Gph[None,...] * b(omega[:,None,None]-omegaPh[None,...]), axis=-1), axis=-1)
 #--- save data:
 outDat = np.array([omega/eV, (1./tauInv)/fs]).T
 np.savetxt('tauAC.dat', outDat, header='omega[eV] tauAC[fs]')
