@@ -89,7 +89,7 @@ endif()
 
 #Main library for WannierMC containing all the auxiliary functionality
 add_library(WannierMC ${LINK_TYPE} BandStruct.cpp Epsilon.cpp Histogram.cpp LineWidth.cpp InputMap.cpp Interp1.cpp)
-find_library(JDFTX_LIBRARY jdftx PATHS ${JDFTX_BUILD})
+find_library(JDFTX_LIBRARY jdftx PATHS ${JDFTX_BUILD} NO_DEFAULT_PATH)
 target_link_libraries(WannierMC ${JDFTX_LIBRARY} ${MPI_CXX_LIBRARIES} ${EXTRA_LIBRARIES})
 
 #Executables linked to above library
