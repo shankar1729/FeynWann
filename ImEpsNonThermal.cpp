@@ -78,34 +78,13 @@ int main(int argc, char** argv)
 	const std::vector<double>& Tl = TlInterp.yGrid[0];
 	assert(int(Tl.size()) == numTimes);
 		
-	//Initialize energy grid:
-	diagMatrix Egamma = bs.getStates(vector3<>());
-	double Emin = Egamma.front(), Emax = Egamma.back(); //eigenvalues are sorted
-	for(int i=0; i<10; i++)
-	{	std::vector<vector3<> > kArr(bunchSize);
-		for(vector3<>& k: kArr)
-			for(int j=0; j<3; j++)
-				k[j] = Random::uniform();
-		std::vector<diagMatrix> Earr = bs.getStates(kArr);
-		for(const diagMatrix& E: Earr)
-		{	Emin = std::min(Emin, E.front());
-			Emax = std::max(Emax, E.back());
-		}
-	}
-	mpiWorld->allReduce(Emin, MPIUtil::ReduceMin);
-	mpiWorld->allReduce(Emax, MPIUtil::ReduceMax);
-	Emin -= 10*dE; //add some margin
-	Emax += 10*dE;
-	int steps = (Emax-Emin)/dE;
-	logPrintf("Initialized energy grid: %lg to %lg eV with %d points.\n", Emin/eV, (Emin+dE*(steps))/eV, steps);
-	
 	//Initialize sampling parameters:
 	int ikStart, ikStop; TaskDivision(nKpts, mpiWorld).myRange(ikStart, ikStop);
 	int nBunchesMine = ceil((ikStop-ikStart)*1./bunchSize); //number of bunches on current process
 	int iBunchInterval = std::max(1, int(round(nBunchesMine/50.))); //interval for reporting progress
 	nKpts = nBunchesMine * bunchSize; mpiWorld->allReduce(nKpts, MPIUtil::ReduceSum); //total number of sampled k-points
 	long nKpairs = nKpts * (bunchSize-1); //total number of sampled k-point pairs for phonon-assisted transitions
-	int nBands = Egamma.nRows();
+	int nBands = bs.getStates(vector3<>()).nRows();
 	int nModes = bs.getPhononModes(vector3<>()).nRows();
 	double phononPrefac0 = 4 * std::pow(M_PI,2) * bs.spinWeight / (nKpairs*fabs(det(bs.R))); //frequency independent part of prefac
 	double directPrefac0 = 4 * std::pow(M_PI,2) * bs.spinWeight / (nKpts*fabs(det(bs.R))); //frequency independent part of prefac
