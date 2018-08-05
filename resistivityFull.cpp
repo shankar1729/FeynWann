@@ -89,7 +89,7 @@ struct SparseMatrix
 			bool singular = false;
 			if(ndim > 1)
 			{	matrix U, Vdag; diagMatrix S;
-				overlap(0,ndim, 0,ndim).svd(U, S, Vdag);
+				matrix(overlap(0,ndim, 0,ndim)).svd(U, S, Vdag);
 				if(S.back() < S.front()*threshold)
 				{	logPrintf("DIIS: Singularity in overlap, resetting history.\n");
 					singular = true;

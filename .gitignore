@@ -6,4 +6,5 @@ plasmonPhononDecay
 Run*
 EventLists
 .directory
+run-cmake.sh
 
