@@ -82,7 +82,7 @@ int main(int argc, char** argv)
 			dmuCur = 0.5*(dmuMin + dmuMax);
 		}
 	}
-	dmu.allReduce(MPIUtil::ReduceSum);
+	mpiWorld->allReduceData(dmu, MPIUtil::ReduceSum);
 
 	if(mpiWorld->isHead())
 	{	ofstream ofs("mu_Te_Jellium.dat");

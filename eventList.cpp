@@ -237,13 +237,13 @@ int main(int argc, char** argv)
 	sprintf(fname, "events-%.1lfeV.dat", Eplasmon/eV);
 	mpiWorld->fopenWrite(fpEvent, fname);
 	mpiWorld->fseek(fpEvent, nEventsPrev*sizeof(Event), SEEK_SET);
-	mpiWorld->fwrite(events.data(), sizeof(Event), events.size(), fpEvent);
+	mpiWorld->fwriteData(events, fpEvent);
 	mpiWorld->fclose(fpEvent);
 	//--- phonon
 	sprintf(fname, "eventsPh-%.1lfeV.dat", Eplasmon/eV);
 	mpiWorld->fopenWrite(fpEvent, fname);
 	mpiWorld->fseek(fpEvent, nEventsPhPrev*sizeof(Event), SEEK_SET);
-	mpiWorld->fwrite(eventsPh.data(), sizeof(Event), eventsPh.size(), fpEvent);
+	mpiWorld->fwriteData(eventsPh, fpEvent);
 	mpiWorld->fclose(fpEvent);
 	
 	finalizeSystem();

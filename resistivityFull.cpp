@@ -26,7 +26,7 @@ struct SparseMatrix
 		for(const Entry& entry: entries)
 			for(int col=0; col<v.nCols(); col++)
 				outData[out.index(entry.i, col)] += entry.Mij * vData[v.index(entry.j, col)];
-		out.allReduce(MPIUtil::ReduceSum);
+		mpiWorld->allReduceData(out, MPIUtil::ReduceSum);
 		watch.stop();
 		return out;
 	}
@@ -36,7 +36,7 @@ struct SparseMatrix
 	{	diagMatrix out(nCols, 0.);
 		for(const Entry& entry: entries)
 			out[entry.j] += entry.Mij;
-		out.allReduce(MPIUtil::ReduceSum);
+		mpiWorld->allReduceData(out, MPIUtil::ReduceSum);
 		return out;
 	}
 	
@@ -130,7 +130,7 @@ struct SparseMatrix
 					logPrintf("DIIS: Singularity in subspace expansion, randomizing search direction.\n");
 					if(mpiWorld->isHead())
 						randomize(d);
-					d.bcast();
+					mpiWorld->bcastData(d);
 					continue;
 				}
 				complex alpha = -Ad_r / Ad_Ad;
@@ -245,7 +245,7 @@ int main(int argc, char** argv)
 	{	int offset = dot(state.ik, ikStride)*nModes;
 		omegaPhMesh.set(offset, offset+nModes, bs.getPhononModes(invDiagNk * state.ik));
 	}
-	omegaPhMesh.allReduce(MPIUtil::ReduceSum);
+	mpiWorld->allReduceData(omegaPhMesh, MPIUtil::ReduceSum);
 	
 	//Generate list of k-point pairs with relevant coupling:
 	double weightCut = 1e-6;

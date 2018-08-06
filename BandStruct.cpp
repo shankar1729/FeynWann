@@ -239,7 +239,7 @@ BandStruct::BandStruct(string totalEprefix, string wannierPrefix, bool needPhono
 			transformMatElemArr(pWannier, rot);
 		}
 		else pWannier.init(nPacked*nPol, cellMap.size());
-		pWannier.bcast();
+		mpiWorld->bcastData(pWannier);
 	}
 	//--- electron-phonon matrix elements
 	if(omegaSqPh)
@@ -249,7 +249,7 @@ BandStruct::BandStruct(string totalEprefix, string wannierPrefix, bool needPhono
 			compressMatElemArr(wannierHePh);
 		}
 		else wannierHePh.init(nModes*nPacked * phononCellMap.size(), phononCellMap.size());
-		wannierHePh.bcast();
+		mpiWorld->bcastData(wannierHePh);
 	}
 }
 

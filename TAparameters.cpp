@@ -192,8 +192,8 @@ int main(int argc, char** argv)
 			CeCur += dE * Ei * dos.out[ie] * dfdT;
 		}
 	}
-	dmu.allReduce(MPIUtil::ReduceSum);
-	Ce.allReduce(MPIUtil::ReduceSum);
+	mpiWorld->allReduceData(dmu, MPIUtil::ReduceSum);
+	mpiWorld->allReduceData(Ce, MPIUtil::ReduceSum);
 	
 
 
@@ -360,7 +360,7 @@ int main(int argc, char** argv)
 	}
 
 	//e-ph coupling:
-	GePh.allReduce(MPIUtil::ReduceSum);
+	mpiWorld->allReduceData(GePh, MPIUtil::ReduceSum);
 	
 	//ImEps:
 	for(Histogram& h: ImEpsDirect) h.allReduce(MPIUtil::ReduceSum);

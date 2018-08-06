@@ -191,7 +191,7 @@ struct ePhRelax
 			}
 			results[i] = (2*scaledDe) * (dE*dE) * rateSum;
 		}
-		results.allReduce(MPIUtil::ReduceSum, true);
+		mpiWorld->allReduceData(results, MPIUtil::ReduceSum, true);
 		//e-ph collisions:
 		double ElDot = 0.; //rate of energy transfer to lattice
 		for(int i=0; i<nE-1; i++)
@@ -262,7 +262,7 @@ int fdot_wrapper(double t, const double* f, double* fdot, void* params)
 {	const ePhRelax& e = *((ePhRelax*)params);
 	diagMatrix fMat; fMat.assign(f, f+e.nE+1); //copy input to diagMatrix
 	diagMatrix fdotMat = e.fdot(fMat); //calculate result in diagMatrix form
-	fdotMat.bcast(); //make sure results are consistent across processes to numerical precision
+	mpiWorld->bcastData(fdotMat); //make sure results are consistent across processes to numerical precision
 	std::copy(fdotMat.begin(), fdotMat.end(), fdot); //copy output to pointer
 	return GSL_SUCCESS;
 }

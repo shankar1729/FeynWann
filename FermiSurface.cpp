@@ -57,7 +57,7 @@ int main(int argc, char** argv)
 		sprintf(fname, "FermiSurface.%d.bin", b);
 		mpiWorld->fopenWrite(fp, fname);
 		mpiWorld->fseek(fp, ik0start*nk*nk*sizeof(dpair), SEEK_SET);
-		mpiWorld->fwrite(Epair[b].data(), sizeof(dpair), Epair[b].size(), fp);
+		mpiWorld->fwriteData(Epair[b], fp);
 		mpiWorld->fclose(fp);
 	}
 	

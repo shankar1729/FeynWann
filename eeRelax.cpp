@@ -90,7 +90,7 @@ struct eeRelax
 			}
 			results[i] = (2*De) * (dE*dE) * rateSum;
 		}
-		results.allReduce(MPIUtil::ReduceSum, true);
+		mpiWorld->allReduceData(results, MPIUtil::ReduceSum, true);
 		return results;
 	}
 	
@@ -118,7 +118,7 @@ struct eeRelax
 			}
 			results[i-nE] = (De*dE*dE)*rateSum - 0.5*De*std::pow(Egrid(i-nE),2);
 		};
-		results.allReduce(MPIUtil::ReduceSum, true);
+		mpiWorld->allReduceData(results, MPIUtil::ReduceSum, true);
 		return results;
 	}
 };

@@ -131,8 +131,8 @@ int main(int argc, char** argv)
 			ClDebyeCur += domegaPh * omegaPh * g_Tl  * dosDebye;
 		}
 	}
-	Cl.allReduce(MPIUtil::ReduceSum);
-	ClDebye.allReduce(MPIUtil::ReduceSum);
+	mpiWorld->allReduceData(Cl, MPIUtil::ReduceSum);
+	mpiWorld->allReduceData(ClDebye, MPIUtil::ReduceSum);
 
 	if(mpiWorld->isHead())
         {        ofstream ofs("phononDOSDebye.dat");

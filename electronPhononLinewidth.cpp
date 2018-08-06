@@ -58,7 +58,7 @@ public:
 			phase.set(dq,dq+1, 0,nCells, dagger(ce->phase) * cellWeights);
 		}
 		matrix ImSigmaWannier = ceArr.size() ? ImSigmaRS * phase : zeroes(bs.nBands*bs.nBands, nCells);
-		ImSigmaWannier.allReduce(MPIUtil::ReduceSum);
+		mpiWorld->allReduceData(ImSigmaWannier, MPIUtil::ReduceSum);
 		if(mpiWorld->isHead())
 			ImSigmaWannier.dump(fname.c_str(), bs.spinWeight==2);
 	}
@@ -220,8 +220,8 @@ int main(int argc, char** argv)
 	
 	//Collect results and map to full mesh:
 	for(size_t q=0; q<kInReduced.size(); q++)
-	{	ImSigmaReduced[q].allReduce(MPIUtil::ReduceSum);
-		ImSigmaReducedP[q].allReduce(MPIUtil::ReduceSum);
+	{	mpiWorld->allReduceData(ImSigmaReduced[q], MPIUtil::ReduceSum);
+		mpiWorld->allReduceData(ImSigmaReducedP[q], MPIUtil::ReduceSum);
 	}
 	std::vector<diagMatrix> ImSigma(prodNkIn), ImSigmaP(prodNkIn); //imaginary part of self-energy (and momentum-relaxation version) on full input mesh
 	for(int q=0; q<prodNkIn; q++)
