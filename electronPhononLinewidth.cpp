@@ -311,12 +311,9 @@ int main(int argc, char** argv)
 			}
 	}
 	//--- make available on all processes
-	int nOffsets = k02.size();
-	mpiWorld->bcast(nOffsets);
-	k02.resize(nOffsets);
-	wk02.resize(nOffsets);
-	mpiWorld->bcast(&k02[0][0], 3*nOffsets);
-	mpiWorld->bcast(wk02.data(), nOffsets);
+	int nOffsets = k02.size(); mpiWorld->bcast(nOffsets);
+	k02.resize(nOffsets); mpiWorld->bcastData(k02);
+	wk02.resize(nOffsets); mpiWorld->bcastData(wk02);
 	logPrintf("\n%lu offsets in NkMult mesh reduced to %d under symmetries.\n", kMult.size(), nOffsets);
 	
 	logPrintf("\n");
@@ -350,7 +347,7 @@ int main(int argc, char** argv)
 	//Collect results from all processes:
 	for(std::vector<diagMatrix>& dArr: cEph.ImSigma)
 		for(diagMatrix& d: dArr)
-			d.allReduce(MPIUtil::ReduceSum);
+			mpiWorld->allReduceData(d, MPIUtil::ReduceSum);
 	
 	//Symmetrize:
 	PeriodicLookup<vector3<>> plook(cEph.kmesh, GGT);

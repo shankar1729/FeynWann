@@ -128,8 +128,8 @@ int main(int argc, char** argv)
 			ClDebyeCur += domega * omegaPh * g_T  * dosDebye;
 		}
 	}
-	Cl.allReduce(MPIUtil::ReduceSum);
-	ClDebye.allReduce(MPIUtil::ReduceSum);
+	mpiWorld->allReduceData(Cl, MPIUtil::ReduceSum);
+	mpiWorld->allReduceData(ClDebye, MPIUtil::ReduceSum);
 
 	if(mpiWorld->isHead())
 	{	const double Omega = wmc.Omega;

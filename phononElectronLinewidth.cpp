@@ -193,12 +193,9 @@ int main(int argc, char** argv)
 			}
 	}
 	//--- make available on all processes
-	int nOffsets = k0.size();
-	mpiWorld->bcast(nOffsets);
-	k0.resize(nOffsets);
-	wk0.resize(nOffsets);
-	mpiWorld->bcast(&k0[0][0], 3*nOffsets);
-	mpiWorld->bcast(wk0.data(), nOffsets);
+	int nOffsets = k0.size(); mpiWorld->bcast(nOffsets);
+	k0.resize(nOffsets); mpiWorld->bcastData(k0);
+	wk0.resize(nOffsets); mpiWorld->bcastData(wk0);
 	logPrintf("\n%lu offsets in NkMult mesh reduced to %d under symmetries.\n", kMult.size(), nOffsets);
 	
 	logPrintf("\n");
@@ -231,12 +228,12 @@ int main(int argc, char** argv)
 	logPrintf("done.\n"); logFlush();
 	
 	//Collect results from all processes:
-	for(diagMatrix& g: cEph.G) g.allReduce(MPIUtil::ReduceSum);
-	for(diagMatrix& g: cEph.Gp) g.allReduce(MPIUtil::ReduceSum);
+	for(diagMatrix& g: cEph.G) mpiWorld->allReduceData(g, MPIUtil::ReduceSum);
+	for(diagMatrix& g: cEph.Gp) mpiWorld->allReduceData(g, MPIUtil::ReduceSum);
 	mpiWorld->allReduce(cEph.g, MPIUtil::ReduceSum);
 	mpiWorld->allReduce(&cEph.vv(0,0), 9, MPIUtil::ReduceSum);
-	for(diagMatrix& o: cEph.omegaPh) o.allReduce(MPIUtil::ReduceMax);
-	mpiWorld->allReduce(&cEph.qmesh[0][0], 3*cEph.qmesh.size(), MPIUtil::ReduceMax);
+	for(diagMatrix& o: cEph.omegaPh) mpiWorld->allReduceData(o, MPIUtil::ReduceMax);
+	mpiWorld->allReduceData(cEph.qmesh, MPIUtil::ReduceMax);
 	
 	//Symmetrize:
 	PeriodicLookup<vector3<>> plook(cEph.qmesh, GGT);

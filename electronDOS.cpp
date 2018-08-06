@@ -187,8 +187,8 @@ int main(int argc, char** argv)
 			CeCur += dE * Ei * dos.out[ie] * dfdT;
 		}
 	}
-	dmu.allReduce(MPIUtil::ReduceSum);
-	Ce.allReduce(MPIUtil::ReduceSum);
+	mpiWorld->allReduceData(dmu, MPIUtil::ReduceSum);
+	mpiWorld->allReduceData(Ce, MPIUtil::ReduceSum);
 	
 	//Write to file
 	if(mpiWorld->isHead())

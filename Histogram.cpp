@@ -28,7 +28,7 @@ void Histogram::addEvent(double E, double weight)
 
 void Histogram::allReduce(MPIUtil::ReduceOp op, bool safeMode)
 {	if(mpiWorld->nProcesses()>1)
-		mpiWorld->allReduce(out.data(), out.size(), op, safeMode);
+		mpiWorld->allReduceData(out, op, safeMode);
 }
 
 void Histogram::print(string fname, double Escale, double histScale) const
@@ -70,7 +70,7 @@ void Histogram2D::addEvent(double E, double omega, double weight)
 
 void Histogram2D::allReduce(MPIUtil::ReduceOp op, bool safeMode)
 {	if(mpiWorld->nProcesses()>1)
-		mpiWorld->allReduce(out.data(), out.size(), op, safeMode);
+		mpiWorld->allReduceData(out, op, safeMode);
 }
 
 void Histogram2D::print(string fname, double Escale, double omegaScale, double histScale) const
