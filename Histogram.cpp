@@ -35,14 +35,18 @@ Histogram::Histogram(double Emin, double dE, double Emax)
 void Histogram::addEvent(double E, double weight)
 {	//Linear splined histogram
 	//--- E coordinate:
-	double eCenter = (E-Emin)*dEinv;
-	int ie = floor(eCenter);
-	if(ie<0 || ie+1>=nE) return;
-	double te = eCenter - ie;
+	int iEvent; double tEvent;
+	if(not eventPrecalc(E, iEvent, tEvent)) return;
 	//--- accumulate normalized linear spline:
-	double prefac = dEinv * weight;
-	out[ ie ] += prefac * (1.-te);
-	out[ie+1] += prefac * te;
+	addEventPrecalc(iEvent, tEvent, weight);
+}
+
+bool Histogram::eventPrecalc(double E, int& iEvent, double& tEvent)
+{	double eCenter = (E-Emin)*dEinv;
+	iEvent = floor(eCenter);
+	if(iEvent<0 || iEvent+1>=nE) return false;
+	tEvent = eCenter - iEvent;
+	return true;
 }
 
 void Histogram::allReduce(MPIUtil::ReduceOp op, bool safeMode)

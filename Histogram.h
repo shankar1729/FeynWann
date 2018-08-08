@@ -35,6 +35,11 @@ struct Histogram
 	
 	Histogram(double Emin, double dE, double Emax);
 	void addEvent(double E, double weight);
+	
+	//Alternate two-stage addEvent logic which is useful for arrays of similar histograms
+	bool eventPrecalc(double E, int& iEvent, double& tEvent); //!< precalculate event location and return false if out of range
+	inline void addEventPrecalc(int iEvent, double tEvent, double weight); //!< add event with precalculated location
+	
 	void allReduce(MPIUtil::ReduceOp op, bool safeMode=false); //collect over MPI
 	void print(string fname, double Escale, double histScale) const; //write to file
 };
@@ -55,5 +60,13 @@ struct Histogram2D
 	Histogram2D(string fname, double Escale, double omegaScale, double histScale); //read back histogram written using print
 	double interp1(double E, double omega) const; //return interpolated value
 };
+
+//----------------- Implementations --------------
+
+inline void Histogram::addEventPrecalc(int iEvent, double tEvent, double weight)
+{	double prefac = dEinv * weight;
+	out[ iEvent ] += prefac * (1.-tEvent);
+	out[iEvent+1] += prefac * tEvent;
+}
 
 #endif //FEYNWANN_HISTOGRAM_H
