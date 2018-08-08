@@ -28,7 +28,7 @@ template<typename T> T prod(const vector3<T>& v) { return v[0]*v[1]*v[2]; }
 
 struct CollectEph
 {	
-	const FeynWann& wmc;
+	const FeynWann& fw;
 	const double dmu;
 	const double prefacG, prefacDOS;
 	const double EconserveExpFac, EconservePrefac; //energy conserving (fermi-surface constraining) Gaussian exponential and pre-factor
@@ -40,17 +40,17 @@ struct CollectEph
 	std::vector<vector3<>> qmesh; //phonon q-mesh (full version i.e. unreduced)
 	double wOffsetCur; //weight factor of current offset (due to symmetry reduction)
 	
-	CollectEph(const FeynWann& wmc, double EconserveWidth, const vector3<int>& NkMult, double dmu)
-	: wmc(wmc), dmu(dmu),
-		prefacG(wmc.spinWeight * 2*M_PI/(prod(wmc.kfold)*prod(NkMult))),
-		prefacDOS(wmc.spinWeight * 1./(2*prod(wmc.kfold)*prod(NkMult))), //2 in denominator <= use both regular and offset meshes below
+	CollectEph(const FeynWann& fw, double EconserveWidth, const vector3<int>& NkMult, double dmu)
+	: fw(fw), dmu(dmu),
+		prefacG(fw.spinWeight * 2*M_PI/(prod(fw.kfold)*prod(NkMult))),
+		prefacDOS(fw.spinWeight * 1./(2*prod(fw.kfold)*prod(NkMult))), //2 in denominator <= use both regular and offset meshes below
 		EconserveExpFac(-0.5/std::pow(EconserveWidth,2)),
 		EconservePrefac(1./(sqrt(2.*M_PI)*EconserveWidth)),
-		G(prod(wmc.kfold), diagMatrix(wmc.nModes)),
-		Gp(prod(wmc.kfold), diagMatrix(wmc.nModes)),
+		G(prod(fw.kfold), diagMatrix(fw.nModes)),
+		Gp(prod(fw.kfold), diagMatrix(fw.nModes)),
 		g(0.),
-		omegaPh(prod(wmc.kfold), diagMatrix(wmc.nModes)),
-		qmesh(prod(wmc.kfold))
+		omegaPh(prod(fw.kfold), diagMatrix(fw.nModes)),
+		qmesh(prod(fw.kfold))
 	{
 	}
 	
@@ -79,7 +79,7 @@ struct CollectEph
 		//Collect DOS and related (function of single k):
 		#define collectDOS(i, iOther) \
 			if(!e##iOther.ik) /*avoid multiple counting due to other k-point*/ \
-			{	for(int b=0; b<wmc.nBands; b++) if(delta##i[b]) \
+			{	for(int b=0; b<fw.nBands; b++) if(delta##i[b]) \
 				{	const vector3<>& v = e##i.vVec[b]; \
 					double contrib = wOffsetCur * prefacDOS * delta##i[b]; \
 					g += contrib; \
@@ -89,14 +89,14 @@ struct CollectEph
 		collectDOS(1, 2) //collect on e1 k-mesh (offset)
 		collectDOS(2, 1) //collect on e2 k-mesh (Gamma-centered)
 		//Collect e-ph coupling weight (function of both k's):
-		for(int b1=0; b1<wmc.nBands; b1++) if(delta1[b1])
+		for(int b1=0; b1<fw.nBands; b1++) if(delta1[b1])
 		{	const vector3<>& v1 = e1.vVec[b1];
-			for(int b2=0; b2<wmc.nBands; b2++) if(delta2[b2])
+			for(int b2=0; b2<fw.nBands; b2++) if(delta2[b2])
 			{	double contrib = wOffsetCur * prefacG * delta1[b1] * delta2[b2];
 				const vector3<>& v2 = e2.vVec[b2];
 				double cosThetaScatter = dot(v1, v2) / sqrt(std::max(1e-16, v1.length_squared() * v2.length_squared()));
 				//Loop over phonon modes:
-				for(int alpha=0; alpha<wmc.nModes; alpha++)
+				for(int alpha=0; alpha<fw.nModes; alpha++)
 				{	G[ph.iqFine][alpha] += contrib * mEph.M[alpha](b2,b1).norm();
 					Gp[ph.iqFine][alpha] += contrib * mEph.M[alpha](b2,b1).norm() * (1.-cosThetaScatter);
 				}
@@ -129,16 +129,16 @@ int main(int argc, char** argv)
 	logPrintf("NkMult = "); NkMult.print(globalLog, " %d ");
 	
 	//Initialize FeynWann:
-	FeynWannParams wmcp;
-	wmcp.iSpin = iSpin;
-	wmcp.needSymmetries = true;
-	wmcp.needCellWeights = true;
-	wmcp.needPhonons = true;
-	wmcp.needVelocity = true;
-	FeynWann wmc(wmcp);
+	FeynWannParams fwp;
+	fwp.iSpin = iSpin;
+	fwp.needSymmetries = true;
+	fwp.needCellWeights = true;
+	fwp.needPhonons = true;
+	fwp.needVelocity = true;
+	FeynWann fw(fwp);
 	
 	//Check NkMult compatibility with symmetries:
-	for(const SpaceGroupOp& op: wmc.sym)
+	for(const SpaceGroupOp& op: fw.sym)
 	{	//Similar to Symmetries::checkFFTbox in JDFTx
 		matrix3<int> mMesh = Diag(NkMult) * op.rot;
 		for(int i=0; i<3; i++)
@@ -158,12 +158,12 @@ int main(int argc, char** argv)
 	vector3<int> NkFine;
 	vector3<> q0; //phonon q-mesh offset
 	for(int iDir=0; iDir<3; iDir++)
-	{	q0[iDir] = wmc.isTruncated[iDir] ? 0. : 0.5/wmc.kfold[iDir]; //offset from Gamma in periodic directions
-		if(wmc.isTruncated[iDir] && NkMult[iDir]!=1)
+	{	q0[iDir] = fw.isTruncated[iDir] ? 0. : 0.5/fw.kfold[iDir]; //offset from Gamma in periodic directions
+		if(fw.isTruncated[iDir] && NkMult[iDir]!=1)
 		{	logPrintf("Setting NkMult = 1 along truncated direction %d.\n", iDir+1);
 			NkMult[iDir] = 1; //no multiplication in truncated directions
 		}
-		NkFine[iDir] = wmc.kfold[iDir] * NkMult[iDir];
+		NkFine[iDir] = fw.kfold[iDir] * NkMult[iDir];
 	}
 	matrix3<> NkMultInv = inv(Diag(vector3<>(NkMult)));
 	vector3<int> ikMult;
@@ -181,23 +181,23 @@ int main(int argc, char** argv)
 	std::vector<int> invertList;
 	invertList.push_back(+1);
 	invertList.push_back(-1);
-	for(const SpaceGroupOp& op: wmc.sym)
+	for(const SpaceGroupOp& op: fw.sym)
 		if(op.rot==matrix3<int>(-1,-1,-1))
 		{	invertList.resize(1); //inversion explicitly found in symmetry list, so remove from invertList
 			break;
 		}
-	matrix3<> G = 2*M_PI*inv(wmc.R), GGT = G*(~G);
-	matrix3<> kfoldInv = inv(Diag(vector3<>(wmc.kfold)));
+	matrix3<> G = 2*M_PI*inv(fw.R), GGT = G*(~G);
+	matrix3<> kfoldInv = inv(Diag(vector3<>(fw.kfold)));
 	if(mpiWorld->isHead())
 	{	//compile kpoint map:
 		PeriodicLookup<vector3<>> plook(kMult, GGT);
 		std::vector<bool> kDone(kMult.size(), false);
-		vector3<> q0mult = Diag(q0) * wmc.kfold;
+		vector3<> q0mult = Diag(q0) * fw.kfold;
 		for(size_t iSrc=0; iSrc<kMult.size(); iSrc++)
 			if(!kDone[iSrc])
 			{	double w = 0.; //weight of current offset
 				for(int invert: invertList)
-					for(const SpaceGroupOp& op: wmc.sym)
+					for(const SpaceGroupOp& op: fw.sym)
 						for(int swap=0; swap<2; swap++) //whether symmetry maps k and offset k meshes separately, or to each other
 						{	size_t iDest = plook.find(invert * kMult[iSrc] * op.rot - q0mult*swap);
 							size_t iDestOff = plook.find(invert * (kMult[iSrc] + q0mult) * op.rot - q0mult*(1-swap));
@@ -220,7 +220,7 @@ int main(int argc, char** argv)
 	logPrintf("\n");
 	if(ip.dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
-		wmc.free();
+		fw.free();
 		FeynWann::finalize();
 		return 0;
 	}
@@ -236,11 +236,11 @@ int main(int argc, char** argv)
 	
 	//Collect results for each offset
 	logPrintf("Collecting Gph: "); logFlush();
-	CollectEph cEph(wmc, EconserveWidth, NkMult, dmu);
+	CollectEph cEph(fw, EconserveWidth, NkMult, dmu);
 	for(int o=oStart; o<oStop; o++)
 	{	//Process with selected offset:
 		cEph.wOffsetCur = wk0[o];
-		wmc.ePhLoop(q0+k0[o], k0[o], CollectEph::ePhProcess, &cEph);
+		fw.ePhLoop(q0+k0[o], k0[o], CollectEph::ePhProcess, &cEph);
 		//Print progress:
 		if((o-oStart+1)%oInterval==0) { logPrintf("%d%% ", int(round((o-oStart+1)*100./noMine))); logFlush(); }
 	}
@@ -264,9 +264,9 @@ int main(int argc, char** argv)
 		if(!kDone[i0])
 		{	//Find orbit of this k-points under symmetries:
 			std::vector<int> iEquiv;
-			diagMatrix Gmean(wmc.nModes), GpMean(wmc.nModes);
+			diagMatrix Gmean(fw.nModes), GpMean(fw.nModes);
 			for(int invert: invertList)
-				for(const SpaceGroupOp& op: wmc.sym)
+				for(const SpaceGroupOp& op: fw.sym)
 				{	size_t i = plook.find(invert * cEph.qmesh[i0] * op.rot);
 					if(i!=string::npos && (!kDone[i]))
 					{	kDone[i] = true; //i will be covered in i0's orbit
@@ -287,21 +287,21 @@ int main(int argc, char** argv)
 			qWeight.push_back(iEquiv.size()*(1./cEph.qmesh.size()));
 		}
 	logPrintf("Symmetrized Gph for %lu k-points in mesh in %lu orbits.\n", cEph.qmesh.size(), iReduced.size());
-	wmc.symmetrize(cEph.vv); //symmetrize vSq
+	fw.symmetrize(cEph.vv); //symmetrize vSq
 	
 	//Output linewidths and energies in text file:
 	if(mpiWorld->isHead())
-	{	string fname = "Gph" + wmc.spinSuffix + ".dat";
+	{	string fname = "Gph" + fw.spinSuffix + ".dat";
 		logPrintf("Dumping '%s' ... ", fname.c_str()); fflush(globalLog);
 		FILE* fp = fopen(fname.c_str(), "w");
 		fprintf(fp, "#omegaPh[Eh] G Gp\n");
 		for(int i: iReduced)
-			for(int b=0; b<wmc.nModes; b++)
+			for(int b=0; b<fw.nModes; b++)
 				fprintf(fp, "%+16.12lf %16.12lf %16.12lf\n", cEph.omegaPh[i][b], cEph.G[i][b], cEph.Gp[i][b]);
 		fclose(fp);
 		logPrintf("done.\n");
 		//q-mesh and weights:
-		fname = "Gph" + wmc.spinSuffix + ".qList";
+		fname = "Gph" + fw.spinSuffix + ".qList";
 		logPrintf("Dumping '%s' ... ", fname.c_str()); fflush(globalLog);
 		fp = fopen(fname.c_str(), "w");
 		fprintf(fp, "#q0 q1 q2 wq\n");
@@ -316,10 +316,10 @@ int main(int argc, char** argv)
 	logPrintf("\nFermi level integrals in atomic units:\n");
 	logPrintf("gEf = %lf\n", cEph.g);
 	logPrintf("vvEf:\n"); cEph.vv.print(globalLog, " %lf ");
-	logPrintf("Omega = %lf\n", fabs(det(wmc.R))); //unit cell volume
+	logPrintf("Omega = %lf\n", fabs(det(fw.R))); //unit cell volume
 	logPrintf("\n");
 	
-	wmc.free();
+	fw.free();
 	FeynWann::finalize();
 	return 0;
 }

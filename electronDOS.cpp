@@ -67,14 +67,14 @@ int main(int argc, char** argv)
 	logPrintf("Tstep = %lg\n", Tstep);
 
 	//Initialize FeynWann:
-	FeynWannParams wmcp; //default parametres suffice
-	std::shared_ptr<FeynWann> wmc = std::make_shared<FeynWann>(wmcp);
-	size_t nKpts = nOffsets * wmc->eCountPerOffset();  
+	FeynWannParams fwp; //default parametres suffice
+	std::shared_ptr<FeynWann> fw = std::make_shared<FeynWann>(fwp);
+	size_t nKpts = nOffsets * fw->eCountPerOffset();  
 	logPrintf("Effectively sampled nKpts: %lu\n", nKpts);
 	
 	if(ip.dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
-		wmc = 0;
+		fw = 0;
 		FeynWann::finalize();
 		return 0;
 	}
@@ -95,18 +95,18 @@ int main(int argc, char** argv)
 		Tarr[iT] = Tmin + Tstep*iT;
 	logPrintf("Initialized temperature grid: %lg to %lg K with %lu points.\n", Tarr.front()/Kelvin, Tarr.back()/Kelvin, Tarr.size());
 	
-	std::vector<std::shared_ptr<Histogram>> dosArr(wmc->nSpins);
-	for(int iSpin=0; iSpin<wmc->nSpins; iSpin++)
+	std::vector<std::shared_ptr<Histogram>> dosArr(fw->nSpins);
+	for(int iSpin=0; iSpin<fw->nSpins; iSpin++)
 	{	//Update FeynWann for spin channel if necessary:
 		if(iSpin>0)
-		{	wmc = 0; //free memory from previous spin
-			wmcp.iSpin = iSpin;
-			wmc = std::make_shared<FeynWann>(wmcp);
+		{	fw = 0; //free memory from previous spin
+			fwp.iSpin = iSpin;
+			fw = std::make_shared<FeynWann>(fwp);
 		}
 		
 		//Initialize energy grid:
 		EnergyRange er = { DBL_MAX, -DBL_MAX };
-		wmc->eLoop(vector3<>(), EnergyRange::eProcess, &er);
+		fw->eLoop(vector3<>(), EnergyRange::eProcess, &er);
 		mpiWorld->allReduce(er.Emin, MPIUtil::ReduceMin);
 		mpiWorld->allReduce(er.Emax, MPIUtil::ReduceMax);
 		er.Emin = dE * (floor(er.Emin/dE) - 10); //add some margin and ensure grid contains 0
@@ -118,12 +118,12 @@ int main(int argc, char** argv)
 		logPrintf("\nCollecting DOS: "); logFlush();
 		CollectDOS cd;
 		cd.dos = &dos;
-		cd.weight = wmc->spinWeight*(1./nKpts);
+		cd.weight = fw->spinWeight*(1./nKpts);
 		for(int o=0; o<noMine; o++)
 		{	Random::seed(o+oStart); //to make results independent of MPI division
 			//Process with a random offset:
-			vector3<> k0 = wmc->randomVector(mpiGroup); //must be constant across group
-			wmc->eLoop(k0, CollectDOS::eProcess, &cd);
+			vector3<> k0 = fw->randomVector(mpiGroup); //must be constant across group
+			fw->eLoop(k0, CollectDOS::eProcess, &cd);
 			//Print progress:
 			if((o+1)%oInterval==0) { logPrintf("%d%% ", int(round((o+1)*100./noMine))); logFlush(); }
 		}
@@ -132,7 +132,7 @@ int main(int argc, char** argv)
 	}
 	
 	//Output DOS, combining spin channels if necessary
-	if(wmc->nSpins == 1)
+	if(fw->nSpins == 1)
 		dosArr[0]->print("eDOS.dat", 1./eV, eV);
 	else
 	{	//Combined energy range:
@@ -174,8 +174,8 @@ int main(int argc, char** argv)
 	double Zmax = 0.;
 	for(const double& g: dos.out)
 		Zmax += dE * g;
-	if(Zmax < wmc->nElectrons)
-		die("Current DOS can only support %lg electrons > %lg electrons specified.\n", Zmax, wmc->nElectrons);
+	if(Zmax < fw->nElectrons)
+		die("Current DOS can only support %lg electrons > %lg electrons specified.\n", Zmax, fw->nElectrons);
 	int iTstart, iTstop; TaskDivision(Tarr.size(), mpiWorld).myRange(iTstart, iTstop);
 	for(int iT=iTstart; iT<iTstop; iT++)
 	{	const double T = Tarr[iT], invT = 1./T;
@@ -193,7 +193,7 @@ int main(int argc, char** argv)
 				double fi = fermi(invT*(Ei - dmuCur));
 				nElectrons += dE * dos.out[ie] * fi;
 			}
-			((nElectrons>wmc->nElectrons) ? dmuMax : dmuMin) = dmuCur;
+			((nElectrons>fw->nElectrons) ? dmuMax : dmuMin) = dmuCur;
 			dmuCur = 0.5*(dmuMin + dmuMax);
 		}
 		//Calculate electronic specific heat:
@@ -216,10 +216,10 @@ int main(int argc, char** argv)
 		ofs << "#T[K] Ce[J/m^3K] dmu[eV]\n";
 		for(size_t iT=0; iT<Tarr.size(); iT++)
 			ofs << Tarr[iT]/Kelvin << '\t'
-				<< Ce[iT]/(wmc->Omega*CeSI) << '\t'
+				<< Ce[iT]/(fw->Omega*CeSI) << '\t'
 				<< dmu[iT]/eV << '\n';
 	}
 	
-	wmc = 0;
+	fw = 0;
 	FeynWann::finalize();
 }

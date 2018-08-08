@@ -62,22 +62,22 @@ int main(int argc, char** argv)
 	if(vT) logPrintf("vT = %lg\n", vT);
 	
 	//Initialize FeynWann:
-	FeynWannParams wmcp;
-	wmcp.needPhonons = true;
-	FeynWann wmc(wmcp);
-	size_t nKpts = nOffsets * wmc.phCountPerOffset();
+	FeynWannParams fwp;
+	fwp.needPhonons = true;
+	FeynWann fw(fwp);
+	size_t nKpts = nOffsets * fw.phCountPerOffset();
 	logPrintf("Effectively sampled nKpts: %lu\n", nKpts);
 	
 	if(ip.dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
-		wmc.free();
+		fw.free();
 		FeynWann::finalize();
 		return 0;
 	}
 	logPrintf("\n");
 	
 	//Calculate Debye temperatures / energies (same in atomic units):
-	const double kD  = std::pow(6*M_PI*M_PI/wmc.Omega, 1./3);
+	const double kD  = std::pow(6*M_PI*M_PI/fw.Omega, 1./3);
 	const double TdebyeL = vL * kD; if(vL) logPrintf("Longitudinal Debye energy: %3.0lf K (%.1lf meV)\n", TdebyeL/Kelvin, TdebyeL/(1e-3*eV));
 	const double TdebyeT = vT * kD; if(vT) logPrintf("Transverse Debye energy:   %3.0lf K (%.1lf meV)\n", TdebyeT/Kelvin, TdebyeT/(1e-3*eV));
 
@@ -89,7 +89,7 @@ int main(int argc, char** argv)
 	
 	//Initialize phonon energy grid:
 	double omegaMax = std::max(TdebyeL, TdebyeT);
-	wmc.phLoop(vector3<>(), findMaxOmega, &omegaMax);
+	fw.phLoop(vector3<>(), findMaxOmega, &omegaMax);
 	mpiWorld->allReduce(omegaMax, MPIUtil::ReduceMax);
 	omegaMax *= 1.25; //add some margin
 	Histogram dos(0, domega, omegaMax); //phonon density of states
@@ -103,7 +103,7 @@ int main(int argc, char** argv)
 	mpiGroup->bcast(oStop);
 	int noMine = oStop-oStart; //number of offsets handled by current group
 	int oInterval = std::max(1, int(round(noMine/50.))); //interval for reporting progress
-	if(wmc.nModes!=3 && vL) logPrintf("WARNING: the Debye estimates are only valid if nModes = 3.\n");
+	if(fw.nModes!=3 && vL) logPrintf("WARNING: the Debye estimates are only valid if nModes = 3.\n");
 	
 	logPrintf("\nCollecting DOS: "); logFlush();
 	CollectDOS cd;
@@ -112,8 +112,8 @@ int main(int argc, char** argv)
 	for(int o=0; o<noMine; o++)
 	{	Random::seed(o+oStart); //to make results independent of MPI division
 		//Process with a random offset:
-		vector3<> q0 = wmc.randomVector(mpiGroup); //must be constant across group
-		wmc.phLoop(q0, CollectDOS::phProcess, &cd);
+		vector3<> q0 = fw.randomVector(mpiGroup); //must be constant across group
+		fw.phLoop(q0, CollectDOS::phProcess, &cd);
 		//Print progress:
 		if((o+1)%oInterval==0) { logPrintf("%d%% ", int(round((o+1)*100./noMine))); logFlush(); }
 	}
@@ -124,8 +124,8 @@ int main(int argc, char** argv)
 	//Calculate Cl at each temperature:
 	diagMatrix Cl(Tarr.size(), 0.), ClDebye(Tarr.size(), 0.);
 	int iTstart, iTstop; TaskDivision(Tarr.size(), mpiWorld).myRange(iTstart, iTstop);
-	const double dosPrefacDebyeL = wmc.Omega / (2*M_PI*M_PI * std::pow(vL,3)); 
-	const double dosPrefacDebyeT = wmc.Omega / (2*M_PI*M_PI * std::pow(vT,3)); 
+	const double dosPrefacDebyeL = fw.Omega / (2*M_PI*M_PI * std::pow(vL,3)); 
+	const double dosPrefacDebyeT = fw.Omega / (2*M_PI*M_PI * std::pow(vT,3)); 
 	std::vector<double> dosDebyeArr(dos.out.size());
 	for(int iT=iTstart; iT<iTstop; iT++)
 	{	const double T = Tarr[iT], invT = 1./T;
@@ -151,7 +151,7 @@ int main(int argc, char** argv)
 	mpiWorld->allReduceData(ClDebye, MPIUtil::ReduceSum);
 
 	if(mpiWorld->isHead())
-	{	const double Omega = wmc.Omega;
+	{	const double Omega = fw.Omega;
 		const double ClSI = Joule/(Kelvin*pow(meter,3));
 		ofstream ofs("Cl.dat");
 		ofs << "#T[K] Cl[J/m^3K] ClDebye[J/m^3K]\n";
@@ -169,6 +169,6 @@ int main(int argc, char** argv)
 				<< dosDebyeArr[ie]*eV << '\n';
 	}
 	
-	wmc.free();
+	fw.free();
 	FeynWann::finalize();
 }

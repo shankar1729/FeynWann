@@ -47,8 +47,8 @@ public:
 	static void finalize(); //!< wrap finalizeSystem from JDFTx
 	static vector3<> randomVector(MPIUtil* mpiUtil=0); //!< uniformly random vector in [0,1)^3, constant across mpi instance, if any
 	
-	const FeynWannParams& wmcp;
-	FeynWann(const FeynWannParams& wmcp);
+	const FeynWannParams& fwp;
+	FeynWann(const FeynWannParams& fwp);
 	void free(); //!< free matrices
 	
 	//! Electronic properties at a given wave vector

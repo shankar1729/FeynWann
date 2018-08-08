@@ -250,18 +250,18 @@ int main(int argc, char** argv)
 	logPrintf("contribution = %s\n", contribMap.getString(contribType));
 
 	//Initialize FeynWann:
-	FeynWannParams wmcp;
-	wmcp.needPhonons = (contribType==Phonon);
-	wmcp.needVelocity = true;
-	wmcp.needLinewidth_ee = true;
-	wmcp.needLinewidth_ePh = true;
-	std::shared_ptr<FeynWann> wmc = std::make_shared<FeynWann>(wmcp);
-	size_t nKeff = nOffsets * (contribType==Direct ? wmc->eCountPerOffset() : wmc->ePhCountPerOffset());
+	FeynWannParams fwp;
+	fwp.needPhonons = (contribType==Phonon);
+	fwp.needVelocity = true;
+	fwp.needLinewidth_ee = true;
+	fwp.needLinewidth_ePh = true;
+	std::shared_ptr<FeynWann> fw = std::make_shared<FeynWann>(fwp);
+	size_t nKeff = nOffsets * (contribType==Direct ? fw->eCountPerOffset() : fw->ePhCountPerOffset());
 	logPrintf("Effectively sampled %s: %lu\n", (contribType==Direct ? "nKpts" : "nKpairs"), nKeff);
 
 	if(ip.dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
-		wmc = 0;
+		fw = 0;
 		FeynWann::finalize();
 		return 0;
 	}
@@ -285,26 +285,26 @@ int main(int argc, char** argv)
 	int oInterval = std::max(1, int(round(noMine/50.))); //interval for reporting progress
 	//Initialize frequency grid:
 	EnergyRange er = { DBL_MAX, -DBL_MAX };
-	wmc->eLoop(vector3<>(), EnergyRange::eProcess, &er);
+	fw->eLoop(vector3<>(), EnergyRange::eProcess, &er);
 	mpiWorld->allReduce(er.Emin, MPIUtil::ReduceMin);
 	mpiWorld->allReduce(er.Emax, MPIUtil::ReduceMax);
 	double omegaFull = er.Emax - er.Emin;
 	
 	//Calculate delta-function resolved versions (no broadening yet):
 	CollectImEps cie(Tl, dE, omegaFull, fInterp, lwInterp);
-	cie.prefac = 4. * std::pow(M_PI,2) * wmc->spinWeight / (nKeff*fabs(det(wmc->R))); //frequency independent part of prefactor
+	cie.prefac = 4. * std::pow(M_PI,2) * fw->spinWeight / (nKeff*fabs(det(fw->R))); //frequency independent part of prefactor
 	cie.Ehat = vector3<>(1., 0., 0.);  //assume cubic symmetry and only calculate x-axis
 	cie.eta = 0.1*eV;
 	cie.Tl0lw = 0.026*eV;
 	cie.GammaS = GammaS;
 	
-	for(int iSpin=0; iSpin<wmc->nSpins; iSpin++)
+	for(int iSpin=0; iSpin<fw->nSpins; iSpin++)
 	{	//Update FeynWann for spin channel if necessary:
 		if(iSpin>0)
-		{	wmc = 0; //free memory from previous spin
-			wmcp.iSpin = iSpin;
+		{	fw = 0; //free memory from previous spin
+			fwp.iSpin = iSpin;
 			logPrintf("This is a spin type calculation \n"); logFlush();
-			wmc = std::make_shared<FeynWann>(wmcp);
+			fw = std::make_shared<FeynWann>(fwp);
 		}
 		logPrintf("\nCollecting ImEps: "); logFlush();
 		for(int o=0; o<noMine; o++)
@@ -312,14 +312,14 @@ int main(int argc, char** argv)
 			//Process with a random offset:
 			switch(contribType)
 			{	case Direct:
-				{	vector3<> k0 = wmc->randomVector(mpiGroup); //must be constant across group
-					wmc->eLoop(k0, CollectImEps::direct, &cie);
+				{	vector3<> k0 = fw->randomVector(mpiGroup); //must be constant across group
+					fw->eLoop(k0, CollectImEps::direct, &cie);
 					break;
 				}
 				case Phonon:
-				{	vector3<> k01 = wmc->randomVector(mpiGroup); //must be constant across group
-					vector3<> k02 = wmc->randomVector(mpiGroup); //must be constant across group
-					wmc->ePhLoop(k01, k02, CollectImEps::phonon, &cie);
+				{	vector3<> k01 = fw->randomVector(mpiGroup); //must be constant across group
+					vector3<> k02 = fw->randomVector(mpiGroup); //must be constant across group
+					fw->ePhLoop(k01, k02, CollectImEps::phonon, &cie);
 					break;
 				}
 			}
@@ -379,7 +379,7 @@ int main(int argc, char** argv)
 		{	ofs << lwInterp(iT,0)/eV << '\n';
 		}
 	}
-	wmc = 0;
+	fw = 0;
 	FeynWann::finalize();
 	return 0;
 }

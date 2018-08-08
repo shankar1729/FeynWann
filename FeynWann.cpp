@@ -78,11 +78,11 @@ std::vector<vector3<int>> readCellMap(string fname)
 	return cellMap;
 }
 
-FeynWann::FeynWann(const FeynWannParams& wmcp)
-: wmcp(wmcp), nSpins(0), nSpinor(0), spinWeight(0), mu(NAN), nElectrons(0)
+FeynWann::FeynWann(const FeynWannParams& fwp)
+: fwp(fwp), nSpins(0), nSpinor(0), spinWeight(0), mu(NAN), nElectrons(0)
 {	
 	//Read relevant parameters from totalE.out:
-	string fname = wmcp.totalEprefix + ".out";
+	string fname = fwp.totalEprefix + ".out";
 	logPrintf("\nReading '%s' ... ", fname.c_str()); logFlush();
 	ifstream ifs(fname); if(!ifs.is_open()) die("could not open file.\n");
 	bool initDone = false; //whether finished reading the initialization part of totalE.out
@@ -118,9 +118,9 @@ FeynWann::FeynWann(const FeynWannParams& wmcp)
 				nSpinor = 2;
 			}
 			spinWeight = 2/(nSpins*nSpinor);
-			if(wmcp.iSpin<0 || wmcp.iSpin>=nSpins)
-				die("iSpin = %d not in interval [0,nSpins), where nSpins = %d for this system.\n\n", wmcp.iSpin, nSpins);
-			spinSuffix = (nSpins==1 ? "" : (wmcp.iSpin==0 ? "Up" : "Dn"));
+			if(fwp.iSpin<0 || fwp.iSpin>=nSpins)
+				die("iSpin = %d not in interval [0,nSpins), where nSpins = %d for this system.\n\n", fwp.iSpin, nSpins);
+			spinSuffix = (nSpins==1 ? "" : (fwp.iSpin==0 ? "Up" : "Dn"));
 		}
 		else if(line.find("coulomb-interaction") != string::npos)
 		{	istringstream iss(line); string cmdName, typeString, dirString;
@@ -185,7 +185,7 @@ FeynWann::FeynWann(const FeynWannParams& wmcp)
 			die("Number of electrons incompatible with semiconductor / insulator.\n");
 		//Read DFT eigenvalues file:
 		ManagedArray<double> Edft; Edft.init(nBandsDFT*nStatesDFT);
-		fname = wmcp.totalEprefix + ".eigenvals";
+		fname = fwp.totalEprefix + ".eigenvals";
 		logPrintf("Reading '%s' ... ", fname.c_str()); logFlush();
 		Edft.read(fname.c_str());
 		logPrintf("done.\n");
@@ -211,8 +211,8 @@ FeynWann::FeynWann(const FeynWannParams& wmcp)
 	logPrintf("\n");
 	
 	//Read symmetries if required
-	if(wmcp.needSymmetries)
-	{	fname = wmcp.totalEprefix + ".sym";
+	if(fwp.needSymmetries)
+	{	fname = fwp.totalEprefix + ".sym";
 		logPrintf("Reading '%s' ... ", fname.c_str()); logFlush();
 		ifs.open(fname); if(!ifs.is_open()) die("could not open file.\n");
 		sym.clear();
@@ -227,10 +227,10 @@ FeynWann::FeynWann(const FeynWannParams& wmcp)
 	}
 	
 	//Read cell map
-	cellMap = readCellMap(wmcp.wannierPrefix + ".mlwfCellMap" + spinSuffix);
+	cellMap = readCellMap(fwp.wannierPrefix + ".mlwfCellMap" + spinSuffix);
 	
 	//Find number of wannier centers from Wannier band contrib file:
-	{	fname = wmcp.wannierPrefix + ".mlwfBandContrib" + spinSuffix;
+	{	fname = fwp.wannierPrefix + ".mlwfBandContrib" + spinSuffix;
 		logPrintf("Reading '%s' ... ", fname.c_str()); logFlush();
 		FILE* fp = fopen(fname.c_str(), "r");
 		if(!fp) die("could not open file.\n");
@@ -249,22 +249,22 @@ FeynWann::FeynWann(const FeynWannParams& wmcp)
 	
 	//Read wannier hamiltonian
 	realPartOnly = (nSpinor==1);
-	fname = wmcp.wannierPrefix + ".mlwfH" + spinSuffix;
+	fname = fwp.wannierPrefix + ".mlwfH" + spinSuffix;
 	Hw = std::make_shared<DistributedMatrix>(fname, realPartOnly,
 		mpiGroup, nBands*nBands, cellMap, kfold, false);
 	
 	//Read cell weights (if needed):
-	if(wmcp.needCellWeights)
-	{	fname = wmcp.wannierPrefix + ".mlwfCellWeights" + spinSuffix;
+	if(fwp.needCellWeights)
+	{	fname = fwp.wannierPrefix + ".mlwfCellWeights" + spinSuffix;
 		logPrintf("Reading '%s' ... ", fname.c_str()); logFlush();
 		cellWeights.init(nBands*nBands, cellMap.size());
 		cellWeights.read_real(fname.c_str());
 		logPrintf("done.\n");
 	}
 	
-	if(wmcp.needPhonons)
+	if(fwp.needPhonons)
 	{	//Read relevant parameters from phonon.out:
-		fname = wmcp.phononPrefix + ".out";
+		fname = fwp.phononPrefix + ".out";
 		logPrintf("\nReading '%s' ... ", fname.c_str()); logFlush();
 		ifs.open(fname); if(!ifs.is_open()) die("could not open file.\n");
 		nModes = 0;
@@ -297,42 +297,42 @@ FeynWann::FeynWann(const FeynWannParams& wmcp)
 		logPrintf("\n");
 		
 		//Read phonon cell map
-		phononCellMap = readCellMap(wmcp.wannierPrefix + ".mlwfCellMapPh" + spinSuffix);
+		phononCellMap = readCellMap(fwp.wannierPrefix + ".mlwfCellMapPh" + spinSuffix);
 		
 		//Read phonon force matrix
-		fname = wmcp.wannierPrefix + ".mlwfOmegaSqPh" + spinSuffix;
+		fname = fwp.wannierPrefix + ".mlwfOmegaSqPh" + spinSuffix;
 		OsqW = std::make_shared<DistributedMatrix>(fname, true, //phonon omegaSq is always real
 			mpiGroup, nModes*nModes, phononCellMap, phononSup, false);
 		
 		//Read electron-phonon matrix elements
-		fname = wmcp.wannierPrefix + ".mlwfHePh" + spinSuffix;
+		fname = fwp.wannierPrefix + ".mlwfHePh" + spinSuffix;
 		HePhW = std::make_shared<DistributedMatrix>(fname, realPartOnly,
 			mpiGroup, nModes*nBands*nBands, phononCellMap, phononSup, true);
 	}
 	
 	//Velocity matrix elements
-	if(wmcp.needVelocity)
-	{	fname = wmcp.wannierPrefix + ".mlwfP" + spinSuffix;
+	if(fwp.needVelocity)
+	{	fname = fwp.wannierPrefix + ".mlwfP" + spinSuffix;
 		Pw = std::make_shared<DistributedMatrix>(fname, realPartOnly,
 			mpiGroup, 3*nBands*nBands, cellMap, kfold, false);
 	}
 	
 	//Linewidths:
-	if(wmcp.needLinewidth_ee)
+	if(fwp.needLinewidth_ee)
 	{	//e-e:
-		fname = wmcp.wannierPrefix + ".mlwfImSigma_ee" + spinSuffix;
+		fname = fwp.wannierPrefix + ".mlwfImSigma_ee" + spinSuffix;
 		ImSigma_eeW = std::make_shared<DistributedMatrix>(fname, realPartOnly,
 			mpiGroup, nBands*nBands, cellMap, kfold, false);
 	}
-	if(wmcp.needLinewidth_ePh)
+	if(fwp.needLinewidth_ePh)
 	{	//e-ph:
-		fname = wmcp.wannierPrefix + ".mlwfImSigma_ePh" + spinSuffix;
+		fname = fwp.wannierPrefix + ".mlwfImSigma_ePh" + spinSuffix;
 		ImSigma_ePhW = std::make_shared<DistributedMatrix>(fname, realPartOnly,
 			mpiGroup, nBands*nBands*FeynWannParams::fGrid_ePh.size(), cellMap, kfold, false);
 	}
-	if(wmcp.needLinewidthP_ePh)
+	if(fwp.needLinewidthP_ePh)
 	{	//e-ph:
-		fname = wmcp.wannierPrefix + ".mlwfImSigmaP_ePh" + spinSuffix;
+		fname = fwp.wannierPrefix + ".mlwfImSigmaP_ePh" + spinSuffix;
 		ImSigmaP_ePhW = std::make_shared<DistributedMatrix>(fname, realPartOnly,
 			mpiGroup, nBands*nBands*FeynWannParams::fGrid_ePh.size(), cellMap, kfold, false);
 	}
@@ -400,11 +400,11 @@ void FeynWann::eLoop(const vector3<>& k0, FeynWann::eProcessFunc eProcess, void*
 {	static StopWatch watchCallback("FeynWann::eLoop:callback");
 	//Run Fourier transforms with this offset:
 	Hw->transform(k0);
-	if(wmcp.needVelocity)
+	if(fwp.needVelocity)
 		Pw->transform(k0);
-	if(wmcp.needLinewidth_ee) ImSigma_eeW->transform(k0);
-	if(wmcp.needLinewidth_ePh) ImSigma_ePhW->transform(k0);
-	if(wmcp.needLinewidthP_ePh) ImSigmaP_ePhW->transform(k0);
+	if(fwp.needLinewidth_ee) ImSigma_eeW->transform(k0);
+	if(fwp.needLinewidth_ePh) ImSigma_ePhW->transform(k0);
+	if(fwp.needLinewidthP_ePh) ImSigmaP_ePhW->transform(k0);
 	//Call eProcess for k-points on present process:
 	int ik = Hw->ikStart;
 	int ikStop = ik + Hw->nk;
@@ -420,7 +420,7 @@ void FeynWann::eLoop(const vector3<>& k0, FeynWann::eProcessFunc eProcess, void*
 
 void FeynWann::phLoop(const vector3<>& q0, FeynWann::phProcessFunc phProcess, void* params)
 {	static StopWatch watchCallback("FeynWann::phLoop:callback");
-	assert(wmcp.needPhonons);
+	assert(fwp.needPhonons);
 	//Run Fourier transforms with this offset:
 	OsqW->transform(q0);
 	//Call phProcess for q-points on present process:
@@ -441,7 +441,7 @@ void FeynWann::ePhLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::ePh
 {	static StopWatch watchBcast("FeynWann::ePhLoop:bcast"); 
 	static StopWatch watchRotations("FeynWann::ePhLoop:rotations");
 	static StopWatch watchCallback("FeynWann::ePhLoop:callback");
-	assert(wmcp.needPhonons);
+	assert(fwp.needPhonons);
 	int prodKfold = Hw->nkTot;
 	int prodSup = OsqW->nkTot;
 	int prodSupSq = HePhW->nkTot;
@@ -450,11 +450,11 @@ void FeynWann::ePhLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::ePh
 	#define PrepareElecStates(i) \
 		std::vector<StateE> e##i(prodKfold); /* States */ \
 		{	Hw->transform(k0##i); \
-			if(wmcp.needVelocity) \
+			if(fwp.needVelocity) \
 				Pw->transform(k0##i); \
-			if(wmcp.needLinewidth_ee) ImSigma_eeW->transform(k0##i); \
-			if(wmcp.needLinewidth_ePh) ImSigma_ePhW->transform(k0##i); \
-			if(wmcp.needLinewidthP_ePh) ImSigmaP_ePhW->transform(k0##i); \
+			if(fwp.needLinewidth_ee) ImSigma_eeW->transform(k0##i); \
+			if(fwp.needLinewidth_ePh) ImSigma_ePhW->transform(k0##i); \
+			if(fwp.needLinewidthP_ePh) ImSigmaP_ePhW->transform(k0##i); \
 			int ik = Hw->ikStart; \
 			int ikStop = ik + Hw->nk; \
 			PartialLoop3D(kfold, ik, ikStop, e##i[ik].k, k0##i, \
@@ -573,7 +573,7 @@ void FeynWann::setState(FeynWann::StateE& state)
 	for(double& E: state.E) E -= mu; //reference to Fermi level
 	watchRotations.start();
 	//Velcoity matrix, if needed:
-	if(wmcp.needVelocity)
+	if(fwp.needVelocity)
 	{	state.vVec.resize(nBands);
 		for(int iDir=0; iDir<3; iDir++)
 		{	state.v[iDir] = complex(0,-1) //Since P was stored with -i omitted (to make it real when possible)
@@ -584,14 +584,14 @@ void FeynWann::setState(FeynWann::StateE& state)
 		}
 	}
 	//Linewidths, ad needed:
-	if(wmcp.needLinewidth_ee)
+	if(fwp.needLinewidth_ee)
 		state.ImSigma_ee = diag(dagger(state.U) * getMatrix(ImSigma_eeW->getResult(state.ik), nBands, nBands) * state.U);
-	if(wmcp.needLinewidth_ePh)
+	if(fwp.needLinewidth_ePh)
 	{	state.logImSigma_ePhArr.resize(FeynWannParams::fGrid_ePh.size());
 		for(unsigned iMat=0; iMat<state.logImSigma_ePhArr.size(); iMat++)
 			state.logImSigma_ePhArr[iMat] = diag(dagger(state.U) * getMatrix(ImSigma_ePhW->getResult(state.ik), nBands, nBands, iMat) * state.U);
 	}
-	if(wmcp.needLinewidthP_ePh)
+	if(fwp.needLinewidthP_ePh)
 	{	state.logImSigmaP_ePhArr.resize(FeynWannParams::fGrid_ePh.size());
 		for(unsigned iMat=0; iMat<state.logImSigmaP_ePhArr.size(); iMat++)
 			state.logImSigmaP_ePhArr[iMat] = diag(dagger(state.U) * getMatrix(ImSigmaP_ePhW->getResult(state.ik), nBands, nBands, iMat) * state.U);
@@ -607,19 +607,19 @@ void FeynWann::bcastState(FeynWann::StateE& state, MPIUtil* mpiUtil, int root)
 	bcast(state.E, nBands, mpiUtil, root);
 	bcast(state.U, nBands, nBands, mpiUtil, root);
 	//Velcoity matrix, if needed:
-	if(wmcp.needVelocity)
+	if(fwp.needVelocity)
 	{	for(int iDir=0; iDir<3; iDir++)
 			bcast(state.v[iDir], nBands, nBands, mpiUtil, root);
 		state.vVec.resize(nBands);
 		mpiUtil->bcast(&state.vVec[0][0], 3*nBands, root);
 	}
 	//Linewidths, if needed:
-	if(wmcp.needLinewidth_ee) bcast(state.ImSigma_ee, nBands, mpiUtil, root);
-	if(wmcp.needLinewidth_ePh)
+	if(fwp.needLinewidth_ee) bcast(state.ImSigma_ee, nBands, mpiUtil, root);
+	if(fwp.needLinewidth_ePh)
 	{	state.logImSigma_ePhArr.resize(FeynWannParams::fGrid_ePh.size());
 		for(diagMatrix& d: state.logImSigma_ePhArr) bcast(d, nBands, mpiUtil, root);
 	}
-	if(wmcp.needLinewidthP_ePh)
+	if(fwp.needLinewidthP_ePh)
 	{	state.logImSigmaP_ePhArr.resize(FeynWannParams::fGrid_ePh.size());
 		for(diagMatrix& d: state.logImSigmaP_ePhArr) bcast(d, nBands, mpiUtil, root);
 	}
@@ -627,7 +627,7 @@ void FeynWann::bcastState(FeynWann::StateE& state, MPIUtil* mpiUtil, int root)
 
 
 void FeynWann::setState(FeynWann::StatePh& state)
-{	assert(wmcp.needPhonons);
+{	assert(fwp.needPhonons);
 	//Get and diagonalize force matrix:
 	matrix Osqq = getMatrix(OsqW->getResult(state.iq), nModes, nModes);
 	Osqq.diagonalize(state.U, state.omega);

@@ -112,12 +112,12 @@ int main(int argc, char** argv)
 	logPrintf("slabDir = %d\n", slabDir);
 	
 	//Initialize FeynWann:
-	FeynWannParams wmcp;
-	wmcp.needSymmetries = true;
-	wmcp.needVelocity = true;
-	wmcp.needLinewidth_ePh = true;
-	wmcp.needLinewidthP_ePh = true;
-	std::shared_ptr<FeynWann> wmc = std::make_shared<FeynWann>(wmcp);
+	FeynWannParams fwp;
+	fwp.needSymmetries = true;
+	fwp.needVelocity = true;
+	fwp.needLinewidth_ePh = true;
+	fwp.needLinewidthP_ePh = true;
+	std::shared_ptr<FeynWann> fw = std::make_shared<FeynWann>(fwp);
 	
 	//dmu array:
 	std::vector<double> dmu(dmuCount, dmuMin); //set first value here
@@ -125,7 +125,7 @@ int main(int argc, char** argv)
 		dmu[iMu] = dmuMin + iMu*(dmuMax-dmuMin)/(dmuCount-1);
 	
 	//Handle dimensionality:
-	double Omega = wmc->Omega;
+	double Omega = fw->Omega;
 	double rhoUnit = 1e-9*Ohm*meter;
 	string rhoUnitName="nOhm-m";
 	string rhoName = "Resistivity";
@@ -134,7 +134,7 @@ int main(int argc, char** argv)
 	double densityUnit = std::pow(cm,-3);
 	string densityUnitName = "cm^-3";
 	if(slabDir>=0)
-	{	Omega /= wmc->R.column(slabDir).length(); //convert to area excluding this dimension
+	{	Omega /= fw->R.column(slabDir).length(); //convert to area excluding this dimension
 		rhoUnit = Ohm;
 		rhoUnitName = "Ohm";
 		rhoName = "SheetResistance";
@@ -144,7 +144,7 @@ int main(int argc, char** argv)
 	
 	//Initialize sampling parameters:
 	int nOffsetsPerBlock = ceildiv(nOffsets, nBlocks);
-	size_t nKptsPerBlock = wmc->eCountPerOffset() * nOffsetsPerBlock;
+	size_t nKptsPerBlock = fw->eCountPerOffset() * nOffsetsPerBlock;
 	logPrintf("Effectively sampled nKpts: %lu\n", nKptsPerBlock * nBlocks);
 	int oStart = 0, oStop = 0;
 	if(mpiGroup->isHead())
@@ -156,24 +156,24 @@ int main(int argc, char** argv)
 	
 	if(ip.dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
-		wmc = 0;
+		fw = 0;
 		FeynWann::finalize();
 		return 0;
 	}
 	logPrintf("\n");
 	
 	//Collect integrals involved in resistivity:
-	double prefacDOS = wmc->spinWeight*(1./nKptsPerBlock);
-	std::vector<std::vector<std::shared_ptr<ResistivityCollect>>> rcArr(wmc->nSpins);
-	std::vector<string> spinSuffixes(wmc->nSpins);
-	for(int iSpin=0; iSpin<wmc->nSpins; iSpin++)
+	double prefacDOS = fw->spinWeight*(1./nKptsPerBlock);
+	std::vector<std::vector<std::shared_ptr<ResistivityCollect>>> rcArr(fw->nSpins);
+	std::vector<string> spinSuffixes(fw->nSpins);
+	for(int iSpin=0; iSpin<fw->nSpins; iSpin++)
 	{	//Update FeynWann for spin channel if necessary:
 		if(iSpin>0)
-		{	wmc = 0; //free memory from previous spin
-			wmcp.iSpin = iSpin;
-			wmc = std::make_shared<FeynWann>(wmcp);
+		{	fw = 0; //free memory from previous spin
+			fwp.iSpin = iSpin;
+			fw = std::make_shared<FeynWann>(fwp);
 		}
-		spinSuffixes[iSpin] = wmc->spinSuffix;
+		spinSuffixes[iSpin] = fw->spinSuffix;
 		rcArr[iSpin].resize(nBlocks);
 		for(int block=0; block<nBlocks; block++)
 		{	logPrintf("Working on block %d of %d: ", block+1, nBlocks); logFlush();
@@ -182,8 +182,8 @@ int main(int argc, char** argv)
 			for(int o=0; o<noMine; o++)
 			{	Random::seed(block*nOffsetsPerBlock+o+oStart); //to make results independent of MPI division
 				//Process with a random offset:
-				vector3<> k0 = wmc->randomVector(mpiGroup); //must be constant across group
-				wmc->eLoop(k0, ResistivityCollect::eProcess, &rc);
+				vector3<> k0 = fw->randomVector(mpiGroup); //must be constant across group
+				fw->eLoop(k0, ResistivityCollect::eProcess, &rc);
 				//Print progress:
 				if((o+1)%oInterval==0) { logPrintf("%d%% ", int(round((o+1)*100./noMine))); logFlush(); }
 			}
@@ -196,27 +196,27 @@ int main(int argc, char** argv)
 				mpiWorld->allReduce(&rc.vvTau[iMu](0,0), 3*3, MPIUtil::ReduceSum);
 				//Apply normalizing factors:
 				rc.n[iMu] *= prefacDOS;
-				rc.n[iMu] -= (wmc->nElectrons - Nconduction)/wmc->nSpins; //convert to number of free carriers per unit cell
+				rc.n[iMu] -= (fw->nElectrons - Nconduction)/fw->nSpins; //convert to number of free carriers per unit cell
 				rc.g[iMu] *= prefacDOS;
 				rc.vSq[iMu] *= prefacDOS;
 				rc.tau[iMu] *= prefacDOS;
 				rc.vvTau[iMu] *= prefacDOS;
 				slabConstrain(rc.vvTau[iMu], slabDir); //eliminate out-of-plane components if necessary
-				wmc->symmetrize(rc.vvTau[iMu]); //follow symmetries of unit cell
+				fw->symmetrize(rc.vvTau[iMu]); //follow symmetries of unit cell
 			}
 			logPrintf("done.\n"); logFlush();
 		}
 	}
 	
 	//Generate channel for sum over spins if necessary:
-	if(wmc->nSpins > 1)
+	if(fw->nSpins > 1)
 	{	spinSuffixes.push_back(""); //no suffix for total
-		rcArr.resize(wmc->nSpins+1);
+		rcArr.resize(fw->nSpins+1);
 		rcArr.back().resize(nBlocks);
 		for(int block=0; block<nBlocks; block++)
 		{	rcArr.back()[block] = std::make_shared<ResistivityCollect>(dmu, T);
 			ResistivityCollect& rcTot = *rcArr.back()[block];
-			for(int iSpin=0; iSpin<wmc->nSpins; iSpin++)
+			for(int iSpin=0; iSpin<fw->nSpins; iSpin++)
 				for(int iMu=0; iMu<dmuCount; iMu++)
 				{	rcTot.n[iMu] += rcArr[iSpin][block]->n[iMu];
 					rcTot.g[iMu] += rcArr[iSpin][block]->g[iMu];
@@ -271,7 +271,7 @@ int main(int argc, char** argv)
 		}
 	}
 	
-	wmc = 0;
+	fw = 0;
 	FeynWann::finalize();
 }
 
