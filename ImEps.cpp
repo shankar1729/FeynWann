@@ -48,6 +48,7 @@ const int nExtrap = sizeof(extrapCoeff)/sizeof(double);
 struct CollectImEps
 {	const std::vector<double>& dmu;
 	double T, invT;
+	double GammaS;
 	double domega, omegaFull, omegaMax;
 	std::vector<Histogram> ImEps, breadth, breadthDen;
 	Histogram2D ImEps_E; //ImEpsDelta resolved by carrier density; collected only for first mu
@@ -103,7 +104,7 @@ struct CollectImEps
 				for(unsigned iMu=0; iMu<dmu.size(); iMu++)
 				{	double weight = weight_F * (F[iMu][v]-F[iMu][c]);
 					ImEps[iMu].addEvent(omega, weight);
-					breadth[iMu].addEvent(omega, weight*(ImE[iMu][c]+ImE[iMu][v]));
+					breadth[iMu].addEvent(omega, weight*(ImE[iMu][c]+ImE[iMu][v]+GammaS));
 					if(iMu==0)
 					{	ImEps_E.addEvent(E[v], omega, -weight); //hole
 						ImEps_E.addEvent(E[c], omega, +weight); //electron
@@ -167,7 +168,7 @@ struct CollectImEps
 						for(unsigned iMu=0; iMu<dmu.size(); iMu++)
 						{	double weight = weight_F * (F1[iMu][v]-F2[iMu][c]);
 							ImEps[iMu].addEvent(omega, weight);
-							breadth[iMu].addEvent(omega, fabs(weight)*(ImE2[iMu][c]+ImE1[iMu][v]));
+							breadth[iMu].addEvent(omega, fabs(weight)*(ImE2[iMu][c]+ImE1[iMu][v]+GammaS));
 							breadthDen[iMu].addEvent(omega, fabs(weight));
 							if(iMu==0)
 							{	ImEps_E.addEvent(E1[v], omega, -weight); //hole
@@ -203,6 +204,7 @@ int main(int argc, char** argv)
 	const double T = inputMap.get("T") * Kelvin;
 	const double polTheta = inputMap.get("polTheta") * (M_PI/180);
 	const double polPhi = inputMap.get("polPhi") * (M_PI/180);
+	const double GammaS = inputMap.get("GammaS") * eV;
 	const double eta = inputMap.get("eta", 0.1) * eV; //on-shell extrapolation width (default to 0.1 eV)
 	const double dmuMin = inputMap.get("dmuMin", 0.) * eV; //optional shift in chemical potential from neutral value; start of range (default to 0)
 	const double dmuMax = inputMap.get("dmuMax", 0.) * eV; //optional shift in chemical potential from neutral value; end of range (default to 0)
@@ -223,6 +225,7 @@ int main(int argc, char** argv)
 	logPrintf("T = %lg\n", T);
 	logPrintf("polTheta = %lg\n", polTheta);
 	logPrintf("polPhi = %lg\n", polPhi);
+	logPrintf("GammaS = %lg\n", GammaS);
 	logPrintf("eta = %lg\n", eta);
 	logPrintf("dmuMin = %lg\n", dmuMin);
 	logPrintf("dmuMax = %lg\n", dmuMax);
@@ -274,6 +277,7 @@ int main(int argc, char** argv)
 	cie.prefac = 4. * std::pow(M_PI,2) * wmc->spinWeight / (nKeff*fabs(det(wmc->R))); //frequency independent part of prefactor
 	cie.Ehat = vector3<>(sin(polTheta)*cos(polPhi), sin(polTheta)*sin(polPhi), cos(polTheta)); //Efield direction
 	cie.eta = eta;
+	cie.GammaS = GammaS;
 	
 	for(int iSpin=0; iSpin<wmc->nSpins; iSpin++)
 	{	//Update FeynWann for spin channel if necessary:
