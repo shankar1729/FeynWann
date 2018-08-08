@@ -91,7 +91,7 @@ else()
 endif()
 
 #Main library for FeynWann containing all the auxiliary functionality
-add_library(FeynWann ${LINK_TYPE} FeynWann.cpp DistributedMatrix.cpp InputMap.cpp Histogram.cpp)
+add_library(FeynWann ${LINK_TYPE} FeynWann.cpp DistributedMatrix.cpp InputMap.cpp Histogram.cpp Interp1.cpp)
 find_library(JDFTX_LIBRARY jdftx PATHS ${JDFTX_BUILD} NO_DEFAULT_PATH)
 target_link_libraries(FeynWann ${JDFTX_LIBRARY} ${FFTW3_MPI_LIBRARY} ${FFTW3_THREADS_LIBRARY} ${FFTW3_LIBRARY} ${MPI_CXX_LIBRARIES} ${EXTRA_LIBRARIES})
 
@@ -107,5 +107,6 @@ add_FeynWann_executable(electronDOS)
 add_FeynWann_executable(electronPhononLinewidth)
 add_FeynWann_executable(resistivity)
 add_FeynWann_executable(ImEps)
+add_FeynWann_executable(ImEpsNonTherm)
 add_FeynWann_executable(phononElectronLinewidth)
 
