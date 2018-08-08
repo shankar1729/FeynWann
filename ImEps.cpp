@@ -1,9 +1,28 @@
+/*-------------------------------------------------------------------
+Copyright 2018 Ravishankar Sundararaman
+
+This file is part of JDFTx.
+
+JDFTx is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+JDFTx is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
+-------------------------------------------------------------------*/
+
 #include <core/Util.h>
 #include <core/matrix.h>
 #include <core/scalar.h>
 #include <core/Random.h>
 #include <core/string.h>
-#include "WannierMC.h"
+#include "FeynWann.h"
 #include "Histogram.h"
 #include "InputMap.h"
 #include <core/Units.h>
@@ -13,7 +32,7 @@ struct EnergyRange
 {	double Emin;
 	double Emax;
 	
-	static void eProcess(const WannierMC::StateE& state, void* params)
+	static void eProcess(const FeynWann::StateE& state, void* params)
 	{	EnergyRange& er = *((EnergyRange*)params);
 		er.Emin = std::min(er.Emin, state.E.front()); //E is in ascending order
 		er.Emax = std::max(er.Emax, state.E.back()); //E is in ascending order
@@ -25,7 +44,7 @@ double extrapCoeff[] = {-19./12, 13./3, -7./4 }; //account for constant, 1/eta a
 //double extrapCoeff[] = { -1, 2.}; //account for constant and 1/eta dependence
 const int nExtrap = sizeof(extrapCoeff)/sizeof(double);
 
-//Collect ImEps contibutions using WannierMC callbacks:
+//Collect ImEps contibutions using FeynWann callbacks:
 struct CollectImEps
 {	const std::vector<double>& dmu;
 	double T, invT;
@@ -49,7 +68,7 @@ struct CollectImEps
 		EcMin = *std::min_element(dmu.begin(), dmu.end()) - 10*T;
 	}
 	
-	void calcStateRelated(const WannierMC::StateE& state, std::vector<diagMatrix>& F, std::vector<diagMatrix>& ImE)
+	void calcStateRelated(const FeynWann::StateE& state, std::vector<diagMatrix>& F, std::vector<diagMatrix>& ImE)
 	{	int nBands = state.E.nRows();
 		F.assign(dmu.size(), diagMatrix(nBands));
 		ImE.assign(dmu.size(), state.ImSigma_ee); //e-e part
@@ -65,7 +84,7 @@ struct CollectImEps
 	}
 	
 	//---- Direct transitions ----
-	void collectDirect(const WannierMC::StateE& state)
+	void collectDirect(const FeynWann::StateE& state)
 	{	int nBands = state.E.nRows();
 		//Calculate Fermi fillings and linewidths:
 		const diagMatrix& E = state.E;
@@ -93,12 +112,12 @@ struct CollectImEps
 			}
 		}
 	}
-	static void direct(const WannierMC::StateE& state, void* params)
+	static void direct(const FeynWann::StateE& state, void* params)
 	{	((CollectImEps*)params)->collectDirect(state);
 	}
 	
 	//---- Phonon-assisted transitions ----
-	void collectPhonon(const WannierMC::MatrixEph& mat)
+	void collectPhonon(const FeynWann::MatrixEph& mat)
 	{	int nBands = mat.e1->E.nRows();
 		//Calculate Fermi fillings and linewidths:
 		const diagMatrix& E1 = mat.e1->E;
@@ -160,7 +179,7 @@ struct CollectImEps
 			}
 		}
 	}
-	static void phonon(const WannierMC::MatrixEph& mat, void* params)
+	static void phonon(const FeynWann::MatrixEph& mat, void* params)
 	{	((CollectImEps*)params)->collectPhonon(mat);
 	}
 };
@@ -175,7 +194,7 @@ inline double lorentzianOdd(double omega, double omega0, double breadth)
 
 int main(int argc, char** argv)
 {	
-	InitParams ip = WannierMC::initialize(argc, argv, "Wannier calculation of imaginary dielectric tensor (ImEps)");
+	InitParams ip = FeynWann::initialize(argc, argv, "Wannier calculation of imaginary dielectric tensor (ImEps)");
 
 	//Get the system parameters (mu, T, lattice vectors etc.)
 	InputMap inputMap(ip.inputFilename);
@@ -210,20 +229,20 @@ int main(int argc, char** argv)
 	logPrintf("dmuCount = %d\n", dmuCount);
 	logPrintf("contribution = %s\n", contribMap.getString(contribType));
 
-	//Initialize WannierMC:
-	WannierMCParams wmcp;
+	//Initialize FeynWann:
+	FeynWannParams wmcp;
 	wmcp.needPhonons = (contribType==Phonon);
 	wmcp.needVelocity = true;
 	wmcp.needLinewidth_ee = true;
 	wmcp.needLinewidth_ePh = true;
-	std::shared_ptr<WannierMC> wmc = std::make_shared<WannierMC>(wmcp);
+	std::shared_ptr<FeynWann> wmc = std::make_shared<FeynWann>(wmcp);
 	size_t nKeff = nOffsets * (contribType==Direct ? wmc->eCountPerOffset() : wmc->ePhCountPerOffset());
 	logPrintf("Effectively sampled %s: %lu\n", (contribType==Direct ? "nKpts" : "nKpairs"), nKeff);
 
 	if(ip.dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
 		wmc = 0;
-		WannierMC::finalize();
+		FeynWann::finalize();
 		return 0;
 	}
 	logPrintf("\n");
@@ -257,11 +276,11 @@ int main(int argc, char** argv)
 	cie.eta = eta;
 	
 	for(int iSpin=0; iSpin<wmc->nSpins; iSpin++)
-	{	//Update WannierMC for spin channel if necessary:
+	{	//Update FeynWann for spin channel if necessary:
 		if(iSpin>0)
 		{	wmc = 0; //free memory from previous spin
 			wmcp.iSpin = iSpin;
-			wmc = std::make_shared<WannierMC>(wmcp);
+			wmc = std::make_shared<FeynWann>(wmcp);
 		}
 		logPrintf("\nCollecting ImEps: "); logFlush();
 		for(int o=0; o<noMine; o++)
@@ -353,6 +372,6 @@ int main(int argc, char** argv)
 	}
 	
 	wmc = 0;
-	WannierMC::finalize();
+	FeynWann::finalize();
 	return 0;
 }

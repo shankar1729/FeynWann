@@ -1,4 +1,23 @@
-#include "WannierMC.h"
+/*-------------------------------------------------------------------
+Copyright 2018 Ravishankar Sundararaman
+
+This file is part of JDFTx.
+
+JDFTx is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+JDFTx is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
+-------------------------------------------------------------------*/
+
+#include "FeynWann.h"
 #include "InputMap.h"
 #include <core/Units.h>
 #include <core/LatticeUtils.h>
@@ -9,7 +28,7 @@ template<typename T> T prod(const vector3<T>& v) { return v[0]*v[1]*v[2]; }
 
 struct CollectEph
 {	
-	const WannierMC& wmc;
+	const FeynWann& wmc;
 	const double T;
 	const double prefacImSigma;
 	const double EconserveExpFac, EconservePrefac; //energy conserving Gaussian exponential and pre-factor
@@ -19,29 +38,29 @@ struct CollectEph
 	std::vector<vector3<>> kmesh; //DFT k-point mesh (full version i.e. unreduced)
 	double wOffsetCur; //weight factor of current offset (due to symmetry reduction)
 	
-	CollectEph(const WannierMC& wmc, double T, double EconserveWidth, const vector3<int>& NkMult)
+	CollectEph(const FeynWann& wmc, double T, double EconserveWidth, const vector3<int>& NkMult)
 	: wmc(wmc), T(T),
 		prefacImSigma(0.5 * 2*M_PI/(prod(wmc.kfold)*prod(NkMult))), //Factor of 0.5 in ImSigma because of psi^2 -> n
 		EconserveExpFac(-0.5/std::pow(EconserveWidth,2)),
 		EconservePrefac(1./(sqrt(2.*M_PI)*EconserveWidth)),
-		f1grid(WannierMCParams::fGrid_ePh),
+		f1grid(FeynWannParams::fGrid_ePh),
 		ImSigma(2*f1grid.size(), std::vector<diagMatrix>(prod(wmc.kfold), diagMatrix(wmc.nBands))),
 		E(prod(wmc.kfold)), kmesh(prod(wmc.kfold))
 	{
 	}
 	
 	//---- Collect energies and kmesh ----
-	static void collectE(const WannierMC::StateE& state, void* params)
+	static void collectE(const FeynWann::StateE& state, void* params)
 	{	CollectEph& cEph = *((CollectEph*)params);
 		cEph.E[state.ik] = state.E;
 		cEph.kmesh[state.ik] = state.k;
 	}
 	
 	//---- Main e-ph scattering linewidth kernel ----
-	void process(const WannierMC::MatrixEph& mEph)
-	{	const WannierMC::StateE& e1 = *(mEph.e1);
-		const WannierMC::StateE& e2 = *(mEph.e2);
-		const WannierMC::StatePh& ph = *(mEph.ph);
+	void process(const FeynWann::MatrixEph& mEph)
+	{	const FeynWann::StateE& e1 = *(mEph.e1);
+		const FeynWann::StateE& e2 = *(mEph.e2);
+		const FeynWann::StatePh& ph = *(mEph.ph);
 		const int nBands = e1.E.nRows();
 		const int nModes = ph.omega.nRows();
 		//Loop over electronic state 1:
@@ -80,7 +99,7 @@ struct CollectEph
 			}
 		}
 	}
-	static void ePhProcess(const WannierMC::MatrixEph& mEph, void* params)
+	static void ePhProcess(const FeynWann::MatrixEph& mEph, void* params)
 	{	((CollectEph*)params)->process(mEph);
 	}
 	
@@ -88,7 +107,7 @@ struct CollectEph
 	int cStart, cStop; //range of cells handled here
 	matrix mlwfImSigma[2], phase;
 	
-	void wannierize(const WannierMC::StateE& state)
+	void wannierize(const FeynWann::StateE& state)
 	{	//Calculate for Fourier transform:
 		unsigned iCol = state.ik - wmc.Hw->ikStart;
 		for(int c=cStart; c<cStop; c++)
@@ -106,7 +125,7 @@ struct CollectEph
 				eblas_copy(mlwfImSigma[iP].data()+colLength*(iCol*f1grid.size()+if1), logImSigmaW.data(), colLength);
 			}
 	}
-	static void eProcess(const WannierMC::StateE& state, void* params)
+	static void eProcess(const FeynWann::StateE& state, void* params)
 	{	((CollectEph*)params)->wannierize(state);
 	}
 	
@@ -163,7 +182,7 @@ public:
 };
 
 int main(int argc, char** argv)
-{   InitParams ip =  WannierMC::initialize(argc, argv, "Electron-phonon scattering contribution to electron linewidth.");
+{   InitParams ip =  FeynWann::initialize(argc, argv, "Electron-phonon scattering contribution to electron linewidth.");
 
 	//Read input file:
 	InputMap inputMap(ip.inputFilename);
@@ -182,14 +201,14 @@ int main(int argc, char** argv)
 	logPrintf("iSpin = %d\n", iSpin);
 	logPrintf("NkMult = "); NkMult.print(globalLog, " %d ");
 	
-	//Initialize WannierMC:
-	WannierMCParams wmcp;
+	//Initialize FeynWann:
+	FeynWannParams wmcp;
 	wmcp.iSpin = iSpin;
 	wmcp.needSymmetries = true;
 	wmcp.needCellWeights = true;
 	wmcp.needPhonons = true;
 	wmcp.needVelocity = true;
-	WannierMC wmc(wmcp);
+	FeynWann wmc(wmcp);
 	
 	//Check NkMult compatibility with symmetries:
 	for(const SpaceGroupOp& op: wmc.sym)
@@ -320,7 +339,7 @@ int main(int argc, char** argv)
 	if(ip.dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
 		wmc.free();
-		WannierMC::finalize();
+		FeynWann::finalize();
 		return 0;
 	}
 	
@@ -418,6 +437,6 @@ int main(int argc, char** argv)
 	cEph.dumpWannierized(cEph.mlwfImSigma[1], wmcp.wannierPrefix + ".mlwfImSigmaP_ePh" + wmc.spinSuffix);
 	
 	wmc.free();
-	WannierMC::finalize();
+	FeynWann::finalize();
 	return 0;
 }

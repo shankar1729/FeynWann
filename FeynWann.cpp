@@ -1,10 +1,29 @@
-#include "WannierMC.h"
+/*-------------------------------------------------------------------
+Copyright 2018 Ravishankar Sundararaman
+
+This file is part of JDFTx.
+
+JDFTx is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+JDFTx is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
+-------------------------------------------------------------------*/
+
+#include "FeynWann.h"
 #include <core/BlasExtra.h>
 #include <core/Random.h>
 #include <fftw3-mpi.h>
 #include "config.h"
 
-WannierMCParams::WannierMCParams()
+FeynWannParams::FeynWannParams()
 : iSpin(0), totalEprefix("Wannier/totalE"), phononPrefix("Wannier/phonon"), wannierPrefix("Wannier/wannier"),
 needSymmetries(false), needCellWeights(false), needPhonons(false), needVelocity(false),
 needLinewidth_ee(false), needLinewidth_ePh(false), needLinewidthP_ePh(false)
@@ -19,9 +38,9 @@ inline std::vector<double> getFgrid(int nInterp)
 		fGrid[i] = i*df;
 	return fGrid;
 }
-const std::vector<double> WannierMCParams::fGrid_ePh = getFgrid(4);
+const std::vector<double> FeynWannParams::fGrid_ePh = getFgrid(4);
 
-InitParams WannierMC::initialize(int argc, char** argv, const char* description)
+InitParams FeynWann::initialize(int argc, char** argv, const char* description)
 {	InitParams ip;
 	ip.packageName = PACKAGE_NAME;
 	ip.versionString = VERSION_STRING;
@@ -32,12 +51,12 @@ InitParams WannierMC::initialize(int argc, char** argv, const char* description)
 	return ip;
 }
 
-void WannierMC::finalize()
+void FeynWann::finalize()
 {	fftw_mpi_cleanup();
 	finalizeSystem();
 }
 
-vector3<> WannierMC::randomVector(MPIUtil* mpiUtil)
+vector3<> FeynWann::randomVector(MPIUtil* mpiUtil)
 {	vector3<> v;
 	for(int iDir=0; iDir<3; iDir++)
 		v[iDir] = Random::uniform();
@@ -59,7 +78,7 @@ std::vector<vector3<int>> readCellMap(string fname)
 	return cellMap;
 }
 
-WannierMC::WannierMC(const WannierMCParams& wmcp)
+FeynWann::FeynWann(const FeynWannParams& wmcp)
 : wmcp(wmcp), nSpins(0), nSpinor(0), spinWeight(0), mu(NAN), nElectrons(0)
 {	
 	//Read relevant parameters from totalE.out:
@@ -309,19 +328,19 @@ WannierMC::WannierMC(const WannierMCParams& wmcp)
 	{	//e-ph:
 		fname = wmcp.wannierPrefix + ".mlwfImSigma_ePh" + spinSuffix;
 		ImSigma_ePhW = std::make_shared<DistributedMatrix>(fname, realPartOnly,
-			mpiGroup, nBands*nBands*WannierMCParams::fGrid_ePh.size(), cellMap, kfold, false);
+			mpiGroup, nBands*nBands*FeynWannParams::fGrid_ePh.size(), cellMap, kfold, false);
 	}
 	if(wmcp.needLinewidthP_ePh)
 	{	//e-ph:
 		fname = wmcp.wannierPrefix + ".mlwfImSigmaP_ePh" + spinSuffix;
 		ImSigmaP_ePhW = std::make_shared<DistributedMatrix>(fname, realPartOnly,
-			mpiGroup, nBands*nBands*WannierMCParams::fGrid_ePh.size(), cellMap, kfold, false);
+			mpiGroup, nBands*nBands*FeynWannParams::fGrid_ePh.size(), cellMap, kfold, false);
 	}
 	
 	logPrintf("\n");
 }
 
-void WannierMC::free()
+void FeynWann::free()
 {	Hw = 0;
 	Pw = 0;
 	ImSigma_eeW = 0;
@@ -377,8 +396,8 @@ template<typename T> vector3<T> elemwiseProd(vector3<int> a, vector3<T> b)
 		} \
 	}
 
-void WannierMC::eLoop(const vector3<>& k0, WannierMC::eProcessFunc eProcess, void* params)
-{	static StopWatch watchCallback("WannierMC::eLoop:callback");
+void FeynWann::eLoop(const vector3<>& k0, FeynWann::eProcessFunc eProcess, void* params)
+{	static StopWatch watchCallback("FeynWann::eLoop:callback");
 	//Run Fourier transforms with this offset:
 	Hw->transform(k0);
 	if(wmcp.needVelocity)
@@ -399,8 +418,8 @@ void WannierMC::eLoop(const vector3<>& k0, WannierMC::eProcessFunc eProcess, voi
 	)
 }
 
-void WannierMC::phLoop(const vector3<>& q0, WannierMC::phProcessFunc phProcess, void* params)
-{	static StopWatch watchCallback("WannierMC::phLoop:callback");
+void FeynWann::phLoop(const vector3<>& q0, FeynWann::phProcessFunc phProcess, void* params)
+{	static StopWatch watchCallback("FeynWann::phLoop:callback");
 	assert(wmcp.needPhonons);
 	//Run Fourier transforms with this offset:
 	OsqW->transform(q0);
@@ -418,10 +437,10 @@ void WannierMC::phLoop(const vector3<>& q0, WannierMC::phProcessFunc phProcess, 
 	)
 }
 
-void WannierMC::ePhLoop(const vector3<>& k01, const vector3<>& k02, WannierMC::ePhProcessFunc ePhProcess, void* params)
-{	static StopWatch watchBcast("WannierMC::ePhLoop:bcast"); 
-	static StopWatch watchRotations("WannierMC::ePhLoop:rotations");
-	static StopWatch watchCallback("WannierMC::ePhLoop:callback");
+void FeynWann::ePhLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::ePhProcessFunc ePhProcess, void* params)
+{	static StopWatch watchBcast("FeynWann::ePhLoop:bcast"); 
+	static StopWatch watchRotations("FeynWann::ePhLoop:rotations");
+	static StopWatch watchCallback("FeynWann::ePhLoop:callback");
 	assert(wmcp.needPhonons);
 	int prodKfold = Hw->nkTot;
 	int prodSup = OsqW->nkTot;
@@ -530,7 +549,7 @@ void WannierMC::ePhLoop(const vector3<>& k01, const vector3<>& k02, WannierMC::e
 	}
 }
 
-void WannierMC::symmetrize(matrix3<>& m) const
+void FeynWann::symmetrize(matrix3<>& m) const
 {	matrix3<> mOut;
 	matrix3<> invR = inv(R);
 	for(const SpaceGroupOp& op: sym)
@@ -546,8 +565,8 @@ void WannierMC::symmetrize(matrix3<>& m) const
 				m(i,j) = 0.;
 }
 
-void WannierMC::setState(WannierMC::StateE& state)
-{	static StopWatch watchRotations("WannierMC::setState:rotations");
+void FeynWann::setState(FeynWann::StateE& state)
+{	static StopWatch watchRotations("FeynWann::setState:rotations");
 	//Get and diagonalize Hamiltonian:
 	matrix Hk = getMatrix(Hw->getResult(state.ik), nBands, nBands);
 	Hk.diagonalize(state.U, state.E);
@@ -568,19 +587,19 @@ void WannierMC::setState(WannierMC::StateE& state)
 	if(wmcp.needLinewidth_ee)
 		state.ImSigma_ee = diag(dagger(state.U) * getMatrix(ImSigma_eeW->getResult(state.ik), nBands, nBands) * state.U);
 	if(wmcp.needLinewidth_ePh)
-	{	state.logImSigma_ePhArr.resize(WannierMCParams::fGrid_ePh.size());
+	{	state.logImSigma_ePhArr.resize(FeynWannParams::fGrid_ePh.size());
 		for(unsigned iMat=0; iMat<state.logImSigma_ePhArr.size(); iMat++)
 			state.logImSigma_ePhArr[iMat] = diag(dagger(state.U) * getMatrix(ImSigma_ePhW->getResult(state.ik), nBands, nBands, iMat) * state.U);
 	}
 	if(wmcp.needLinewidthP_ePh)
-	{	state.logImSigmaP_ePhArr.resize(WannierMCParams::fGrid_ePh.size());
+	{	state.logImSigmaP_ePhArr.resize(FeynWannParams::fGrid_ePh.size());
 		for(unsigned iMat=0; iMat<state.logImSigmaP_ePhArr.size(); iMat++)
 			state.logImSigmaP_ePhArr[iMat] = diag(dagger(state.U) * getMatrix(ImSigmaP_ePhW->getResult(state.ik), nBands, nBands, iMat) * state.U);
 	}
 	watchRotations.stop();
 }
 
-void WannierMC::bcastState(WannierMC::StateE& state, MPIUtil* mpiUtil, int root)
+void FeynWann::bcastState(FeynWann::StateE& state, MPIUtil* mpiUtil, int root)
 {	if(mpiUtil->nProcesses()==1) return; //no communictaion needed
 	mpiUtil->bcast(state.ik, root);
 	mpiUtil->bcast(&state.k[0], 3, root);
@@ -597,17 +616,17 @@ void WannierMC::bcastState(WannierMC::StateE& state, MPIUtil* mpiUtil, int root)
 	//Linewidths, if needed:
 	if(wmcp.needLinewidth_ee) bcast(state.ImSigma_ee, nBands, mpiUtil, root);
 	if(wmcp.needLinewidth_ePh)
-	{	state.logImSigma_ePhArr.resize(WannierMCParams::fGrid_ePh.size());
+	{	state.logImSigma_ePhArr.resize(FeynWannParams::fGrid_ePh.size());
 		for(diagMatrix& d: state.logImSigma_ePhArr) bcast(d, nBands, mpiUtil, root);
 	}
 	if(wmcp.needLinewidthP_ePh)
-	{	state.logImSigmaP_ePhArr.resize(WannierMCParams::fGrid_ePh.size());
+	{	state.logImSigmaP_ePhArr.resize(FeynWannParams::fGrid_ePh.size());
 		for(diagMatrix& d: state.logImSigmaP_ePhArr) bcast(d, nBands, mpiUtil, root);
 	}
 }
 
 
-void WannierMC::setState(WannierMC::StatePh& state)
+void FeynWann::setState(FeynWann::StatePh& state)
 {	assert(wmcp.needPhonons);
 	//Get and diagonalize force matrix:
 	matrix Osqq = getMatrix(OsqW->getResult(state.iq), nModes, nModes);
@@ -615,7 +634,7 @@ void WannierMC::setState(WannierMC::StatePh& state)
 	for(double& omega: state.omega) omega = sqrt(std::max(0.,omega)); //convert to phonon frequency; discard imaginary
 }
 
-void WannierMC::bcastState(WannierMC::StatePh& state, MPIUtil* mpiUtil, int root)
+void FeynWann::bcastState(FeynWann::StatePh& state, MPIUtil* mpiUtil, int root)
 {	if(mpiUtil->nProcesses()==1) return; //no communictaion needed
 	mpiUtil->bcast(state.iq, root);
 	mpiUtil->bcast(state.iqFine, root);
@@ -624,7 +643,7 @@ void WannierMC::bcastState(WannierMC::StatePh& state, MPIUtil* mpiUtil, int root
 	bcast(state.U, nModes, nModes, mpiUtil, root);
 }
 
-//----------- class WannierMC::StateE -------------
+//----------- class FeynWann::StateE -------------
 inline double interpQuartic(const std::vector<diagMatrix>& Y, int n, double f)
 {	//Get bernstein coeffs
 	double a0 = Y[0][n];
@@ -648,9 +667,9 @@ inline double interpQuartic(const std::vector<diagMatrix>& Y, int n, double f)
 	//--- 4
 	return d0+f*(d1-d0);
 }
-double WannierMC::StateE::ImSigma_ePh(int n, double f) const
+double FeynWann::StateE::ImSigma_ePh(int n, double f) const
 {	return exp(interpQuartic(logImSigma_ePhArr, n, f));
 }
-double WannierMC::StateE::ImSigmaP_ePh(int n, double f) const
+double FeynWann::StateE::ImSigmaP_ePh(int n, double f) const
 {	return exp(interpQuartic(logImSigmaP_ePhArr, n, f));
 }

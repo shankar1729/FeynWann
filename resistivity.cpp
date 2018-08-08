@@ -1,4 +1,23 @@
-#include "WannierMC.h"
+/*-------------------------------------------------------------------
+Copyright 2018 Ravishankar Sundararaman
+
+This file is part of JDFTx.
+
+JDFTx is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+JDFTx is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
+-------------------------------------------------------------------*/
+
+#include "FeynWann.h"
 #include "InputMap.h"
 #include <core/Units.h>
 #include <core/Random.h>
@@ -14,7 +33,7 @@ struct ResistivityCollect
 	{
 	}
 	
-	void collect(const WannierMC::StateE& state)
+	void collect(const FeynWann::StateE& state)
 	{	const int nBands = state.E.nRows();
 		double invT = 1./T;
 		for(int b=0; b<nBands; b++)
@@ -38,7 +57,7 @@ struct ResistivityCollect
 			}
 		}
 	}
-	static void eProcess(const WannierMC::StateE& state, void* params)
+	static void eProcess(const FeynWann::StateE& state, void* params)
 	{	((ResistivityCollect*)params)->collect(state);
 	}
 };
@@ -69,7 +88,7 @@ inline double trace(const matrix3<>& M, int slabDir)
 
 
 int main(int argc, char** argv)
-{	InitParams ip = WannierMC::initialize(argc, argv, "Monte Carlo estimate of resistivity");
+{	InitParams ip = FeynWann::initialize(argc, argv, "Monte Carlo estimate of resistivity");
 
 	//Read input file:
 	InputMap inputMap(ip.inputFilename);
@@ -92,13 +111,13 @@ int main(int argc, char** argv)
 	logPrintf("dmuCount = %d\n", dmuCount);
 	logPrintf("slabDir = %d\n", slabDir);
 	
-	//Initialize WannierMC:
-	WannierMCParams wmcp;
+	//Initialize FeynWann:
+	FeynWannParams wmcp;
 	wmcp.needSymmetries = true;
 	wmcp.needVelocity = true;
 	wmcp.needLinewidth_ePh = true;
 	wmcp.needLinewidthP_ePh = true;
-	std::shared_ptr<WannierMC> wmc = std::make_shared<WannierMC>(wmcp);
+	std::shared_ptr<FeynWann> wmc = std::make_shared<FeynWann>(wmcp);
 	
 	//dmu array:
 	std::vector<double> dmu(dmuCount, dmuMin); //set first value here
@@ -138,7 +157,7 @@ int main(int argc, char** argv)
 	if(ip.dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
 		wmc = 0;
-		WannierMC::finalize();
+		FeynWann::finalize();
 		return 0;
 	}
 	logPrintf("\n");
@@ -148,11 +167,11 @@ int main(int argc, char** argv)
 	std::vector<std::vector<std::shared_ptr<ResistivityCollect>>> rcArr(wmc->nSpins);
 	std::vector<string> spinSuffixes(wmc->nSpins);
 	for(int iSpin=0; iSpin<wmc->nSpins; iSpin++)
-	{	//Update WannierMC for spin channel if necessary:
+	{	//Update FeynWann for spin channel if necessary:
 		if(iSpin>0)
 		{	wmc = 0; //free memory from previous spin
 			wmcp.iSpin = iSpin;
-			wmc = std::make_shared<WannierMC>(wmcp);
+			wmc = std::make_shared<FeynWann>(wmcp);
 		}
 		spinSuffixes[iSpin] = wmc->spinSuffix;
 		rcArr[iSpin].resize(nBlocks);
@@ -253,7 +272,7 @@ int main(int argc, char** argv)
 	}
 	
 	wmc = 0;
-	WannierMC::finalize();
+	FeynWann::finalize();
 }
 
 //Report a tensor with error estimates

@@ -1,9 +1,2 @@
 .kdev*
-build
-testBandStruct
-plasmonDecayMetropolis
-plasmonPhononDecay
-Run*
-EventLists
 .directory
-run-cmake.sh

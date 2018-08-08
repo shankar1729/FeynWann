@@ -1,10 +1,29 @@
-#ifndef WANNIERMC_WANNIERMC_H
-#define WANNIERMC_WANNIERMC_H
+/*-------------------------------------------------------------------
+Copyright 2018 Ravishankar Sundararaman
+
+This file is part of JDFTx.
+
+JDFTx is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+JDFTx is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
+-------------------------------------------------------------------*/
+
+#ifndef FEYNWANN_FEYNWANN_H
+#define FEYNWANN_FEYNWANN_H
 
 #include "DistributedMatrix.h"
 
 //! Parameters for initializing Wannier
-struct WannierMCParams
+struct FeynWannParams
 {	int iSpin; //!< current spin channel: 0(up) or 1(dn) for z-spin calculations; must be 0 for all other spin types
 	string totalEprefix; //!< filename prefix for DFT outputs (default: Wannier/totalE)
 	string phononPrefix; //!< filename prefix for phonon outputs (default: Wannier/phonon)
@@ -17,26 +36,26 @@ struct WannierMCParams
 	bool needLinewidth_ePh; //!< whether to provide e-ph line-width (default: false)
 	bool needLinewidthP_ePh; //!< whether to provide momentum-relaxation e-ph line-width (default: false)
 	static const std::vector<double> fGrid_ePh; //!< fillings grid used for e-ph linewidths
-	WannierMCParams();
+	FeynWannParams();
 };
 
 //! Wannier interpolator for electrons and phonons
-class WannierMC
+class FeynWann
 {
 public:
 	static InitParams initialize(int argc, char** argv, const char* description); //!< wrap initSystemCmdLine from JDFTx
 	static void finalize(); //!< wrap finalizeSystem from JDFTx
 	static vector3<> randomVector(MPIUtil* mpiUtil=0); //!< uniformly random vector in [0,1)^3, constant across mpi instance, if any
 	
-	const WannierMCParams& wmcp;
-	WannierMC(const WannierMCParams& wmcp);
+	const FeynWannParams& wmcp;
+	FeynWann(const FeynWannParams& wmcp);
 	void free(); //!< free matrices
 	
 	//! Electronic properties at a given wave vector
 	struct StateE
 	{	int ik; //!< index in mesh of dimensions kfold
 		vector3<> k; //!< wave-vector in recip lattice coords
-		diagMatrix E; //!< energy relative to Fermi level (WannierMC::mu)
+		diagMatrix E; //!< energy relative to Fermi level (FeynWann::mu)
 		matrix U; //!< rotation from Wannier to eiegen-basis
 		matrix v[3]; //!< velocity matrix elements in Cartesian coordinates, available if needVelocity = true
 		std::vector<vector3<>> vVec; //!< band velocities (diagonal part of v) in Cartesian coordinates, available if needVelocity = true
@@ -46,7 +65,7 @@ public:
 	private:
 		std::vector<diagMatrix> logImSigma_ePhArr; //!< e-ph linewidth for each f in fGrid_ePh
 		std::vector<diagMatrix> logImSigmaP_ePhArr; //!< e-ph momentum-relaxation linewidth for each f in fGrid_ePh
-		friend class WannierMC;
+		friend class FeynWann;
 	};
 	
 	//! Phonon properties at a given wave vector
@@ -125,4 +144,4 @@ public:
 	std::shared_ptr<DistributedMatrix> HePhW; //electron-phonon matrix elements in Wannier basis
 };
 
-#endif //WANNIERMC_WANNIERMC_H
+#endif //FEYNWANN_FEYNWANN_H

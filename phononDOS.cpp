@@ -1,10 +1,29 @@
-#include "WannierMC.h"
+/*-------------------------------------------------------------------
+Copyright 2018 Ravishankar Sundararaman
+
+This file is part of JDFTx.
+
+JDFTx is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+JDFTx is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
+-------------------------------------------------------------------*/
+
+#include "FeynWann.h"
 #include "InputMap.h"
 #include "Histogram.h"
 #include <core/Units.h>
 #include <core/Random.h>
 
-void findMaxOmega(const WannierMC::StatePh& state, void* params)
+void findMaxOmega(const FeynWann::StatePh& state, void* params)
 {	double& omegaMax = *((double*)params);
 	omegaMax = std::max(omegaMax, state.omega.back()); //omega is in ascending order
 }
@@ -13,7 +32,7 @@ struct CollectDOS
 {	Histogram* dos;
 	double weight;
 	
-	static void phProcess(const WannierMC::StatePh& state, void* params)
+	static void phProcess(const FeynWann::StatePh& state, void* params)
 	{	CollectDOS& cd = *((CollectDOS*)params);
 		for(const double& omega: state.omega)
 			cd.dos->addEvent(omega, cd.weight);
@@ -21,7 +40,7 @@ struct CollectDOS
 };
 
 int main(int argc, char** argv)
-{	InitParams ip = WannierMC::initialize(argc, argv, "Phonon DOS and heat capacity");
+{	InitParams ip = FeynWann::initialize(argc, argv, "Phonon DOS and heat capacity");
 	
 	//Get the system parameters (mu, T, lattice vectors etc.)
 	InputMap inputMap(ip.inputFilename);
@@ -42,17 +61,17 @@ int main(int argc, char** argv)
 	if(vL) logPrintf("vL = %lg\n", vL);
 	if(vT) logPrintf("vT = %lg\n", vT);
 	
-	//Initialize WannierMC:
-	WannierMCParams wmcp;
+	//Initialize FeynWann:
+	FeynWannParams wmcp;
 	wmcp.needPhonons = true;
-	WannierMC wmc(wmcp);
+	FeynWann wmc(wmcp);
 	size_t nKpts = nOffsets * wmc.phCountPerOffset();
 	logPrintf("Effectively sampled nKpts: %lu\n", nKpts);
 	
 	if(ip.dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
 		wmc.free();
-		WannierMC::finalize();
+		FeynWann::finalize();
 		return 0;
 	}
 	logPrintf("\n");
@@ -151,5 +170,5 @@ int main(int argc, char** argv)
 	}
 	
 	wmc.free();
-	WannierMC::finalize();
+	FeynWann::finalize();
 }

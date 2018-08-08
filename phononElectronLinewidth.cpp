@@ -1,4 +1,23 @@
-#include "WannierMC.h"
+/*-------------------------------------------------------------------
+Copyright 2018 Ravishankar Sundararaman
+
+This file is part of JDFTx.
+
+JDFTx is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+JDFTx is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
+-------------------------------------------------------------------*/
+
+#include "FeynWann.h"
 #include "InputMap.h"
 #include <core/Units.h>
 #include <core/LatticeUtils.h>
@@ -9,7 +28,7 @@ template<typename T> T prod(const vector3<T>& v) { return v[0]*v[1]*v[2]; }
 
 struct CollectEph
 {	
-	const WannierMC& wmc;
+	const FeynWann& wmc;
 	const double dmu;
 	const double prefacG, prefacDOS;
 	const double EconserveExpFac, EconservePrefac; //energy conserving (fermi-surface constraining) Gaussian exponential and pre-factor
@@ -21,7 +40,7 @@ struct CollectEph
 	std::vector<vector3<>> qmesh; //phonon q-mesh (full version i.e. unreduced)
 	double wOffsetCur; //weight factor of current offset (due to symmetry reduction)
 	
-	CollectEph(const WannierMC& wmc, double EconserveWidth, const vector3<int>& NkMult, double dmu)
+	CollectEph(const FeynWann& wmc, double EconserveWidth, const vector3<int>& NkMult, double dmu)
 	: wmc(wmc), dmu(dmu),
 		prefacG(wmc.spinWeight * 2*M_PI/(prod(wmc.kfold)*prod(NkMult))),
 		prefacDOS(wmc.spinWeight * 1./(2*prod(wmc.kfold)*prod(NkMult))), //2 in denominator <= use both regular and offset meshes below
@@ -47,10 +66,10 @@ struct CollectEph
 	}
 	
 	//---- Main Fermi-surface-integrated e-ph coupling kernel ----
-	void process(const WannierMC::MatrixEph& mEph)
-	{	const WannierMC::StateE& e1 = *(mEph.e1);
-		const WannierMC::StateE& e2 = *(mEph.e2);
-		const WannierMC::StatePh& ph = *(mEph.ph);
+	void process(const FeynWann::MatrixEph& mEph)
+	{	const FeynWann::StateE& e1 = *(mEph.e1);
+		const FeynWann::StateE& e2 = *(mEph.e2);
+		const FeynWann::StatePh& ph = *(mEph.ph);
 		//Svae phonon wave-vectors and frequencies for final outputs
 		qmesh[ph.iqFine] = ph.q;
 		omegaPh[ph.iqFine] = ph.omega;
@@ -84,13 +103,13 @@ struct CollectEph
 			}
 		}
 	}
-	static void ePhProcess(const WannierMC::MatrixEph& mEph, void* params)
+	static void ePhProcess(const FeynWann::MatrixEph& mEph, void* params)
 	{	((CollectEph*)params)->process(mEph);
 	}
 };
 
 int main(int argc, char** argv)
-{   InitParams ip =  WannierMC::initialize(argc, argv, "Electron-phonon scattering contribution to phonon linewidth.");
+{   InitParams ip =  FeynWann::initialize(argc, argv, "Electron-phonon scattering contribution to phonon linewidth.");
 
 	//Read input file:
 	InputMap inputMap(ip.inputFilename);
@@ -109,14 +128,14 @@ int main(int argc, char** argv)
 	logPrintf("iSpin = %d\n", iSpin);
 	logPrintf("NkMult = "); NkMult.print(globalLog, " %d ");
 	
-	//Initialize WannierMC:
-	WannierMCParams wmcp;
+	//Initialize FeynWann:
+	FeynWannParams wmcp;
 	wmcp.iSpin = iSpin;
 	wmcp.needSymmetries = true;
 	wmcp.needCellWeights = true;
 	wmcp.needPhonons = true;
 	wmcp.needVelocity = true;
-	WannierMC wmc(wmcp);
+	FeynWann wmc(wmcp);
 	
 	//Check NkMult compatibility with symmetries:
 	for(const SpaceGroupOp& op: wmc.sym)
@@ -202,7 +221,7 @@ int main(int argc, char** argv)
 	if(ip.dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
 		wmc.free();
-		WannierMC::finalize();
+		FeynWann::finalize();
 		return 0;
 	}
 	
@@ -301,6 +320,6 @@ int main(int argc, char** argv)
 	logPrintf("\n");
 	
 	wmc.free();
-	WannierMC::finalize();
+	FeynWann::finalize();
 	return 0;
 }

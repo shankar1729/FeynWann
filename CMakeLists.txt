@@ -1,4 +1,4 @@
-project(WannierMC)
+project(FeynWann)
 cmake_minimum_required(VERSION 2.8)
 
 set(JDFTX_SRC "<full-path-to-jdftx-src>" CACHE STRING "Full path to the jdftx source root")
@@ -6,8 +6,8 @@ set(JDFTX_BUILD "<full-path-to-jdftx-build>" CACHE STRING "Full path to the jdft
 set(CMAKE_MODULE_PATH "${JDFTX_SRC}/CMake-Modules/")
 
 #Package configuration:
-set(CPACK_PACKAGE_NAME "WannierMC")
-set(CPACK_PACKAGE_VERSION_MAJOR "2")
+set(CPACK_PACKAGE_NAME "FeynWann")
+set(CPACK_PACKAGE_VERSION_MAJOR "1")
 set(CPACK_PACKAGE_VERSION_MINOR "0")
 set(CPACK_PACKAGE_VERSION_PATCH "alpha")
 set(VERSION_STRING "${CPACK_PACKAGE_VERSION_MAJOR}.${CPACK_PACKAGE_VERSION_MINOR}.${CPACK_PACKAGE_VERSION_PATCH}")
@@ -90,22 +90,22 @@ else()
         set(LINK_TYPE SHARED)
 endif()
 
-#Main library for WannierMC containing all the auxiliary functionality
-add_library(WannierMC ${LINK_TYPE} WannierMC.cpp DistributedMatrix.cpp InputMap.cpp Histogram.cpp)
+#Main library for FeynWann containing all the auxiliary functionality
+add_library(FeynWann ${LINK_TYPE} FeynWann.cpp DistributedMatrix.cpp InputMap.cpp Histogram.cpp)
 find_library(JDFTX_LIBRARY jdftx PATHS ${JDFTX_BUILD} NO_DEFAULT_PATH)
-target_link_libraries(WannierMC ${JDFTX_LIBRARY} ${FFTW3_MPI_LIBRARY} ${FFTW3_THREADS_LIBRARY} ${FFTW3_LIBRARY} ${MPI_CXX_LIBRARIES} ${EXTRA_LIBRARIES})
+target_link_libraries(FeynWann ${JDFTX_LIBRARY} ${FFTW3_MPI_LIBRARY} ${FFTW3_THREADS_LIBRARY} ${FFTW3_LIBRARY} ${MPI_CXX_LIBRARIES} ${EXTRA_LIBRARIES})
 
 #Executables linked to above library
-macro(add_WannierMC_executable targetName)
+macro(add_FeynWann_executable targetName)
 	add_executable(${targetName} ${targetName}.cpp)
-	target_link_libraries(${targetName} ${LINK_PREFIX} WannierMC ${LINK_SUFFIX})
+	target_link_libraries(${targetName} ${LINK_PREFIX} FeynWann ${LINK_SUFFIX})
 	set_target_properties(${targetName} PROPERTIES LINK_FLAGS "${MPI_CXX_LINK_FLAGS}")
 endmacro()
 
-add_WannierMC_executable(phononDOS)
-add_WannierMC_executable(electronDOS)
-add_WannierMC_executable(electronPhononLinewidth)
-add_WannierMC_executable(resistivity)
-add_WannierMC_executable(ImEps)
-add_WannierMC_executable(phononElectronLinewidth)
+add_FeynWann_executable(phononDOS)
+add_FeynWann_executable(electronDOS)
+add_FeynWann_executable(electronPhononLinewidth)
+add_FeynWann_executable(resistivity)
+add_FeynWann_executable(ImEps)
+add_FeynWann_executable(phononElectronLinewidth)
 

@@ -1,9 +1,28 @@
-#ifndef WANNIERMC_DISTRIBUTEDMATRIX_H
-#define WANNIERMC_DISTRIBUTEDMATRIX_H
+/*-------------------------------------------------------------------
+Copyright 2018 Ravishankar Sundararaman
+
+This file is part of JDFTx.
+
+JDFTx is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+JDFTx is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
+-------------------------------------------------------------------*/
+
+#ifndef FEYNWANN_DISTRIBUTEDMATRIX_H
+#define FEYNWANN_DISTRIBUTEDMATRIX_H
 
 #include <core/matrix.h>
 
-//! Distributed matrix elements / Hamiltonians for WannierMC
+//! Distributed matrix elements / Hamiltonians for FeynWann
 class DistributedMatrix
 {
 public:
@@ -50,4 +69,4 @@ inline int calculateIndex(const vector3<int>& iv, const vector3<int>& S)
 	return i;
 }
 
-#endif //WANNIERMC_DISTRIBUTEDMATRIX_H
+#endif //FEYNWANN_DISTRIBUTEDMATRIX_H

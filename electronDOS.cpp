@@ -1,4 +1,23 @@
-#include "WannierMC.h"
+/*-------------------------------------------------------------------
+Copyright 2018 Ravishankar Sundararaman
+
+This file is part of JDFTx.
+
+JDFTx is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+JDFTx is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
+-------------------------------------------------------------------*/
+
+#include "FeynWann.h"
 #include "InputMap.h"
 #include "Histogram.h"
 #include <core/Units.h>
@@ -9,7 +28,7 @@ struct EnergyRange
 {	double Emin;
 	double Emax;
 	
-	static void eProcess(const WannierMC::StateE& state, void* params)
+	static void eProcess(const FeynWann::StateE& state, void* params)
 	{	EnergyRange& er = *((EnergyRange*)params);
 		er.Emin = std::min(er.Emin, state.E.front()); //E is in ascending order
 		er.Emax = std::max(er.Emax, state.E.back()); //E is in ascending order
@@ -20,7 +39,7 @@ struct CollectDOS
 {	Histogram* dos;
 	double weight;
 	
-	static void eProcess(const WannierMC::StateE& state, void* params)
+	static void eProcess(const FeynWann::StateE& state, void* params)
 	{	CollectDOS& cd = *((CollectDOS*)params);
 		for(const double& Ei: state.E)
 			cd.dos->addEvent(Ei, cd.weight);
@@ -31,7 +50,7 @@ inline double fermi(double x) { return x>30. ? exp(-x) : 1./(1.+exp(x)); } //avo
 inline double fermiPrime(double x) { return 0.25*(std::pow(tanh(0.5*x), 2) - 1.); } //avoid overflow issues
 
 int main(int argc, char** argv)
-{	InitParams ip = WannierMC::initialize(argc, argv, "Electronic DOS and heat capacity");
+{	InitParams ip = FeynWann::initialize(argc, argv, "Electronic DOS and heat capacity");
 	
 	InputMap inputMap(ip.inputFilename);
 	size_t nOffsets = inputMap.get("nOffsets");
@@ -47,16 +66,16 @@ int main(int argc, char** argv)
 	logPrintf("Tmax = %lg\n", Tmax);
 	logPrintf("Tstep = %lg\n", Tstep);
 
-	//Initialize WannierMC:
-	WannierMCParams wmcp; //default parametres suffice
-	std::shared_ptr<WannierMC> wmc = std::make_shared<WannierMC>(wmcp);
+	//Initialize FeynWann:
+	FeynWannParams wmcp; //default parametres suffice
+	std::shared_ptr<FeynWann> wmc = std::make_shared<FeynWann>(wmcp);
 	size_t nKpts = nOffsets * wmc->eCountPerOffset();  
 	logPrintf("Effectively sampled nKpts: %lu\n", nKpts);
 	
 	if(ip.dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
 		wmc = 0;
-		WannierMC::finalize();
+		FeynWann::finalize();
 		return 0;
 	}
 	logPrintf("\n");
@@ -78,11 +97,11 @@ int main(int argc, char** argv)
 	
 	std::vector<std::shared_ptr<Histogram>> dosArr(wmc->nSpins);
 	for(int iSpin=0; iSpin<wmc->nSpins; iSpin++)
-	{	//Update WannierMC for spin channel if necessary:
+	{	//Update FeynWann for spin channel if necessary:
 		if(iSpin>0)
 		{	wmc = 0; //free memory from previous spin
 			wmcp.iSpin = iSpin;
-			wmc = std::make_shared<WannierMC>(wmcp);
+			wmc = std::make_shared<FeynWann>(wmcp);
 		}
 		
 		//Initialize energy grid:
@@ -202,5 +221,5 @@ int main(int argc, char** argv)
 	}
 	
 	wmc = 0;
-	WannierMC::finalize();
+	FeynWann::finalize();
 }
