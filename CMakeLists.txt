@@ -104,6 +104,7 @@ endmacro()
 
 add_FeynWann_executable(phononDOS)
 add_FeynWann_executable(electronDOS)
+add_FeynWann_executable(electronPhononCoupling)
 add_FeynWann_executable(electronPhononLinewidth)
 add_FeynWann_executable(resistivity)
 add_FeynWann_executable(ImEps)
