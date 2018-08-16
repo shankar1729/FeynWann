@@ -102,12 +102,12 @@ struct ePhRelax
 		
 		//Perturb by photon-induced carrier density:
 		//--- read carrier distributions from plasmonDecay:
-		Histogram2D distribDirect("carrierDistribAll-direct.dat", 1./eV, 1./eV, 1.);
-		Histogram2D distribPhonon("carrierDistribAll-phonon.dat", 1./eV, 1./eV, 1.);
+		Histogram2D distribDirect("carrierDistribDirect.dat", 1./eV, 1./eV, 1.);
+		Histogram2D distribPhonon("carrierDistribPhonon.dat", 1./eV, 1./eV, 1.);
 		if(Eplasmon < distribDirect.omegaMin || Eplasmon > distribDirect.omegaMin + (distribDirect.nomega-1)*distribDirect.domega)
-			die("Plasmon energy is out of the range available in carrierDistribAll-direct.dat")
+			die("Plasmon energy is out of the range available in carrierDistribDirect.dat")
 		if(Eplasmon < distribPhonon.omegaMin || Eplasmon > distribPhonon.omegaMin + (distribPhonon.nomega-1)*distribPhonon.domega)
-			die("Plasmon energy is out of the range available in carrierDistribAll-phonon.dat")
+			die("Plasmon energy is out of the range available in carrierDistribPhonon.dat")
 		//--- interpolate to required photon energy and carrier eenergy grid:
 		fPert.resize(nE);
 		double Upert = 0.;
@@ -129,7 +129,7 @@ struct ePhRelax
 		logPrintf("Change in electrons/cell: %lg\n", dZ);
 
 		//Electron-phonon coupling:
-		Interp1 hIntInterp; hIntInterp.init("hInt.dat", eV, eV/pow(Angstrom,3));
+		Interp1 hIntInterp; hIntInterp.init("hEph.dat", eV, eV/pow(Angstrom,3));
 		//--- interpolate to all the interval midpoints of energy grid:
 		hInt.resize(nE-1);
 		for(int ie=0; ie<nE-1; ie++)

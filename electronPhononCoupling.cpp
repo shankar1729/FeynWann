@@ -24,11 +24,11 @@ struct EnergyRange
 
 //Collect ImEps contibutions using FeynWann callbacks:
 struct CollectHePh
-{	Histogram hEph;
-	double prefac;
+{	Histogram hEph, dos;
+	double prefac, prefacDOS;
 	
 	CollectHePh(double Emin, double dE, double Emax)
-	: hEph(Emin, dE, Emax)
+	: hEph(Emin, dE, Emax), dos(Emin, dE, Emax)
 	{	logPrintf("Initialized energy grid: %lg to %lg eV with %d points.\n", hEph.Emin/eV, hEph.Emax()/eV, hEph.nE);
 	}
 	
@@ -59,12 +59,17 @@ struct CollectHePh
 					hEph.addEvent(0.5*(E1[v]+E2[c]), prefac * delta * omegaPh[alpha] * gePhSq);
 				}
 			}
+			dos.addEvent(E1[v], 0.5*prefacDOS);
+			dos.addEvent(E2[v], 0.5*prefacDOS);
 		}
 	}
 	static void ePhProcess(const FeynWann::MatrixEph& mat, void* params)
 	{	((CollectHePh*)params)->collect(mat);
 	}
 };
+
+inline double fermi(double x) { return x>30. ? exp(-x) : 1./(1.+exp(x)); } //avoid overflow issues
+inline double fermiPrime(double x) { return 0.25*(std::pow(tanh(0.5*x), 2) - 1.); } //avoid overflow issues
 
 int main(int argc, char** argv)
 {	
@@ -74,11 +79,17 @@ int main(int argc, char** argv)
 	InputMap inputMap(ip.inputFilename);
 	const int nOffsets = inputMap.get("nOffsets"); assert(nOffsets>0);
 	const double dE = inputMap.get("dE") * eV; //energy resolution used for output and energy conservation
+	const double Tmin = inputMap.get("Tmin") * Kelvin; //electron temperature grid start
+	const double Tmax = inputMap.get("Tmax") * Kelvin; //electron temperature grid stop
+	const double Tstep = inputMap.get("Tstep") * Kelvin; //electron temperature grid spacing
 	
 	logPrintf("\nInputs after conversion to atomic units:\n");
 	logPrintf("nOffsets = %d\n", nOffsets);
 	logPrintf("dE = %lg\n", dE);
-	
+	logPrintf("Tmin = %lg\n", Tmin);
+	logPrintf("Tmax = %lg\n", Tmax);
+	logPrintf("Tstep = %lg\n", Tstep);
+
 	//Initialize FeynWann:
 	FeynWannParams fwp;
 	fwp.needPhonons = true;
@@ -94,6 +105,12 @@ int main(int argc, char** argv)
 		return 0;
 	}
 	logPrintf("\n");
+
+	//Initialize temperature grid:
+	std::vector<double> Tarr(int(ceil((Tmax-Tmin)/Tstep)));
+	for(size_t iT=0; iT<Tarr.size(); iT++)
+		Tarr[iT] = Tmin + Tstep*iT;
+	logPrintf("Initialized temperature grid: %lg to %lg K with %lu points.\n", Tarr.front()/Kelvin, Tarr.back()/Kelvin, Tarr.size());
 
 	//Initialize sampling parameters:
 	int oStart=0, oStop=0;
@@ -115,6 +132,7 @@ int main(int argc, char** argv)
 	//Collect e-ph coupling resolved by energy:
 	CollectHePh ch(er.Emin, dE, er.Emax);
 	ch.prefac = fw->spinWeight / (nKeff*fabs(det(fw->R)));
+	ch.prefacDOS = fw->spinWeight * (1./nKeff);
 	for(int iSpin=0; iSpin<fw->nSpins; iSpin++)
 	{	//Update FeynWann for spin channel if necessary:
 		if(iSpin>0)
@@ -133,8 +151,60 @@ int main(int argc, char** argv)
 		}
 		logPrintf("done.\n"); logFlush();
 	}
+	ch.dos.allReduce(MPIUtil::ReduceSum);
 	ch.hEph.allReduce(MPIUtil::ReduceSum);
 	ch.hEph.print("hEph.dat", 1./eV, 1./(eV/pow(Angstrom,3)));
+	
+	//Calculate GePh from hEph for various Te:
+	logPrintf("\nCalculating GePh: "); logFlush();
+	diagMatrix GePh(Tarr.size(), 0.);
+	//--- check enough bands to contain Z:
+	double Zmax = 0.;
+	for(const double& g: ch.dos.out)
+		Zmax += dE * g;
+	if(Zmax < fw->nElectrons)
+		die("Current DOS can only support %lg electrons > %lg electrons specified.\n", Zmax, fw->nElectrons);
+	int iTstart, iTstop; TaskDivision(Tarr.size(), mpiWorld).myRange(iTstart, iTstop);
+	for(int iT=iTstart; iT<iTstop; iT++)
+	{	const double T = Tarr[iT], invT = 1./T;
+		//Bisect for chemical potential:
+		double dmuMin = ch.dos.Emin - 10*T;
+		double dmuMax = ch.dos.Emax() + 10*T;
+		double dmu = 0.5*(dmuMin + dmuMax);
+		const double tol = 1e-9*T;
+		while(dmuMax-dmuMin > tol)
+		{	//calculate number of electrons at current Z:
+			double nElectrons = 0.;
+			for(int ie=0; ie<ch.dos.nE; ie++)
+			{	double Ei = ch.dos.Emin + ie*dE;
+				double fi = fermi(invT*(Ei - dmu));
+				nElectrons += dE * ch.dos.out[ie] * fi;
+			}
+			((nElectrons>fw->nElectrons) ? dmuMax : dmuMin) = dmu;
+			dmu = 0.5*(dmuMin + dmuMax);
+		}
+		//Calculate e-ph coupling for each Te:
+		double& Gcur = GePh[iT];
+		Gcur = 0.;
+		for(int ie=0; ie<ch.dos.nE; ie++)
+		{	double Ei = ch.dos.Emin + ie*dE;
+			double x = invT*(Ei-dmu);
+			double dfdE = (-invT) * fermiPrime(x);
+			Gcur += dE * ch.hEph.out[ie] * dfdE;
+		}
+		Gcur *= (2*M_PI);
+	}
+	mpiWorld->allReduceData(GePh, MPIUtil::ReduceSum);
+	//--- write to file
+	if(mpiWorld->isHead())
+	{	const double GePhSI = Joule/(Kelvin*pow(meter,3)*sec);
+		ofstream ofs("GePh.dat");
+		ofs << "#T[K] GePh[W/m^3K]\n";
+		for(size_t iT=0; iT<Tarr.size(); iT++)
+			ofs << Tarr[iT]/Kelvin << '\t'
+				<< GePh[iT]/GePhSI << '\n';
+	}
+	logPrintf("done.\n"); logFlush();
 	
 	fw = 0;
 	FeynWann::finalize();
