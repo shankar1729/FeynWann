@@ -21,6 +21,7 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 #define FEYNWANN_INPUTMAP_H
 
 #include <core/string.h>
+#include <core/vector3.h>
 #include <map>
 
 //Parse simple input file into a dictionary
@@ -29,6 +30,7 @@ class InputMap : std::map<string,string>
 public:
 	InputMap(string filename);
 	double get(string key, double defaultVal=NAN) const;
+	vector3<> getVector(string key, vector3<> defaultVal=vector3<>(NAN)) const; //!< comma-delimited vector
 	string getString(string key) const;
 };
 

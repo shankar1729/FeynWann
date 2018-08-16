@@ -202,11 +202,8 @@ int main(int argc, char** argv)
 	const int nOffsets = inputMap.get("nOffsets"); assert(nOffsets>0);
 	const double omegaMax = inputMap.get("omegaMax") * eV;
 	const double T = inputMap.get("T") * Kelvin;
-	const double polThetaRe = inputMap.get("polThetaRe") * (M_PI/180);
-	const double polPhiRe = inputMap.get("polPhiRe") * (M_PI/180);
-	const double polThetaIm = inputMap.get("polThetaIm") * (M_PI/180);
-	const double polPhiIm = inputMap.get("polPhiIm") * (M_PI/180);
-	const double w  = inputMap.get("w", 0.); //weights related to real and imaginary part of polarization (default to 0 (linear pol))
+	const vector3<> polRe = inputMap.getVector("polRe", vector3<>(1.,0.,0.)); //Real part of polarization
+	const vector3<> polIm = inputMap.getVector("polIm", vector3<>(0.,0.,0.)); //Imag part of polarization
 	const double GammaS = inputMap.get("GammaS", 0.) * eV; //surface contribution for broadening (default to 0.0 eV)
 	const double eta = inputMap.get("eta", 0.1) * eV; //on-shell extrapolation width (default to 0.1 eV)
 	const double dmuMin = inputMap.get("dmuMin", 0.) * eV; //optional shift in chemical potential from neutral value; start of range (default to 0)
@@ -226,11 +223,8 @@ int main(int argc, char** argv)
 	logPrintf("nOffsets = %d\n", nOffsets);
 	logPrintf("omegaMax = %lg\n", omegaMax);
 	logPrintf("T = %lg\n", T);
-	logPrintf("polThetaRe = %lg\n", polThetaRe);
-	logPrintf("polPhiRe = %lg\n", polPhiRe);
-	logPrintf("polThetaIm = %lg\n", polThetaIm);
-	logPrintf("polPhiIm = %lg\n", polPhiIm);
-	logPrintf("w = %lg\n", w);
+	logPrintf("polRe = "); polRe.print(globalLog, " %lg ");
+	logPrintf("polIm = "); polIm.print(globalLog, " %lg ");
 	logPrintf("GammaS = %lg\n", GammaS);
 	logPrintf("eta = %lg\n", eta);
 	logPrintf("dmuMin = %lg\n", dmuMin);
@@ -248,6 +242,12 @@ int main(int argc, char** argv)
 	size_t nKeff = nOffsets * (contribType==Direct ? fw->eCountPerOffset() : fw->ePhCountPerOffset());
 	logPrintf("Effectively sampled %s: %lu\n", (contribType==Direct ? "nKpts" : "nKpairs"), nKeff);
 
+	//Calculate normalized polarization vector:
+	vector3<complex> Ehat = complex(1,0)*polRe + complex(0,1)*polIm; //Efield direction
+	Ehat *= (1./sqrt(Ehat[0].norm() + Ehat[1].norm() + Ehat[2].norm())); //normalize to unit complex vector
+	logPrintf("Ehat: [ %lg+%lgi , %lg+%lgi , %lg+%lgi ]\n", Ehat[0].real(), Ehat[0].imag(),
+		Ehat[1].real(), Ehat[1].imag(), Ehat[2].real(), Ehat[2].imag() );
+	
 	if(ip.dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
 		fw = 0;
@@ -281,12 +281,9 @@ int main(int argc, char** argv)
 	//Calculate delta-function resolved versions (no broadening yet):
 	CollectImEps cie(dmu, T, domega, omegaFull, omegaMax);
 	cie.prefac = 4. * std::pow(M_PI,2) * fw->spinWeight / (nKeff*fabs(det(fw->R))); //frequency independent part of prefactor
-	complex nx(std::sqrt(1-std::pow(w,2))*sin(polThetaRe)*cos(polPhiRe), w*sin(polThetaIm)*cos(polPhiIm));
-	complex ny(std::sqrt(1-std::pow(w,2))*sin(polThetaRe)*sin(polPhiRe), w*sin(polThetaIm)*sin(polPhiIm));
-	complex nz(std::sqrt(1-std::pow(w,2))*cos(polThetaRe), w*cos(polThetaIm));
-	cie.Ehat = vector3<complex>(nx, ny, nz); //Efield direction
 	cie.eta = eta;
 	cie.GammaS = GammaS;
+	cie.Ehat = Ehat;
 	
 	for(int iSpin=0; iSpin<fw->nSpins; iSpin++)
 	{	//Update FeynWann for spin channel if necessary:

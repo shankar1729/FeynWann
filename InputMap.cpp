@@ -55,6 +55,25 @@ double InputMap::get(string key, double defaultVal) const
 	return atof(iter->second.c_str());
 }
 
+vector3<> InputMap::getVector(string key, vector3<> defaultVal) const
+{	auto iter = find(key);
+	if(iter == end()) //not found
+	{	if(std::isnan(defaultVal[0])) //no default provided
+		{	die("\nCould not find required entry '%s' in input.\n", key.c_str());
+		}
+		else return defaultVal;
+	}
+	//Parse value string with comma as a delimiter:
+	vector3<> result;
+	istringstream iss(iter->second);
+	for(int k=0; k<3; k++)
+	{	string token;
+		getline(iss, token, ',');
+		result[k] = atof(token.c_str());
+	}
+	return result;
+}
+
 string InputMap::getString(string key) const
 {	auto iter = find(key);
 	if(iter == end()) //not found
