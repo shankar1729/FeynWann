@@ -54,7 +54,7 @@ struct CollectImEps
 	Histogram2D ImEps_E; //ImEpsDelta resolved by carrier density; collected only for first mu
 	double prefac;
 	double eta; //singularity extrapolation width
-	vector3<> Ehat;
+	vector3<complex> Ehat;
 	double EvMax, EcMin;
 	
 	
@@ -202,9 +202,12 @@ int main(int argc, char** argv)
 	const int nOffsets = inputMap.get("nOffsets"); assert(nOffsets>0);
 	const double omegaMax = inputMap.get("omegaMax") * eV;
 	const double T = inputMap.get("T") * Kelvin;
-	const double polTheta = inputMap.get("polTheta") * (M_PI/180);
-	const double polPhi = inputMap.get("polPhi") * (M_PI/180);
-	const double GammaS = inputMap.get("GammaS") * eV;
+	const double polThetaRe = inputMap.get("polThetaRe") * (M_PI/180);
+	const double polPhiRe = inputMap.get("polPhiRe") * (M_PI/180);
+	const double polThetaIm = inputMap.get("polThetaIm") * (M_PI/180);
+	const double polPhiIm = inputMap.get("polPhiIm") * (M_PI/180);
+	const double w  = inputMap.get("w", 0.); //weights related to real and imaginary part of polarization (default to 0 (linear pol))
+	const double GammaS = inputMap.get("GammaS", 0.) * eV; //surface contribution for broadening (default to 0.0 eV)
 	const double eta = inputMap.get("eta", 0.1) * eV; //on-shell extrapolation width (default to 0.1 eV)
 	const double dmuMin = inputMap.get("dmuMin", 0.) * eV; //optional shift in chemical potential from neutral value; start of range (default to 0)
 	const double dmuMax = inputMap.get("dmuMax", 0.) * eV; //optional shift in chemical potential from neutral value; end of range (default to 0)
@@ -223,8 +226,11 @@ int main(int argc, char** argv)
 	logPrintf("nOffsets = %d\n", nOffsets);
 	logPrintf("omegaMax = %lg\n", omegaMax);
 	logPrintf("T = %lg\n", T);
-	logPrintf("polTheta = %lg\n", polTheta);
-	logPrintf("polPhi = %lg\n", polPhi);
+	logPrintf("polThetaRe = %lg\n", polThetaRe);
+	logPrintf("polPhiRe = %lg\n", polPhiRe);
+	logPrintf("polThetaIm = %lg\n", polThetaIm);
+	logPrintf("polPhiIm = %lg\n", polPhiIm);
+	logPrintf("w = %lg\n", w);
 	logPrintf("GammaS = %lg\n", GammaS);
 	logPrintf("eta = %lg\n", eta);
 	logPrintf("dmuMin = %lg\n", dmuMin);
@@ -275,7 +281,10 @@ int main(int argc, char** argv)
 	//Calculate delta-function resolved versions (no broadening yet):
 	CollectImEps cie(dmu, T, domega, omegaFull, omegaMax);
 	cie.prefac = 4. * std::pow(M_PI,2) * fw->spinWeight / (nKeff*fabs(det(fw->R))); //frequency independent part of prefactor
-	cie.Ehat = vector3<>(sin(polTheta)*cos(polPhi), sin(polTheta)*sin(polPhi), cos(polTheta)); //Efield direction
+	complex nx(std::sqrt(1-std::pow(w,2))*sin(polThetaRe)*cos(polPhiRe), w*sin(polThetaIm)*cos(polPhiIm));
+	complex ny(std::sqrt(1-std::pow(w,2))*sin(polThetaRe)*sin(polPhiRe), w*sin(polThetaIm)*sin(polPhiIm));
+	complex nz(std::sqrt(1-std::pow(w,2))*cos(polThetaRe), w*cos(polThetaIm));
+	cie.Ehat = vector3<complex>(nx, ny, nz); //Efield direction
 	cie.eta = eta;
 	cie.GammaS = GammaS;
 	
