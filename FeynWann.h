@@ -32,6 +32,7 @@ struct FeynWannParams
 	bool needCellWeights; //!< whether to read mlwfCellWeights file (default: false)
 	bool needPhonons; //!< whether to initialize phonon-related quantities (default: false)
 	bool needVelocity; //!< whether to initialize velocity (momentum) matrix elements
+	bool needSpin; //!< whether to initialize spin matrix elements (will be reset to false if not relativstic)
 	bool needLinewidth_ee; //!< whether to provide e-e line-width (default: false)
 	bool needLinewidth_ePh; //!< whether to provide e-ph line-width (default: false)
 	bool needLinewidthP_ePh; //!< whether to provide momentum-relaxation e-ph line-width (default: false)
@@ -48,8 +49,9 @@ public:
 	static vector3<> randomVector(MPIUtil* mpiUtil=0); //!< uniformly random vector in [0,1)^3, constant across mpi instance, if any
 	
 	const FeynWannParams& fwp;
-	FeynWann(const FeynWannParams& fwp);
+	FeynWann(FeynWannParams& fwp);
 	void free(); //!< free matrices
+	inline bool isRelativistic() const { return nSpinor==2; }
 	
 	//! Electronic properties at a given wave vector
 	struct StateE
@@ -59,6 +61,8 @@ public:
 		matrix U; //!< rotation from Wannier to eiegen-basis
 		matrix v[3]; //!< velocity matrix elements in Cartesian coordinates, available if needVelocity = true
 		std::vector<vector3<>> vVec; //!< band velocities (diagonal part of v) in Cartesian coordinates, available if needVelocity = true
+		matrix S[3]; //!< Spin matrix elements in Cartesian coordinates, available if needSpin = true
+		std::vector<vector3<>> Svec; //!< band spins (diagonal part of S) in Cartesian coordinates, available if needSpin = true
 		diagMatrix ImSigma_ee; //!< e-e linewidth, available if needLinewidth_ee = true
 		double ImSigma_ePh(int n, double f) const; //!< get e-ph linewidth for band n given its occupation f, available if needLinewidth_ePh = true
 		double ImSigmaP_ePh(int n, double f) const; //!< get e-ph linewidth for band n given its occupation f, available if needLinewidthP_ePh = true
@@ -129,7 +133,7 @@ public:
 	//Electrons:
 	std::vector< vector3<int> > cellMap; //electron Wannier cell map
 	matrix cellWeights; //corresponding weights (nBands*nBands x nCells), available if needCellWeights = true
-	std::shared_ptr<DistributedMatrix> Hw, Pw; //Wannier hamiltonian and dipole matrix elements
+	std::shared_ptr<DistributedMatrix> Hw, Pw, Sw; //Wannier hamiltonian, dipole matrix elements and spin matrix elements 
 	std::shared_ptr<DistributedMatrix> ImSigma_eeW, ImSigma_ePhW, ImSigmaP_ePhW; //linewidths in wannier basis
 	void setState(StateE& state); //!< set requested properties for ik in state
 	void bcastState(StateE& state, MPIUtil* mpiUtil, int root); //!< broadcast specified state on specified MPI instance

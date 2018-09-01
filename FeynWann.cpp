@@ -25,7 +25,7 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 
 FeynWannParams::FeynWannParams()
 : iSpin(0), totalEprefix("Wannier/totalE"), phononPrefix("Wannier/phonon"), wannierPrefix("Wannier/wannier"),
-needSymmetries(false), needCellWeights(false), needPhonons(false), needVelocity(false),
+needSymmetries(false), needCellWeights(false), needPhonons(false), needVelocity(false), needSpin(false),
 needLinewidth_ee(false), needLinewidth_ePh(false), needLinewidthP_ePh(false)
 {
 }
@@ -78,7 +78,7 @@ std::vector<vector3<int>> readCellMap(string fname)
 	return cellMap;
 }
 
-FeynWann::FeynWann(const FeynWannParams& fwp)
+FeynWann::FeynWann(FeynWannParams& fwp)
 : fwp(fwp), nSpins(0), nSpinor(0), spinWeight(0), mu(NAN), nElectrons(0)
 {	
 	//Read relevant parameters from totalE.out:
@@ -316,7 +316,13 @@ FeynWann::FeynWann(const FeynWannParams& fwp)
 		Pw = std::make_shared<DistributedMatrix>(fname, realPartOnly,
 			mpiGroup, 3*nBands*nBands, cellMap, kfold, false);
 	}
-	
+	//Spin matrix elements
+	if(not isRelativistic()) fwp.needSpin = false; //spin only available in relatvistic mode
+	if(fwp.needSpin)
+	{	fname = fwp.wannierPrefix + ".mlwfS" + spinSuffix;
+		Sw = std::make_shared<DistributedMatrix>(fname, realPartOnly,
+			mpiGroup, 3*nBands*nBands, cellMap, kfold, false);
+	}
 	//Linewidths:
 	if(fwp.needLinewidth_ee)
 	{	//e-e:
@@ -343,6 +349,7 @@ FeynWann::FeynWann(const FeynWannParams& fwp)
 void FeynWann::free()
 {	Hw = 0;
 	Pw = 0;
+	Sw = 0;
 	ImSigma_eeW = 0;
 	ImSigma_ePhW = 0;
 	ImSigmaP_ePhW = 0;
@@ -402,6 +409,8 @@ void FeynWann::eLoop(const vector3<>& k0, FeynWann::eProcessFunc eProcess, void*
 	Hw->transform(k0);
 	if(fwp.needVelocity)
 		Pw->transform(k0);
+	if(fwp.needSpin)
+		Sw->transform(k0);
 	if(fwp.needLinewidth_ee) ImSigma_eeW->transform(k0);
 	if(fwp.needLinewidth_ePh) ImSigma_ePhW->transform(k0);
 	if(fwp.needLinewidthP_ePh) ImSigmaP_ePhW->transform(k0);
@@ -452,6 +461,8 @@ void FeynWann::ePhLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::ePh
 		{	Hw->transform(k0##i); \
 			if(fwp.needVelocity) \
 				Pw->transform(k0##i); \
+			if(fwp.needSpin) \
+				Sw->transform(k0##i); \
 			if(fwp.needLinewidth_ee) ImSigma_eeW->transform(k0##i); \
 			if(fwp.needLinewidth_ePh) ImSigma_ePhW->transform(k0##i); \
 			if(fwp.needLinewidthP_ePh) ImSigmaP_ePhW->transform(k0##i); \
@@ -583,6 +594,15 @@ void FeynWann::setState(FeynWann::StateE& state)
 				state.vVec[b][iDir] = state.v[iDir](b,b).real();
 		}
 	}
+	if(fwp.needSpin)
+	{	state.Svec.resize(nBands);
+		for(int iDir=0; iDir<3; iDir++)
+		{	state.S[iDir] = dagger(state.U) * getMatrix(Sw->getResult(state.ik), nBands, nBands, iDir) * state.U;
+			//Extract diagonal parts for convenience:
+			for(int b=0; b<nBands; b++)
+				state.Svec[b][iDir] = state.S[iDir](b,b).real();
+		}
+	}
 	//Linewidths, ad needed:
 	if(fwp.needLinewidth_ee)
 		state.ImSigma_ee = diag(dagger(state.U) * getMatrix(ImSigma_eeW->getResult(state.ik), nBands, nBands) * state.U);
@@ -606,12 +626,19 @@ void FeynWann::bcastState(FeynWann::StateE& state, MPIUtil* mpiUtil, int root)
 	//Energy and eigenvectors:
 	bcast(state.E, nBands, mpiUtil, root);
 	bcast(state.U, nBands, nBands, mpiUtil, root);
-	//Velcoity matrix, if needed:
+	//Velocity matrix, if needed:
 	if(fwp.needVelocity)
 	{	for(int iDir=0; iDir<3; iDir++)
 			bcast(state.v[iDir], nBands, nBands, mpiUtil, root);
 		state.vVec.resize(nBands);
-		mpiUtil->bcast(&state.vVec[0][0], 3*nBands, root);
+		mpiUtil->bcastData(state.vVec, root);
+	}
+	//Spin matrix, if needed:
+	if(fwp.needSpin)
+	{	for(int iDir=0; iDir<3; iDir++)
+			bcast(state.S[iDir], nBands, nBands, mpiUtil, root);
+		state.Svec.resize(nBands);
+		mpiUtil->bcastData(state.Svec, root);
 	}
 	//Linewidths, if needed:
 	if(fwp.needLinewidth_ee) bcast(state.ImSigma_ee, nBands, mpiUtil, root);

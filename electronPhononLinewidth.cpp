@@ -32,8 +32,9 @@ struct CollectEph
 	const double T;
 	const double prefacImSigma;
 	const double EconserveExpFac, EconservePrefac; //energy conserving Gaussian exponential and pre-factor
+	const unsigned nP; //number of ImSigma's calculated (linewidth, momentum-relaxation, and if available, spin-relaxation)
 	const std::vector<double>& f1grid; //grid of fillings ofr which e-ph linewidth is calculated
-	std::vector<std::vector<diagMatrix>> ImSigma; //e-ph linewidth for various f1, without and with momentum direction factors
+	std::vector<std::vector<diagMatrix>> ImSigma; //e-ph linewidth for various f1, without and with momentum/spin direction factors
 	std::vector<diagMatrix> E; //save electron energies on DFT mesh for final outputs
 	std::vector<vector3<>> kmesh; //DFT k-point mesh (full version i.e. unreduced)
 	double wOffsetCur; //weight factor of current offset (due to symmetry reduction)
@@ -43,8 +44,9 @@ struct CollectEph
 		prefacImSigma(0.5 * 2*M_PI/(prod(fw.kfold)*prod(NkMult))), //Factor of 0.5 in ImSigma because of psi^2 -> n
 		EconserveExpFac(-0.5/std::pow(EconserveWidth,2)),
 		EconservePrefac(1./(sqrt(2.*M_PI)*EconserveWidth)),
+		nP(fw.isRelativistic() ? 3 : 2),
 		f1grid(FeynWannParams::fGrid_ePh),
-		ImSigma(2*f1grid.size(), std::vector<diagMatrix>(prod(fw.kfold), diagMatrix(fw.nBands))),
+		ImSigma(nP*f1grid.size(), std::vector<diagMatrix>(prod(fw.kfold), diagMatrix(fw.nBands))),
 		E(prod(fw.kfold)), kmesh(prod(fw.kfold))
 	{
 	}
@@ -63,15 +65,19 @@ struct CollectEph
 		const FeynWann::StatePh& ph = *(mEph.ph);
 		const int nBands = e1.E.nRows();
 		const int nModes = ph.omega.nRows();
+		const vector3<> S0; //null spin in non-relativistic modes
 		//Loop over electronic state 1:
 		for(int b1=0; b1<nBands; b1++)
 		{	const double& E1 = e1.E[b1];
 			const vector3<>& v1 = e1.vVec[b1];
+			const vector3<>& S1 = (nP>2 ? e1.Svec[b1] : S0);
 			//Loop over electronic state 2:
 			for(int b2=0; b2<nBands; b2++)
 			{	const double& E2 = e2.E[b2];
 				const vector3<>& v2 = e2.vVec[b2];
+				const vector3<>& S2 = (nP>2 ? e2.Svec[b2] : S0);
 				double cosThetaScatter = dot(v1, v2) / sqrt(std::max(1e-16, v1.length_squared() * v2.length_squared()));
+				double cosThetaScatterS = dot(S1, S2) / sqrt(std::max(1e-16, S1.length_squared() * S2.length_squared()));
 				//Loop over phonon modes:
 				for(int alpha=0; alpha<nModes; alpha++)
 				{	const double& omegaPh = ph.omega[alpha];
@@ -90,10 +96,13 @@ struct CollectEph
 							* nPh*(nPh+1); //contribution numerator before f1-dependent denominator
 						for(unsigned if1=0; if1<f1grid.size(); if1++)
 						{	unsigned if1p = if1 + f1grid.size(); //index for scattering version
+							unsigned if1s = if1 + 2*f1grid.size(); //index for spin version (if present)
 							double contrib = contribNum / (nPh+0.5 + ae*(0.5-f1grid[if1])); //net f1-dependent contribution
 							ImSigma[if1][e1.ik][b1] += contrib;
 							ImSigma[if1p][e1.ik][b1] += contrib * (1.-cosThetaScatter); //scattering version with angle factors
+							if(nP>2) ImSigma[if1s][e1.ik][b1] += contrib * (1.-cosThetaScatterS); //spin-relaxation version
 						}
+						
 					}
 				}
 			}
@@ -105,7 +114,7 @@ struct CollectEph
 	
 	//---- Wannierization ----
 	int cStart, cStop; //range of cells handled here
-	matrix mlwfImSigma[2], phase;
+	matrix mlwfImSigma[3], phase;
 	
 	void wannierize(const FeynWann::StateE& state)
 	{	//Calculate for Fourier transform:
@@ -113,7 +122,7 @@ struct CollectEph
 		for(int c=cStart; c<cStop; c++)
 			phase.set(iCol, c-cStart, cis(-2*M_PI*dot(state.k, fw.cellMap[c])));
 		//For each matrix:
-		for(unsigned iP=0; iP<2; iP++) //without or with P factors
+		for(unsigned iP=0; iP<nP; iP++) //without or with P factors
 			for(unsigned if1=0; if1<f1grid.size(); if1++)
 			{	//Convert to log for the interpolation:
 				diagMatrix logImSigma(ImSigma[if1+iP*f1grid.size()][state.ik]);
@@ -155,7 +164,7 @@ struct CollectEph
 };
 
 
-//Report ImSigma for N states closes to Fermi level
+//Report ImSigma for N states closest to Fermi level
 class FermiImSigmaReport
 {	const size_t N;
 	std::multimap<double, std::pair<double,double>> cache;
@@ -208,6 +217,7 @@ int main(int argc, char** argv)
 	fwp.needCellWeights = true;
 	fwp.needPhonons = true;
 	fwp.needVelocity = true;
+	fwp.needSpin = true;
 	FeynWann fw(fwp);
 	
 	//Check NkMult compatibility with symmetries:
@@ -428,13 +438,14 @@ int main(int argc, char** argv)
 	int ncMine = std::max(1, cEph.cStop - cEph.cStart);
 	int nkMine = std::max(1, fw.Hw->nk);
 	//--- Wannierize
-	for(unsigned iP=0; iP<2; iP++)
+	for(unsigned iP=0; iP<cEph.nP; iP++)
 		cEph.mlwfImSigma[iP] = zeroes(fw.nBands*fw.nBands*cEph.f1grid.size(), nkMine);
 	cEph.phase = zeroes(nkMine, ncMine);
 	fw.eLoop(vector3<>(), CollectEph::eProcess, &cEph);
 	cEph.phase *= (1./cEph.kmesh.size()); //inverse transform normalizing factor
 	cEph.dumpWannierized(cEph.mlwfImSigma[0], fwp.wannierPrefix + ".mlwfImSigma_ePh" + fw.spinSuffix);
 	cEph.dumpWannierized(cEph.mlwfImSigma[1], fwp.wannierPrefix + ".mlwfImSigmaP_ePh" + fw.spinSuffix);
+	if(cEph.nP>2) cEph.dumpWannierized(cEph.mlwfImSigma[2], fwp.wannierPrefix + ".mlwfImSigmaS_ePh" + fw.spinSuffix);
 	
 	fw.free();
 	FeynWann::finalize();

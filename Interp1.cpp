@@ -22,6 +22,7 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 void Interp1::init(string fname, double xScale, double yScale)
 {	logPrintf("Reading '%s': ", fname.c_str()); logFlush();
 	ifstream ifs(fname.c_str());
+	if(!ifs.is_open()) die("Could not open or find '%s' for reading.\n", fname.c_str());
 	string line; //read line by line
 	//Read header:
 	getline(ifs, line);
