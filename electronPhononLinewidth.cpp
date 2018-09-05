@@ -71,6 +71,50 @@ struct CollectEph
 		{	const double& E1 = e1.E[b1];
 			const vector3<>& v1 = e1.vVec[b1];
 			const vector3<>& S1 = (nP>2 ? e1.Svec[b1] : S0);
+			int b2start=0;
+			while (b2start<nBands)
+			{
+			  const double& E2 = e2.E[b2start];
+			  int b2end = b2start;
+			  while(e2.E[b2end] < E2 + threshold && b2end < nBands)
+			  {
+			    b2end++;
+			    for(int b2=b2start; b2 < b2end; b2++)
+			    {
+			      for(int b2p=b2start; b2p < b2end; b2p++)
+			      {
+				//Loop over phonon modes
+				for(int alpha=0; alpha<nModes; alpha++)
+				{	const double& omegaPh = ph.omega[alpha];
+					double omegaPhByT = omegaPh/T;
+					if(omegaPhByT < 1e-3) continue; //avoid 0./0. below
+					double nPh = omegaPhByT>36
+						? 0. //avoid overflow
+						: 1./(exp(omegaPhByT) - 1.);
+					if(!nPh) continue; //no contribution below
+					//Loop over absorption and emission:
+					for(int ae=-1; ae<=+1; ae+=2)
+					{	double EconserveExponent = EconserveExpFac * std::pow((E2-E1 - ae*omegaPh),2);
+						if(EconserveExponent < -15.) continue; //the exponential below will be negligible
+						double delta = EconservePrefac * exp(EconserveExponent);
+						double contribNum = wOffsetCur * prefacImSigma * delta *
+							 nPh*(nPh+1); //contribution numerator before f1-dependent denominator
+						for(unsigned if1=0; if1<f1grid.size(); if1++)2
+						{	unsigned if1p = if1 + f1grid.size(); //index for scattering version
+							unsigned if1s = if1 + 2*f1grid.size(); //index for spin version (if present)
+							double contrib = contribNum / (nPh+0.5 + ae*(0.5-f1grid[if1])); //net f1-dependent contribution
+							ImSigma[if1][e1.ik][b1] += contrib;
+							ImSigma[if1p][e1.ik][b1] += contrib * (1.-cosThetaScatter); //scattering version with angle factors
+							if(nP>2) ImSigma[if1s][e1.ik][b1] += contrib * (1.-cosThetaScatterS); //spin-relaxation version
+						}
+						
+					}
+				}
+				
+				
+			      }
+			    }
+			    
 			//Loop over electronic state 2:
 			for(int b2=0; b2<nBands; b2++)
 			{	const double& E2 = e2.E[b2];
@@ -94,7 +138,7 @@ struct CollectEph
 						double delta = EconservePrefac * exp(EconserveExponent);
 						double contribNum = wOffsetCur * prefacImSigma * delta * mEph.M[alpha](b2,b1).norm()
 							* nPh*(nPh+1); //contribution numerator before f1-dependent denominator
-						for(unsigned if1=0; if1<f1grid.size(); if1++)
+						for(unsigned if1=0; if1<f1grid.size(); if1++)2
 						{	unsigned if1p = if1 + f1grid.size(); //index for scattering version
 							unsigned if1s = if1 + 2*f1grid.size(); //index for spin version (if present)
 							double contrib = contribNum / (nPh+0.5 + ae*(0.5-f1grid[if1])); //net f1-dependent contribution
@@ -115,6 +159,7 @@ struct CollectEph
 	//---- Wannierization ----
 	int cStart, cStop; //range of cells handled here
 	matrix mlwfImSigma[3], phase;
+            double cosThetaScatter;
 	
 	void wannierize(const FeynWann::StateE& state)
 	{	//Calculate for Fourier transform:
@@ -161,6 +206,8 @@ struct CollectEph
 				mEx.dump(fname.c_str(), fw.realPartOnly); //Output
 		}
 	}
+protected:
+            double cosThetaScatter;
 };
 
 

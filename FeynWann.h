@@ -58,7 +58,7 @@ public:
 	{	int ik; //!< index in mesh of dimensions kfold
 		vector3<> k; //!< wave-vector in recip lattice coords
 		diagMatrix E; //!< energy relative to Fermi level (FeynWann::mu)
-		matrix U; //!< rotation from Wannier to eiegen-basis
+		matrix U; //!< rotation from Wannier to eigen-basis
 		matrix v[3]; //!< velocity matrix elements in Cartesian coordinates, available if needVelocity = true
 		std::vector<vector3<>> vVec; //!< band velocities (diagonal part of v) in Cartesian coordinates, available if needVelocity = true
 		matrix S[3]; //!< Spin matrix elements in Cartesian coordinates, available if needSpin = true
