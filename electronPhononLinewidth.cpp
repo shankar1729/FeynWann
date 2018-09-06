@@ -66,6 +66,7 @@ struct CollectEph
 		const int nBands = e1.E.nRows();
 		const int nModes = ph.omega.nRows();
 		const vector3<> S0; //null spin in non-relativistic modes
+		const double threshold = 1e-4;
 		//Loop over electronic state 1:
 		for(int b1=0; b1<nBands; b1++)
 		{	const double& E1 = e1.E[b1];
@@ -83,6 +84,9 @@ struct CollectEph
 			    {
 			      for(int b2p=b2start; b2p < b2end; b2p++)
 			      {
+				const vector3<>& S2 = e2.vVec[b2];
+				const vector3<>& S2p = e2.vVec[b2p];
+				double S2dotS2p = dot(S2,S2p);
 				//Loop over phonon modes
 				for(int alpha=0; alpha<nModes; alpha++)
 				{	const double& omegaPh = ph.omega[alpha];
@@ -104,8 +108,8 @@ struct CollectEph
 							unsigned if1s = if1 + 2*f1grid.size(); //index for spin version (if present)
 							double contrib = contribNum / (nPh+0.5 + ae*(0.5-f1grid[if1])); //net f1-dependent contribution
 							ImSigma[if1][e1.ik][b1] += contrib;
-							ImSigma[if1p][e1.ik][b1] += contrib * (1.-cosThetaScatter); //scattering version with angle factors
-							if(nP>2) ImSigma[if1s][e1.ik][b1] += contrib * (1.-cosThetaScatterS); //spin-relaxation version
+							ImSigma[if1p][e1.ik][b1] += contrib * (1.-cosThetaScatter);//scattering version with angle factors
+							if(nP>2) ImSigma[if1s][e1.ik][b1] += contrib * mEph.M[alpha](b1,b2) * (1.0-S2dotS2p) * conj(mEph.M[alpha](b1,b2p)); //spin-relaxation version
 						}
 						
 					}
@@ -113,7 +117,7 @@ struct CollectEph
 				
 				
 			      }
-			    }
+			  }
 			    
 			//Loop over electronic state 2:
 			for(int b2=0; b2<nBands; b2++)
