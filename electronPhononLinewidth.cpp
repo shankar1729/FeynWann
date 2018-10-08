@@ -76,21 +76,22 @@ struct CollectEph
 			
 			while (b2start<nBands)
 			{
-			  const double& E2 = e2.E[b2start];
-			  int b2end = b2start;
-			  const vector3<>& v2 = e2.vVec[b2start];
-			  double cosThetaScatter = dot(v1, v2) / sqrt(std::max(1e-16, v1.length_squared() * v2.length_squared()));
-			  
-			  while(e2.E[b2end] < E2 + threshold && b2end < nBands)
-			  {
-			    b2end++;
-			    for(int b2=b2start; b2 < b2end; b2++)
-			    {
-			      for(int b2p=b2start; b2p < b2end; b2p++)
-			      {
-				const vector3<>& S2 = e2.vVec[b2];
-				const vector3<>& S2p = e2.vVec[b2p];
-				double S2dotS2p = dot(S2,S2p);
+				const double& E2 = e2.E[b2start];
+				int b2end = b2start;			  
+				while(e2.E[b2end] < E2 + threshold && b2end < nBands)
+				{
+					b2end++;
+					for(int b2=b2start; b2 < b2end; b2++)
+					{
+						for(int b2p=b2start; b2p < b2end; b2p++)
+						{
+						vector3<complex> v2, S2;
+						for(int iDir=0; iDir<3; iDir++)
+						{	v2[iDir] = e2.v[iDir](b2,b2p);
+							if(nP>2) S2[iDir] = e2.S[iDir](b2,b2p);
+						}
+				
+				
 				//Loop over phonon modes
 				for(int alpha=0; alpha<nModes; alpha++)
 				{	const double& omegaPh = ph.omega[alpha];
@@ -112,7 +113,7 @@ struct CollectEph
 							unsigned if1s = if1 + 2*f1grid.size(); //index for spin version (if present)
 							double contrib = contribNum / (nPh+0.5 + ae*(0.5-f1grid[if1])); //net f1-dependent contribution
 							ImSigma[if1][e1.ik][b1] += contrib;
-							ImSigma[if1p][e1.ik][b1] += contrib * (1.-cosThetaScatter);//scattering version with angle factors
+							ImSigma[if1p][e1.ik][b1] += contrib * mEph.M[alpha](b1,b2) * (1.0-v2dotv2p) * conj(mEph.M[alpha](b1,b2p));//scattering version with angle factors
 							if(nP>2) ImSigma[if1s][e1.ik][b1] += contrib * mEph.M[alpha](b1,b2) * (1.0-S2dotS2p) * conj(mEph.M[alpha](b1,b2p)); //spin-relaxation version
 						}
 						
@@ -179,8 +180,8 @@ struct CollectEph
 				mEx.dump(fname.c_str(), fw.realPartOnly); //Output
 		}
 	}
-protected:
-            double cosThetaScatter;
+//protected:
+ //           double cosThetaScatter;
 };
 
 
