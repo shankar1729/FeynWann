@@ -108,6 +108,7 @@ add_FeynWann_executable(electronPhononCoupling)
 add_FeynWann_executable(electronPhononLinewidth)
 add_FeynWann_executable(resistivity)
 add_FeynWann_executable(ImEps)
+add_FeynWann_executable(ImEpsSpin)
 add_FeynWann_executable(ImEpsNonTherm)
 add_FeynWann_executable(phononElectronLinewidth)
 
