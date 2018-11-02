@@ -114,8 +114,8 @@ struct CollectImEps
 					{	ImEps_E.addEvent(E[v], omega, -weight); //hole
 						ImEps_E.addEvent(E[c], omega, +weight); //electron
 						for (int iDir=0; iDir<3; iDir++)
-						{	ImEps_S[iDir].addEvent(E[v], omega, -1.0*(weight*Sv[iDir])); //hole
-							ImEps_S[iDir].addEvent(E[c], omega, -1.0*(weight*Sc[iDir])); //electron
+						{	ImEps_S[iDir].addEvent(E[v], omega, (-weight)*Sv[iDir]); //hole
+							ImEps_S[iDir].addEvent(E[c], omega, (+weight)*Sc[iDir]); //electron
 						}	
 					}
 				}
@@ -185,8 +185,8 @@ struct CollectImEps
 							{	ImEps_E.addEvent(E1[v], omega, -weight); //hole
 								ImEps_E.addEvent(E2[c], omega, +weight); //electron	
 								for (int iDir=0; iDir<3; iDir++)
-								{	ImEps_S[iDir].addEvent(E1[v], omega, -1.0*(weight*Sv[iDir])); //hole
-									ImEps_S[iDir].addEvent(E2[c], omega, -1.0*(weight*Sc[iDir])); //electron
+								{	ImEps_S[iDir].addEvent(E1[v], omega, (-weight)*Sv[iDir]); //hole
+									ImEps_S[iDir].addEvent(E2[c], omega, (+weight)*Sc[iDir]); //electron
 								}	
 							}
 						}
