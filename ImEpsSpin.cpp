@@ -74,7 +74,7 @@ struct CollectImEps
 	void calcStateRelated(const FeynWann::StateE& state, std::vector<diagMatrix>& F, std::vector<diagMatrix>& ImE)
 	{	int nBands = state.E.nRows();
 		F.assign(dmu.size(), diagMatrix(nBands));
-		ImE.assign(dmu.size(), state.ImSigma_ee); //e-e part
+        //ImE.assign(dmu.size(), state.ImSigma_ee); //e-e part
 		
 		for(unsigned iMu=0; iMu<dmu.size(); iMu++)
 		{	for(int b=0; b<nBands; b++)
@@ -109,7 +109,7 @@ struct CollectImEps
 				for(unsigned iMu=0; iMu<dmu.size(); iMu++)
 				{	double weight = weight_F * (F[iMu][v]-F[iMu][c]);
 					ImEps[iMu].addEvent(omega, weight);
-					breadth[iMu].addEvent(omega, weight*(ImE[iMu][c]+ImE[iMu][v]+GammaS));
+					//breadth[iMu].addEvent(omega, weight*(ImE[iMu][c]+ImE[iMu][v]+GammaS));
 					if(iMu==0)
 					{	ImEps_E.addEvent(E[v], omega, -weight); //hole
 						ImEps_E.addEvent(E[c], omega, +weight); //electron
@@ -179,7 +179,7 @@ struct CollectImEps
 						for(unsigned iMu=0; iMu<dmu.size(); iMu++)
 						{	double weight = weight_F * (F1[iMu][v]-F2[iMu][c]);
 							ImEps[iMu].addEvent(omega, weight);
-							breadth[iMu].addEvent(omega, fabs(weight)*(ImE2[iMu][c]+ImE1[iMu][v]+GammaS));
+							//breadth[iMu].addEvent(omega, fabs(weight)*(ImE2[iMu][c]+ImE1[iMu][v]+GammaS));
 							breadthDen[iMu].addEvent(omega, fabs(weight));
 							if(iMu==0)
 							{	ImEps_E.addEvent(E1[v], omega, -weight); //hole
@@ -256,7 +256,7 @@ int main(int argc, char** argv)
 	fwp.needPhonons = (contribType==Phonon);
 	fwp.needVelocity = true;
 	fwp.needSpin = true;
-	fwp.needLinewidth_ee = true;
+	fwp.needLinewidth_ee = false;
 	fwp.needLinewidth_ePh = false;
 	std::shared_ptr<FeynWann> fw = std::make_shared<FeynWann>(fwp);
 	size_t nKeff = nOffsets * (contribType==Direct ? fw->eCountPerOffset() : fw->ePhCountPerOffset());
@@ -334,6 +334,7 @@ int main(int argc, char** argv)
 		}
 		logPrintf("done.\n"); logFlush();
 	}
+	
 	for(int iMu=0; iMu<dmuCount; iMu++)
 	{	cie.ImEps[iMu].allReduce(MPIUtil::ReduceSum);
 		cie.breadth[iMu].allReduce(MPIUtil::ReduceSum);
@@ -345,6 +346,7 @@ int main(int argc, char** argv)
 	cie.ImEps_E.allReduce(MPIUtil::ReduceSum);
 	logPrintf("done.\n"); logFlush();
 	
+	
 	//Normalize the breadths:
 	int nomega = cie.breadth[0].nE;
 	for(int iomega=0; iomega<nomega; iomega++)
@@ -354,7 +356,7 @@ int main(int argc, char** argv)
 					? cie.breadth[iMu].out[iomega]/cie.breadthDen[iMu].out[iomega]
 					: 0.);
 		}
-	cie.breadth[0].print("breadth"+fileSuffix+".dat", 1./eV, 1./eV);
+	cie.breadth[0].print("breadth"+fileSuffix+".dat", 1./eV, 1./eV); 
 	
 	//Apply broadening:
 	std::vector<Histogram> ImEps(dmuCount, Histogram(0, domega, omegaFull));
