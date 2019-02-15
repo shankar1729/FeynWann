@@ -31,6 +31,7 @@ struct FeynWannParams
 	bool needSymmetries; //!< whether to read symmetries from .sym file from JDFTx (default: false)
 	bool needCellWeights; //!< whether to read mlwfCellWeights file (default: false)
 	bool needPhonons; //!< whether to initialize phonon-related quantities (default: false)
+	bool polar; //If the material is polar
 	bool needVelocity; //!< whether to initialize velocity (momentum) matrix elements
 	bool needSpin; //!< whether to initialize spin matrix elements (will be reset to false if not relativstic)
 	bool needLinewidth_ee; //!< whether to provide e-e line-width (default: false)
@@ -140,6 +141,9 @@ public:
 	
 	//Phonons:
 	std::vector< vector3<int> > phononCellMap; //cell map for phonon force matrix
+	diagMatrix invsqrtM; //!< 1/sqrt(M) per nuclear displacement mode
+	std::vector<vector3<>> Zeff; //Born effective charge for polar materials
+	matrix3<> epsInf; // epsilon at infinity for polar material
 	std::shared_ptr<DistributedMatrix> OsqW; //phonon omega-squared matrix
 	void setState(StatePh& state); //!< set requested properties for iq in state
 	void bcastState(StatePh& state, MPIUtil* mpiUtil, int root); //!< broadcast specified state on specified MPI instance

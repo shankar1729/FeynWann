@@ -78,6 +78,40 @@ std::vector<vector3<int>> readCellMap(string fname)
 	return cellMap;
 }
 
+diagMatrix readPhononBasis(string fname)
+{	logPrintf("Reading '%s' ... ", fname.c_str()); logFlush();
+	ifstream ifs(fname); if(!ifs.is_open()) die("could not open file.\n");
+	string headerLine; getline(ifs, headerLine); //read and ignore header line
+	diagMatrix invsqrtM;
+	while(!ifs.eof())
+	{	string line; getline(ifs, line);
+		trim(line);
+		if(!line.length()) continue;
+		istringstream iss(line);
+		string spName; int atom; vector3<> disp;
+		iss >> spName >> atom >> disp[0] >> disp[1] >> disp[2];
+		if(!iss.fail())
+		{	invsqrtM.push_back(disp.length());
+		}
+	}
+	return invsqrtM;		
+}
+
+//Read an array of vector3<> from a plain text file
+std::vector<vector3<>> readArrayVec3(string fname)
+{	logPrintf("Reading '%s' ... ", fname.c_str()); logFlush();
+	ifstream ifs(fname); if(!ifs.is_open()) die("could not open file.\n");
+	string headerLine; getline(ifs, headerLine); //read and ignore header line
+	std::vector<vector3<double>> fileData;
+	vector3<double> ij; //lattice coords version (store)
+	while(ifs >> ij[0] >> ij[1] >> ij[2])
+		fileData.push_back(ij);
+	ifs.close();
+	logPrintf("done.\n");
+	return fileData;
+}
+
+
 FeynWann::FeynWann(FeynWannParams& fwp)
 : fwp(fwp), nSpins(0), nSpinor(0), spinWeight(0), mu(NAN), nElectrons(0)
 {	
@@ -296,8 +330,10 @@ FeynWann::FeynWann(FeynWannParams& fwp)
 		}
 		logPrintf("\n");
 		
-		//Read phonon cell map
+		//Read phonon cell map and basis:
 		phononCellMap = readCellMap(fwp.wannierPrefix + ".mlwfCellMapPh" + spinSuffix);
+		invsqrtM = readPhononBasis(fwp.phononPrefix + ".phononBasis");
+		invsqrtM.resize(nModes);
 		
 		//Read phonon force matrix
 		fname = fwp.wannierPrefix + ".mlwfOmegaSqPh" + spinSuffix;
@@ -308,6 +344,12 @@ FeynWann::FeynWann(FeynWannParams& fwp)
 		fname = fwp.wannierPrefix + ".mlwfHePh" + spinSuffix;
 		HePhW = std::make_shared<DistributedMatrix>(fname, realPartOnly,
 			mpiGroup, nModes*nBands*nBands, phononCellMap, phononSup, true);
+		
+		if(fwp.polar)
+		{	Zeff = readArrayVec3(fwp.totalEprefix + ".Zeff");
+			std::vector<vector3<>> eps = readArrayVec3(fwp.totalEprefix + ".epsInf");
+			epsInf.set_rows(eps[0], eps[1], eps[2]);
+		}
 	}
 	
 	//Velocity matrix elements
@@ -541,12 +583,33 @@ void FeynWann::ePhLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::ePh
 						int ik2net = calculateIndex(ik2sup + elemwiseProd(kfoldSup, ik2v), kfold);
 						m.e1 = &e1[ik1net];
 						m.e2 = &e2[ik2net];
+						//Prepare quantities for polar correction (if needed):
+						//TODO complete and check
+						vector3<> qgLCart;
+						if(fwp.polar)
+						{	vector3<> qgL ; //= m.ph->q  k2-k1;
+							for(int iDir=0; iDir<3; iDir++)
+								qgL[iDir] -= floor(m.ph->q[iDir] + 0.5); //wrap to fundamental BZ
+							matrix3<> G = (2.*M_PI)*inv(R);
+							matrix3<> GT = ~G;
+							qgLCart =  GT * qgL;
+						}
 						//Extract matrices for each phonon mode:
 						const double omegaPhCut = 1e-6;
 						m.M.resize(nModes);
 						for(int iMode=0; iMode<nModes; iMode++)
+						{	matrix HePhS = getMatrix(Mall.data(), nBands, nBands, iMode); //short term wannier interpolated HePh
+							if(fwp.polar)
+							{	//TODO check
+								complex gLij = complex(0,1)
+									* (4*M_PI*invsqrtM[iMode] / (det(R) * sqrt(prodSup)))
+									* dot(qgLCart, Zeff[iMode])/ dot(epsInf*qgLCart, qgLCart);
+								for (int ib = 0; ib < nBands; ib++)
+									HePhS.data()[HePhS.index(ib, ib)] += gLij;
+							}
 							m.M[iMode] = sqrt(m.ph->omega[iMode]<omegaPhCut ? 0. : 0.5/m.ph->omega[iMode]) //frequency-dependent phonon amplitude
-								* (dagger(m.e1->U) * getMatrix(Mall.data(), nBands, nBands, iMode) * m.e2->U); //to E1 and E2 eigenbasis
+								* (dagger(m.e1->U) * HePhS * m.e2->U); //to E1 and E2 eigenbasis
+						}
 						watchRotations.stop();
 						//Invoke call-back function:
 						watchCallback.start();
