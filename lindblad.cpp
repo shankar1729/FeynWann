@@ -38,7 +38,8 @@ struct Lindblad
 	const std::vector<vector3<>>& k0; //!< k-point offsets
 	const int oStart, oStop, noMine; //!< range of offsets handled by this process group
 	const int ikStart, ikStop, nkMine; //!< range of k-points within offset handled by this process
-
+	const size_t nkTot; //!< total number of k-points effectively used in BZ sampling
+	
 	int o; //!< current offset being worked on by this process group (used as an outer loop variable)
 	std::vector<matrix> rho; //!< current density matrices (indexed by offset and ik)
 	inline int index(int ik) { return ik-ikStart + nkMine*(o-oStart); } //!< index to density matrix at ik and current o
@@ -47,18 +48,19 @@ struct Lindblad
 	const double pumpOmega, pumpA0, pumpTau; const vector3<complex> pumpPol; //!< pump parameters
 	const double omegaMin, domega; const int nomega; //!< probe frequency grid
 	const double tau; const std::vector<vector3<complex>> pol; //!< probe parameters
+	diagMatrix imEps; //!< current probe response for each polarization (outer index) and frequency (inner index)
 	
 	Lindblad(FeynWann& fw, const std::vector<vector3<>>& k0, int oStart, int oStop,
 		double dmu, double T, double pumpOmega, double pumpA0, double pumpTau, vector3<complex> pumpPol,
 		double omegaMin, double omegaMax, double domega, double tau, std::vector<vector3<complex>> pol)
 	: fw(fw), k0(k0), oStart(oStart), oStop(oStop), noMine(oStop-oStart),
 		ikStart(fw.Hw->ikStart), ikStop(ikStart+fw.Hw->nk), nkMine(ikStop-ikStart),
+		nkTot(k0.size() * fw.eCountPerOffset()),
 		rho(noMine * nkMine), dmu(dmu), T(T), invT(1./T),
 		pumpOmega(pumpOmega), pumpA0(pumpA0), pumpTau(pumpTau), pumpPol(pumpPol),
 		omegaMin(omegaMin), domega(domega), nomega(1+int(round((omegaMax-omegaMin)/domega))),
-		tau(tau), pol(pol)
+		tau(tau), pol(pol), imEps(pol.size()*nomega)
 	{
-		
 	}
 	
 	//--------- Initialize -------------
@@ -91,7 +93,7 @@ struct Lindblad
 		for(int b2=0; b2<fw.nBands; b2++)
 			for(int b1=0; b1<fw.nBands; b1++)
 			{	//Multiply energy conservation:
-				double tauDeltaE = tau*(s.E[b1] - s.E[b2] - pumpOmega);
+				double tauDeltaE = pumpTau*(s.E[b1] - s.E[b2] - pumpOmega);
 				*(PDdata++) *= normFac * exp(-0.5*tauDeltaE*tauDeltaE);
 			}
 		
@@ -111,6 +113,7 @@ struct Lindblad
 	
 	void initialize()
 	{	state.resize(rho.size());
+		
 		//Initialize eLoop:
 		int oInterval = std::max(1, int(round(noMine/50.))); //interval for reporting progress
 		logPrintf("\nInitializing electronic quantities: "); logFlush();
@@ -123,52 +126,60 @@ struct Lindblad
 	}
 	
 	
+	//Calculate probe response at current rho (update this->imEps)
+	void calcImEps()
+	{	if(not pol.size()) return; //no probe specified
+		//Clear previous results:
+		eblas_zero(imEps.nRows(), imEps.data());
+		//Collect contributions from each k at this process:
+		matrix* rhoPtr = rho.data();
+		State* sPtr = state.data();
+		for(int o=oStart; o<oStop; o++)
+			for(int ik=ikStart; ik<ikStop; ik++)
+			{	const matrix& rhoCur = *(rhoPtr);
+				matrix rhoBar = eye(fw.nBands) - rhoCur; //1-rho
+				//Probe response:
+				for(int iomega=0; iomega<nomega; iomega++)
+				{	double omega = omegaMin + iomega*domega;
+					double prefac = 4*M_PI/(nkTot * std::pow(std::max(omega, 1./tau), 3));
+					//Energy conservation factors for all pair of bands at this frequency:
+					std::vector<double> delta(fw.nBands*fw.nBands);
+					double* deltaData = delta.data();
+					double normFac = sqrt(tau/sqrt(M_PI));
+					for(int b2=0; b2<fw.nBands; b2++)
+						for(int b1=0; b1<fw.nBands; b1++)
+						{	double tauDeltaE = tau*(sPtr->E[b1] - sPtr->E[b2] - omega);
+							*(deltaData++) *= normFac * exp(-0.5*tauDeltaE*tauDeltaE);
+						}
+					//Loop over polarizations:
+					for(int iPol=0; iPol<int(pol.size()); iPol++)
+					{	//Multiply matrix elements with energy conservation:
+						matrix P = sPtr->P[iPol];
+						eblas_zmuld(P.nData(), delta.data(),1, P.data(),1); //P-
+						matrix Pdag = dagger(P); //P+
+						//Loop over directions:
+						diagMatrix deltaRhoDiag(fw.nBands);
+						for(int s=-1; s<=+1; s+=2)
+						{	deltaRhoDiag += diag(rhoBar*P*rhoCur*Pdag - Pdag*rhoBar*P*rhoCur);
+							std::swap(P, Pdag); //P- <--> P+
+						}
+						imEps[iPol*nomega+iomega] += prefac * dot(sPtr->E, deltaRhoDiag);
+					}
+				}
+				//Advance pointers for next k:
+				rhoPtr++;
+				sPtr++;
+			}
+		//Accumulate contributions from all processes on head:
+		mpiWorld->reduceData(imEps, MPIUtil::ReduceSum);
+	}
+	
 	//Stage 1: FGR pump eLoop (optional): rho0 += rho2 (TODO)
 	
 	//Stage 2: time evolution operator eLoop  (TODO)
 	
 	//Stage 3: time evolution operator ePhLoop (TODO)
 	
-	//DeltaRho = P * RHo) * +h.c.
-		//ImEps += Tr(DeltaRho)
-	/*
-	//---- Direct transitions ----
-	void collectDirect(const FeynWann::StateE& state)
-	{	int nBands = state.E.nRows();
-		const diagMatrix& E = state.E;
-		//rho0 
-		matrix rho0 = zeros(nBands, nBands);
-		for(int v=0; v<nV; v++)
-			rho0 += 1;
-		//Project dipole matrix elements on field:
-		matrix P;
-		for(int iDir=0; iDir<3; iDir++)
-			P += A0 * Ehat[iDir] * state.v[iDir];
-		
-		matrix deltaRho(nBands,nBands) = zeros(nBands, nBands);
-		diagMatrix Id(nBands) = eye(nBands);
-		
-			//Collect 
-		for(int v=0; v<nBands; v++) //if(E[v]<EvMax)
-		{	for(int c=0; c<nBands; c++) //if(E[c]>EcMin)
-			{	double deltaE = E[c] - E[v] - omega; //energy conservation
-				double deltaPrefac = tau/std::sqrt(M_PI);
-				double eConserv = std::sqrt(deltaPrefac*exp(-std::pow(deltaE*tau, 2)));
-				P += eConserv;
-			}
-						
-		}
-		for (int s=0; s<2; s++)
-		{	//TODO deltarho
-			deltaRho += M_PI*((Id-rho0)*P*rho0*daggar(P) - dagger(P)*(Id-rho0)*P*rho0);
-			P = daggerP;					
-		}
-	}
-	
-	static void direct(const FeynWann::StateE& state, void* params)
-	{	((CollectImEps*)params)->collectDirect(state);
-	}
-	*/
 };
 
 inline void print(FILE* fp, const vector3<complex>& v, const char* format="%lg ")
