@@ -157,7 +157,7 @@ struct Lindblad
 						matrix P = sPtr->P[iPol];
 						eblas_zmuld(P.nData(), delta.data(),1, P.data(),1); //P-
 						matrix Pdag = dagger(P); //P+
-						//Loop over directions:
+						//Loop over directions of excitations:
 						diagMatrix deltaRhoDiag(fw.nBands);
 						for(int s=-1; s<=+1; s+=2)
 						{	deltaRhoDiag += diag(rhoBar*P*rhoCur*Pdag - Pdag*rhoBar*P*rhoCur);
@@ -174,7 +174,29 @@ struct Lindblad
 		mpiWorld->reduceData(imEps, MPIUtil::ReduceSum);
 	}
 	
-	//Stage 1: FGR pump eLoop (optional): rho0 += rho2 (TODO)
+	//Apply pump using perturbation theory (instantly go from before to after pump, skipping time evolution)
+	void applyPump()
+	{	matrix* rhoPtr = rho.data();
+		State* sPtr = state.data();
+		//Perturb each k separately:
+		for(int o=oStart; o<oStop; o++)
+			for(int ik=ikStart; ik<ikStop; ik++)
+			{	matrix& rhoCur = *(rhoPtr);
+				matrix rhoBar = eye(fw.nBands) - rhoCur; //1-rho
+				//Compute and apply perturbation:
+				matrix P = sPtr->pumpPD; //P-
+				matrix Pdag = dagger(P); //P+
+				matrix deltaRho;
+				for(int s=-1; s<=+1; s+=2)
+				{	deltaRho += rhoBar*P*rhoCur*Pdag - Pdag*rhoBar*P*rhoCur;
+					std::swap(P, Pdag); //P- <--> P+
+				}
+				rhoCur += (M_PI*pumpA0*pumpA0) * (deltaRho + dagger(deltaRho));
+				//Advance pointers for next k:
+				rhoPtr++;
+				sPtr++;
+			}
+	}
 	
 	//Stage 2: time evolution operator eLoop  (TODO)
 	
