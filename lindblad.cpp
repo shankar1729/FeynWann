@@ -25,14 +25,17 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 #include "FeynWann.h"
 #include "Histogram.h"
 #include "InputMap.h"
+#include "Integrator.h"
 #include <core/Units.h>
 
 inline matrix dot(const matrix* P, vector3<complex> pol)
 {	return pol[0]*P[0] + pol[1]*P[1] + pol[2]*P[2];
 }
 
+typedef std::vector<matrix> DM1; //array of density matrices at each k
+
 //Lindblad initialization, time evolution and measurement operators using FeynWann callback
-struct Lindblad
+struct Lindblad : public Integrator<DM1>
 {	
 	FeynWann& fw;
 	const std::vector<vector3<>>& k0; //!< k-point offsets
@@ -42,14 +45,13 @@ struct Lindblad
 	
 	int stepID; //current time and reporting step number
 	int o; //!< current offset being worked on by this process group (used as an outer loop variable)
-	std::vector<matrix> rho; //!< current density matrices (indexed by offset and ik)
+	DM1 rho; //!< current density matrices (indexed by offset and ik)
 	inline int index(int ik) { return ik-ikStart + nkMine*(o-oStart); } //!< index to density matrix at ik and current o
 	
 	const double dmu, T, invT; //!< Fermi level position relative to neutral value / VBM, and temperature
 	const double pumpOmega, pumpA0, pumpTau; const vector3<complex> pumpPol; //!< pump parameters
 	const double omegaMin, domega; const int nomega; //!< probe frequency grid
 	const double tau; const std::vector<vector3<complex>> pol; //!< probe parameters
-	diagMatrix imEps; //!< current probe response for each polarization (outer index) and frequency (inner index)
 	const double dE; //!< energy resolution for distribution functions
 	
 	Lindblad(FeynWann& fw, const std::vector<vector3<>>& k0, int oStart, int oStop,
@@ -61,7 +63,7 @@ struct Lindblad
 		rho(noMine * nkMine), dmu(dmu), T(T), invT(1./T),
 		pumpOmega(pumpOmega), pumpA0(pumpA0), pumpTau(pumpTau), pumpPol(pumpPol),
 		omegaMin(omegaMin), domega(domega), nomega(1+int(round((omegaMax-omegaMin)/domega))),
-		tau(tau), pol(pol), imEps(pol.size()*nomega), dE(dE)
+		tau(tau), pol(pol), dE(dE)
 	{
 	}
 	
@@ -144,15 +146,15 @@ struct Lindblad
 	
 	
 	//Calculate probe response at current rho (update this->imEps)
-	void calcImEps()
+	diagMatrix calcImEps() const
 	{	static StopWatch watch("Lindblad::calcImEps");
-		if(not imEps.size()) return; //no probe specified
+		size_t nImEps = pol.size() * nomega;
+		if(nImEps==0) return diagMatrix(); //no probe specified
 		watch.start();
-		//Clear previous results:
-		eblas_zero(imEps.nRows(), imEps.data());
+		diagMatrix imEps(nImEps);
 		//Collect contributions from each k at this process:
-		matrix* rhoPtr = rho.data();
-		State* sPtr = state.data();
+		const matrix* rhoPtr = rho.data();
+		const State* sPtr = state.data();
 		for(int o=oStart; o<oStop; o++)
 			for(int ik=ikStart; ik<ikStop; ik++)
 			{	const matrix& rhoCur = *(rhoPtr);
@@ -193,10 +195,11 @@ struct Lindblad
 		//Accumulate contributions from all processes on head:
 		mpiWorld->reduceData(imEps, MPIUtil::ReduceSum);
 		watch.stop();
+		return imEps;
 	}
 	
 	//Write current imEps to plain-text file:
-	void writeImEps(string fname)
+	void writeImEps(string fname, const diagMatrix& imEps) const
 	{	if(mpiWorld->isHead())
 		{	ofstream ofs(fname);
 			ofs << "#omega[eV]";
@@ -239,12 +242,18 @@ struct Lindblad
 		watch.stop();
 	}
 	
+	//Time evolution operator returning drho/dt
+	DM1 compute(double t, const DM1& rho)
+	{
+		return DM1();
+	}
+	
 	//Stage 2: time evolution operator eLoop  (TODO)
 	
 	//Stage 3: time evolution operator ePhLoop (TODO)
 	
 	//Print / dump quantities at each checkpointed step
-	void report(double t)
+	void report(double t, const DM1& rho) const
 	{	static StopWatch watch("Lindblad::report"); watch.start();
 		ostringstream ossID; ossID << stepID;
 		//Compute total energy and distributions:
@@ -252,8 +261,8 @@ struct Lindblad
 		std::vector<Histogram> dist(nDist, Histogram(Emin, dE, Emax));
 		const double prefac = fw.spinWeight * (1./nkTot);
 		double Etot = 0.;
-		matrix* rhoPtr = rho.data();
-		State* sPtr = state.data();
+		const matrix* rhoPtr = rho.data();
+		const State* sPtr = state.data();
 		for(int o=oStart; o<oStop; o++)
 			for(int ik=ikStart; ik<ikStop; ik++)
 			{	matrix drho = *(rhoPtr) - sPtr->rho0;
@@ -311,11 +320,10 @@ struct Lindblad
 		}
 		watch.stop();
 		//Probe responses if present:
+		diagMatrix imEps = calcImEps();
 		if(imEps.size())
-		{	calcImEps();
-			writeImEps("imEps."+ossID.str());
-		}
-		stepID++;
+			writeImEps("imEps."+ossID.str(), imEps);
+		((Lindblad*)this)->stepID++;
 	}
 };
 
@@ -341,6 +349,7 @@ int main(int argc, char** argv)
 	const double dmu = inputMap.get("dmu", 0.) * eV; //optional: shift in fermi level from neutral value / VBM in eV (default: 0)
 	const double T = inputMap.get("T") * Kelvin; //temperature in Kelvin (ambient phonon T = initial electron T)
 	//--- pump
+	const string pumpMode = inputMap.getString("pumpMode"); //must be Perturb or Evolve
 	const double pumpOmega = inputMap.get("pumpOmega") * eV; //pump frequency in eV
 	const double pumpA0 = inputMap.get("pumpA0"); //pump pulse amplitude / intensity (Units TBD)
 	const double pumpTau = inputMap.get("pumpTau")*fs; //Gaussian pump pulse width in fs
@@ -370,6 +379,9 @@ int main(int argc, char** argv)
 	logPrintf("NkMult = "); NkMult.print(globalLog, " %d ");
 	logPrintf("dmu = %lg\n", dmu);
 	logPrintf("T = %lg\n", T);
+	if(pumpMode!="Evolve" and pumpMode!="Perturb")
+		die("\npumpMode must be 'Evolve' or 'Perturb'\n");
+	logPrintf("pumpMode = %s\n", pumpMode.c_str());
 	logPrintf("pumpOmega = %lg\n", pumpOmega);
 	logPrintf("pumpA0 = %lg\n", pumpA0);
 	logPrintf("pumpTau = %lg\n", pumpTau);
@@ -433,10 +445,15 @@ int main(int argc, char** argv)
 		omegaMin, omegaMax, domega, tau, pol, dE);
 	lb.initialize();
 	
-	//Simple probe-pump-probe:
-	lb.report(-dt);
-	lb.applyPump();
-	lb.report(0.);
+	if(pumpMode == "Perturb")
+	{	//Simple probe-pump-probe:
+		lb.report(-dt, lb.rho);
+		lb.applyPump();
+		lb.report(0., lb.rho);
+	}
+	else
+	{	die("Not yet implemented.\n");
+	}
 	
 	//Cleanup:
 	fw.free();
