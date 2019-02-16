@@ -128,7 +128,9 @@ struct Lindblad
 	
 	//Calculate probe response at current rho (update this->imEps)
 	void calcImEps()
-	{	if(not pol.size()) return; //no probe specified
+	{	static StopWatch watch("Lindblad::calcImEps");
+		if(not pol.size()) return; //no probe specified
+		watch.start();
 		//Clear previous results:
 		eblas_zero(imEps.nRows(), imEps.data());
 		//Collect contributions from each k at this process:
@@ -173,6 +175,7 @@ struct Lindblad
 			}
 		//Accumulate contributions from all processes on head:
 		mpiWorld->reduceData(imEps, MPIUtil::ReduceSum);
+		watch.stop();
 	}
 	
 	//Write current imEps to plain-text file:
@@ -195,7 +198,8 @@ struct Lindblad
 	
 	//Apply pump using perturbation theory (instantly go from before to after pump, skipping time evolution)
 	void applyPump()
-	{	matrix* rhoPtr = rho.data();
+	{	static StopWatch watch("Lindblad::applyPump"); watch.start();
+		matrix* rhoPtr = rho.data();
 		State* sPtr = state.data();
 		//Perturb each k separately:
 		for(int o=oStart; o<oStop; o++)
@@ -215,6 +219,7 @@ struct Lindblad
 				rhoPtr++;
 				sPtr++;
 			}
+		watch.stop();
 	}
 	
 	//Stage 2: time evolution operator eLoop  (TODO)
