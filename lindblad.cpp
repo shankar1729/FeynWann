@@ -40,6 +40,7 @@ struct Lindblad
 	const int ikStart, ikStop, nkMine; //!< range of k-points within offset handled by this process
 	const size_t nkTot; //!< total number of k-points effectively used in BZ sampling
 	
+	int stepID; //current time and reporting step number
 	int o; //!< current offset being worked on by this process group (used as an outer loop variable)
 	std::vector<matrix> rho; //!< current density matrices (indexed by offset and ik)
 	inline int index(int ik) { return ik-ikStart + nkMine*(o-oStart); } //!< index to density matrix at ik and current o
@@ -49,17 +50,18 @@ struct Lindblad
 	const double omegaMin, domega; const int nomega; //!< probe frequency grid
 	const double tau; const std::vector<vector3<complex>> pol; //!< probe parameters
 	diagMatrix imEps; //!< current probe response for each polarization (outer index) and frequency (inner index)
+	const double dE; //!< energy resolution for distribution functions
 	
 	Lindblad(FeynWann& fw, const std::vector<vector3<>>& k0, int oStart, int oStop,
 		double dmu, double T, double pumpOmega, double pumpA0, double pumpTau, vector3<complex> pumpPol,
-		double omegaMin, double omegaMax, double domega, double tau, std::vector<vector3<complex>> pol)
+		double omegaMin, double omegaMax, double domega, double tau, std::vector<vector3<complex>> pol, double dE)
 	: fw(fw), k0(k0), oStart(oStart), oStop(oStop), noMine(oStop-oStart),
 		ikStart(fw.Hw->ikStart), ikStop(ikStart+fw.Hw->nk), nkMine(ikStop-ikStart),
-		nkTot(k0.size() * fw.eCountPerOffset()),
+		nkTot(k0.size() * fw.eCountPerOffset()), stepID(0), o(0),
 		rho(noMine * nkMine), dmu(dmu), T(T), invT(1./T),
 		pumpOmega(pumpOmega), pumpA0(pumpA0), pumpTau(pumpTau), pumpPol(pumpPol),
 		omegaMin(omegaMin), domega(domega), nomega(1+int(round((omegaMax-omegaMin)/domega))),
-		tau(tau), pol(pol), imEps(pol.size()*nomega)
+		tau(tau), pol(pol), imEps(pol.size()*nomega), dE(dE)
 	{
 	}
 	
@@ -68,10 +70,13 @@ struct Lindblad
 	//Cache required properties per state
 	struct State
 	{	diagMatrix E; //energy eigenvalues (i.e. H0)
+		diagMatrix rho0; //equilibrium / initial density matrix (diagonal)
 		std::vector<matrix> P; //P matrix elements for each probe polarization (energy conservation delta (D) not included)
+		std::vector<matrix> S; //spin matrix elements (if available)
 		matrix pumpPD; //P matrix elements at pump polarization x energy conservation delta (D), but without A0 and time factor
 	};
 	std::vector<State> state;
+	double Emin, Emax; //range of energies in grid
 	
 	inline void initializeE(const FeynWann::StateE& stateE)
 	{	
@@ -82,6 +87,8 @@ struct Lindblad
 		//Cache required properties to state:
 		//--- Energies
 		s.E = stateE.E;
+		Emin = std::min(Emin, s.E.front());
+		Emax = std::max(Emax, s.E.back());
 		//--- Probe matrix elements (without energy conservation)
 		s.P.clear(); s.P.reserve(pol.size());
 		for(const vector3<complex>& pol_i: pol)
@@ -96,16 +103,19 @@ struct Lindblad
 				double tauDeltaE = pumpTau*(s.E[b1] - s.E[b2] - pumpOmega);
 				*(PDdata++) *= normFac * exp(-0.5*tauDeltaE*tauDeltaE);
 			}
+		//--- Spin matrix elements
+		if(fw.fwp.needSpin)
+			s.S.assign(stateE.S, stateE.S+3);
 		
 		//Set rho to initial occupations:
-		diagMatrix rho0(fw.nBands);
+		s.rho0.resize(fw.nBands);
 		for(int b=0; b<fw.nBands; b++)
 		{	double expArg = (s.E[b]-dmu)*invT;
-			rho0[b] = (expArg < -30.) ? 1.
+			s.rho0[b] = (expArg < -30.) ? 1.
 				: ((expArg > +30.) ? 0.
 				: 1./(1.+exp(expArg)) );
 		}
-		rho[rhoIndex] = rho0;
+		rho[rhoIndex] = s.rho0;
 	}
 	static void initializeE(const FeynWann::StateE& stateE, void* params)
 	{	((Lindblad*)params)->initializeE(stateE);
@@ -113,6 +123,8 @@ struct Lindblad
 	
 	void initialize()
 	{	state.resize(rho.size());
+		Emin = +DBL_MAX;
+		Emax = -DBL_MAX;
 		
 		//Initialize eLoop:
 		int oInterval = std::max(1, int(round(noMine/50.))); //interval for reporting progress
@@ -123,12 +135,19 @@ struct Lindblad
 			if((o-oStart+1)%oInterval==0) { logPrintf("%d%% ", int(round((o-oStart+1)*100./noMine))); logFlush(); }
 		}
 		logPrintf("done.\n"); logFlush();
+		
+		//Synchronize energy range:
+		mpiWorld->allReduce(Emin, MPIUtil::ReduceMin);
+		mpiWorld->allReduce(Emax, MPIUtil::ReduceMax);
+		logPrintf("Energy grid from %lg eV to %lg eV with spacing %lg eV.\n\n", Emin/eV, Emax/eV, dE/eV);
 	}
 	
 	
 	//Calculate probe response at current rho (update this->imEps)
 	void calcImEps()
-	{	if(not pol.size()) return; //no probe specified
+	{	static StopWatch watch("Lindblad::calcImEps");
+		if(not imEps.size()) return; //no probe specified
+		watch.start();
 		//Clear previous results:
 		eblas_zero(imEps.nRows(), imEps.data());
 		//Collect contributions from each k at this process:
@@ -141,7 +160,7 @@ struct Lindblad
 				//Probe response:
 				for(int iomega=0; iomega<nomega; iomega++)
 				{	double omega = omegaMin + iomega*domega;
-					double prefac = 4*M_PI/(nkTot * fw.Omega * std::pow(std::max(omega, 1./tau), 3));
+					double prefac = (4*M_PI*fw.spinWeight)/(nkTot * fw.Omega * std::pow(std::max(omega, 1./tau), 3));
 					//Energy conservation factors for all pair of bands at this frequency:
 					std::vector<double> delta(fw.nBands*fw.nBands);
 					double* deltaData = delta.data();
@@ -173,6 +192,7 @@ struct Lindblad
 			}
 		//Accumulate contributions from all processes on head:
 		mpiWorld->reduceData(imEps, MPIUtil::ReduceSum);
+		watch.stop();
 	}
 	
 	//Write current imEps to plain-text file:
@@ -195,7 +215,8 @@ struct Lindblad
 	
 	//Apply pump using perturbation theory (instantly go from before to after pump, skipping time evolution)
 	void applyPump()
-	{	matrix* rhoPtr = rho.data();
+	{	static StopWatch watch("Lindblad::applyPump"); watch.start();
+		matrix* rhoPtr = rho.data();
 		State* sPtr = state.data();
 		//Perturb each k separately:
 		for(int o=oStart; o<oStop; o++)
@@ -215,12 +236,87 @@ struct Lindblad
 				rhoPtr++;
 				sPtr++;
 			}
+		watch.stop();
 	}
 	
 	//Stage 2: time evolution operator eLoop  (TODO)
 	
 	//Stage 3: time evolution operator ePhLoop (TODO)
 	
+	//Print / dump quantities at each checkpointed step
+	void report(double t)
+	{	static StopWatch watch("Lindblad::report"); watch.start();
+		ostringstream ossID; ossID << stepID;
+		//Compute total energy and distributions:
+		int nDist = fw.fwp.needSpin ? 4 : 1; //number distribution only, or also spin distribution
+		std::vector<Histogram> dist(nDist, Histogram(Emin, dE, Emax));
+		const double prefac = fw.spinWeight * (1./nkTot);
+		double Etot = 0.;
+		matrix* rhoPtr = rho.data();
+		State* sPtr = state.data();
+		for(int o=oStart; o<oStop; o++)
+			for(int ik=ikStart; ik<ikStop; ik++)
+			{	matrix drho = *(rhoPtr) - sPtr->rho0;
+				//Energy and distribution:
+				const complex* drhoData = drho.data();
+				for(int b=0; b<fw.nBands; b++)
+				{	double weight = prefac * drhoData->real();
+					Etot += weight * sPtr->E[b];
+					dist[0].addEvent(sPtr->E[b], weight);
+					drhoData += (fw.nBands+1); //advance to next diagonal entry
+				}
+				//Spin distribution of available:
+				if(fw.fwp.needSpin)
+				{	const complex* drhoData = drho.data();
+					vector3<const complex*> Sdata; for(int k=0; k<3; k++) Sdata[k] = sPtr->S[k].data();
+					for(int b2=0; b2<fw.nBands; b2++)
+					{	int i = b2*fw.nBands; //offset into data
+						for(int b1=0; b1<=b2; b1++) //use Hermitian symmetry
+						{	complex weight = ((b1==b2 ? 1 : 2) * prefac) * drhoData[i];
+							//Precalculate histogram position:
+							double E = 0.5*(sPtr->E[b1] + sPtr->E[b2]);
+							int iEvent; double tEvent;
+							if(dist[1].eventPrecalc(E, iEvent, tEvent))
+							{	//Collect spin densities:
+								for(int k=0; k<3; k++)
+									dist[k+1].addEventPrecalc(iEvent, tEvent, (weight * Sdata[k][i]).real());
+							}
+							//Advance to next entry of Hermitian matrix:
+							i++;
+						}
+					}
+				}
+				//Advance pointers for next k:
+				rhoPtr++;
+				sPtr++;
+			}
+		mpiWorld->reduce(Etot, MPIUtil::ReduceSum);
+		for(Histogram& h: dist) h.reduce(MPIUtil::ReduceSum);
+		if(mpiWorld->isHead())
+		{	//Report step ID and energy:
+			logPrintf("Step: %4d   t[fs]: %6.1lf   Etot[eV]: %+.6lf\n", stepID, t/fs, Etot/eV);
+			//Save distribution functions:
+			ofstream ofs("dist."+ossID.str());
+			ofs << "#E-mu/VBM[eV] n[eV^-1]";
+			if(fw.fwp.needSpin)
+				ofs << "Sx[eV^-1] Sy[eV^-1] Sz[eV^-1]";
+			ofs << "\n";
+			for(int iE=0; iE<dist[0].nE; iE++)
+			{	double E = Emin + iE*dE;
+				ofs << E/eV;
+				for(int iDist=0; iDist<nDist; iDist++)
+					ofs << '\t' << dist[iDist].out[iE]*eV;
+				ofs << '\n';
+			}
+		}
+		watch.stop();
+		//Probe responses if present:
+		if(imEps.size())
+		{	calcImEps();
+			writeImEps("imEps."+ossID.str());
+		}
+		stepID++;
+	}
 };
 
 inline void print(FILE* fp, const vector3<complex>& v, const char* format="%lg ")
@@ -266,7 +362,10 @@ int main(int argc, char** argv)
 		if(polRe.length_squared() + polIm.length_squared() == 0.) break; //End of probe polarizations
 		pol.push_back(normalize(complex(1,0)*polRe + complex(0,1)*polIm));
 	}
-
+	const double dE = inputMap.get("dE") * eV; //energy resolution for distribution functions
+	const double dt = inputMap.get("dt") * fs; //time interval between reports
+	const double tStop = inputMap.get("tStop") * fs; //stopping time for simulation
+	
 	logPrintf("\nInputs after conversion to atomic units:\n");
 	logPrintf("NkMult = "); NkMult.print(globalLog, " %d ");
 	logPrintf("dmu = %lg\n", dmu);
@@ -283,6 +382,7 @@ int main(int argc, char** argv)
 	{	logPrintf("pol%d = ", iPol+1);
 		print(globalLog, pol[iPol]);
 	}
+	logPrintf("dE = %lg\n", dE);
 
 	//Initialize FeynWann:
 	FeynWannParams fwp;
@@ -330,15 +430,13 @@ int main(int argc, char** argv)
 	//Create and initialize lindblad calculator:
 	Lindblad lb(fw, k0, oStart, oStop, dmu, T,
 		pumpOmega, pumpA0, pumpTau, pumpPol,
-		omegaMin, omegaMax, domega, tau, pol);
+		omegaMin, omegaMax, domega, tau, pol, dE);
 	lb.initialize();
 	
 	//Simple probe-pump-probe:
-	lb.calcImEps();
-	lb.writeImEps("imEps.0");
+	lb.report(-dt);
 	lb.applyPump();
-	lb.calcImEps();
-	lb.writeImEps("imEps.1");
+	lb.report(0.);
 	
 	//Cleanup:
 	fw.free();

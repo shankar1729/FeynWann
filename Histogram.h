@@ -41,6 +41,7 @@ struct Histogram
 	inline void addEventPrecalc(int iEvent, double tEvent, double weight); //!< add event with precalculated location
 	
 	void allReduce(MPIUtil::ReduceOp op, bool safeMode=false); //collect over MPI
+	void reduce(MPIUtil::ReduceOp op, int root=0); //collect over MPI
 	void print(string fname, double Escale, double histScale) const; //write to file
 };
 

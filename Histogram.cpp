@@ -54,6 +54,11 @@ void Histogram::allReduce(MPIUtil::ReduceOp op, bool safeMode)
 		mpiWorld->allReduceData(out, op, safeMode);
 }
 
+void Histogram::reduce(MPIUtil::ReduceOp op, int root)
+{	if(mpiWorld->nProcesses()>1)
+		mpiWorld->reduceData(out, op, root);
+}
+
 void Histogram::print(string fname, double Escale, double histScale) const
 {	if(!mpiWorld->isHead()) return;
 	ofstream ofs(fname.c_str());
