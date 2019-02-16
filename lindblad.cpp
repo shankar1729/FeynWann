@@ -117,7 +117,7 @@ struct Lindblad
 		//Initialize eLoop:
 		int oInterval = std::max(1, int(round(noMine/50.))); //interval for reporting progress
 		logPrintf("\nInitializing electronic quantities: "); logFlush();
-		for(int o=oStart; o<oStop; o++)
+		for(o=oStart; o<oStop; o++)
 		{	fw.eLoop(k0[o], Lindblad::initializeE, this);
 			//Print progress:
 			if((o-oStart+1)%oInterval==0) { logPrintf("%d%% ", int(round((o-oStart+1)*100./noMine))); logFlush(); }
@@ -141,7 +141,7 @@ struct Lindblad
 				//Probe response:
 				for(int iomega=0; iomega<nomega; iomega++)
 				{	double omega = omegaMin + iomega*domega;
-					double prefac = 4*M_PI/(nkTot * std::pow(std::max(omega, 1./tau), 3));
+					double prefac = 4*M_PI/(nkTot * fw.Omega * std::pow(std::max(omega, 1./tau), 3));
 					//Energy conservation factors for all pair of bands at this frequency:
 					std::vector<double> delta(fw.nBands*fw.nBands);
 					double* deltaData = delta.data();
@@ -149,8 +149,9 @@ struct Lindblad
 					for(int b2=0; b2<fw.nBands; b2++)
 						for(int b1=0; b1<fw.nBands; b1++)
 						{	double tauDeltaE = tau*(sPtr->E[b1] - sPtr->E[b2] - omega);
-							*(deltaData++) *= normFac * exp(-0.5*tauDeltaE*tauDeltaE);
+							*(deltaData++) = normFac * exp(-0.5*tauDeltaE*tauDeltaE);
 						}
+					//logPrintf("max(delta) = %lg\n", *std::max_element(delta.begin(), delta.end()));
 					//Loop over polarizations:
 					for(int iPol=0; iPol<int(pol.size()); iPol++)
 					{	//Multiply matrix elements with energy conservation:
@@ -333,8 +334,10 @@ int main(int argc, char** argv)
 	lb.initialize();
 	
 	//Simple probe-pump-probe:
+	lb.calcImEps();
 	lb.writeImEps("imEps.0");
 	lb.applyPump();
+	lb.calcImEps();
 	lb.writeImEps("imEps.1");
 	
 	//Cleanup:
