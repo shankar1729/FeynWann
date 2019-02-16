@@ -25,7 +25,7 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 
 FeynWannParams::FeynWannParams()
 : iSpin(0), totalEprefix("Wannier/totalE"), phononPrefix("Wannier/phonon"), wannierPrefix("Wannier/wannier"),
-needSymmetries(false), needCellWeights(false), needPhonons(false), needVelocity(false), needSpin(false),
+needSymmetries(false), needCellWeights(false), needPhonons(false), polar(false), needVelocity(false), needSpin(false),
 needLinewidth_ee(false), needLinewidth_ePh(false), needLinewidthP_ePh(false)
 {
 }
@@ -332,8 +332,6 @@ FeynWann::FeynWann(FeynWannParams& fwp)
 		
 		//Read phonon cell map and basis:
 		phononCellMap = readCellMap(fwp.wannierPrefix + ".mlwfCellMapPh" + spinSuffix);
-		invsqrtM = readPhononBasis(fwp.phononPrefix + ".phononBasis");
-		invsqrtM.resize(nModes);
 		
 		//Read phonon force matrix
 		fname = fwp.wannierPrefix + ".mlwfOmegaSqPh" + spinSuffix;
@@ -346,7 +344,9 @@ FeynWann::FeynWann(FeynWannParams& fwp)
 			mpiGroup, nModes*nBands*nBands, phononCellMap, phononSup, true);
 		
 		if(fwp.polar)
-		{	Zeff = readArrayVec3(fwp.totalEprefix + ".Zeff");
+		{	invsqrtM = readPhononBasis(fwp.totalEprefix + ".phononBasis");
+			invsqrtM.resize(nModes);
+			Zeff = readArrayVec3(fwp.totalEprefix + ".Zeff");
 			std::vector<vector3<>> eps = readArrayVec3(fwp.totalEprefix + ".epsInf");
 			epsInf.set_rows(eps[0], eps[1], eps[2]);
 		}
