@@ -27,32 +27,101 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 #include "InputMap.h"
 #include <core/Units.h>
 
-//Get energy range from an eLoop call:
-struct EnergyRange
-{	double Emin;
-	double Emax;
-	
-	static void eProcess(const FeynWann::StateE& state, void* params)
-	{	EnergyRange& er = *((EnergyRange*)params);
-		er.Emin = std::min(er.Emin, state.E.front()); //E is in ascending order
-		er.Emax = std::max(er.Emax, state.E.back()); //E is in ascending order
-	}
-};
+inline matrix dot(const matrix* P, vector3<complex> pol)
+{	return pol[0]*P[0] + pol[1]*P[1] + pol[2]*P[2];
+}
 
 //Lindblad initialization, time evolution and measurement operators using FeynWann callback
 struct Lindblad
 {	
-	const FeynWann& fw;
-	std::vector<matrix> rho; //current density matrices (indexed by offset and ik)
-	//TODO rho0
+	FeynWann& fw;
+	const std::vector<vector3<>>& k0; //!< k-point offsets
+	const int oStart, oStop, noMine; //!< range of offsets handled by this process group
+	const int ikStart, ikStop, nkMine; //!< range of k-points within offset handled by this process
+
+	int o; //!< current offset being worked on by this process group (used as an outer loop variable)
+	std::vector<matrix> rho; //!< current density matrices (indexed by offset and ik)
+	inline int index(int ik) { return ik-ikStart + nkMine*(o-oStart); } //!< index to density matrix at ik and current o
 	
-	Lindblad(const FeynWann& fw)
-	: fw(fw)
+	const double dmu, T, invT; //!< Fermi level position relative to neutral value / VBM, and temperature
+	const double pumpOmega, pumpA0, pumpTau; const vector3<complex> pumpPol; //!< pump parameters
+	const double omegaMin, domega; const int nomega; //!< probe frequency grid
+	const double tau; const std::vector<vector3<complex>> pol; //!< probe parameters
+	
+	Lindblad(FeynWann& fw, const std::vector<vector3<>>& k0, int oStart, int oStop,
+		double dmu, double T, double pumpOmega, double pumpA0, double pumpTau, vector3<complex> pumpPol,
+		double omegaMin, double omegaMax, double domega, double tau, std::vector<vector3<complex>> pol)
+	: fw(fw), k0(k0), oStart(oStart), oStop(oStop), noMine(oStop-oStart),
+		ikStart(fw.Hw->ikStart), ikStop(ikStart+fw.Hw->nk), nkMine(ikStop-ikStart),
+		rho(noMine * nkMine), dmu(dmu), T(T), invT(1./T),
+		pumpOmega(pumpOmega), pumpA0(pumpA0), pumpTau(pumpTau), pumpPol(pumpPol),
+		omegaMin(omegaMin), domega(domega), nomega(1+int(round((omegaMax-omegaMin)/domega))),
+		tau(tau), pol(pol)
 	{
+		
 	}
 	
+	//--------- Initialize -------------
 	
-	//Stage 0: initialize eLoop: set rho0 (TODO)
+	//Cache required properties per state
+	struct State
+	{	diagMatrix E; //energy eigenvalues (i.e. H0)
+		std::vector<matrix> P; //P matrix elements for each probe polarization (energy conservation delta (D) not included)
+		matrix pumpPD; //P matrix elements at pump polarization x energy conservation delta (D), but without A0 and time factor
+	};
+	std::vector<State> state;
+	
+	inline void initializeE(const FeynWann::StateE& stateE)
+	{	
+		//Identify destination for results:
+		int rhoIndex = index(stateE.ik);
+		State& s = state[rhoIndex];
+		
+		//Cache required properties to state:
+		//--- Energies
+		s.E = stateE.E;
+		//--- Probe matrix elements (without energy conservation)
+		s.P.clear(); s.P.reserve(pol.size());
+		for(const vector3<complex>& pol_i: pol)
+			s.P.push_back(dot(stateE.v, pol_i));
+		//--- Pump matrix elements
+		s.pumpPD = dot(stateE.v, pumpPol);
+		double normFac = sqrt(pumpTau/sqrt(M_PI));
+		complex* PDdata = s.pumpPD.data();
+		for(int b2=0; b2<fw.nBands; b2++)
+			for(int b1=0; b1<fw.nBands; b1++)
+			{	//Multiply energy conservation:
+				double tauDeltaE = tau*(s.E[b1] - s.E[b2] - pumpOmega);
+				*(PDdata++) *= normFac * exp(-0.5*tauDeltaE*tauDeltaE);
+			}
+		
+		//Set rho to initial occupations:
+		diagMatrix rho0(fw.nBands);
+		for(int b=0; b<fw.nBands; b++)
+		{	double expArg = (s.E[b]-dmu)*invT;
+			rho0[b] = (expArg < -30.) ? 1.
+				: ((expArg > +30.) ? 0.
+				: 1./(1.+exp(expArg)) );
+		}
+		rho[rhoIndex] = rho0;
+	}
+	static void initializeE(const FeynWann::StateE& stateE, void* params)
+	{	((Lindblad*)params)->initializeE(stateE);
+	}
+	
+	void initialize()
+	{	state.resize(rho.size());
+		//Initialize eLoop:
+		int oInterval = std::max(1, int(round(noMine/50.))); //interval for reporting progress
+		logPrintf("\nInitializing electronic quantities: "); logFlush();
+		for(int o=oStart; o<oStop; o++)
+		{	fw.eLoop(k0[o], Lindblad::initializeE, this);
+			//Print progress:
+			if((o-oStart+1)%oInterval==0) { logPrintf("%d%% ", int(round((o-oStart+1)*100./noMine))); logFlush(); }
+		}
+		logPrintf("done.\n"); logFlush();
+	}
+	
 	
 	//Stage 1: FGR pump eLoop (optional): rho0 += rho2 (TODO)
 	
@@ -120,6 +189,9 @@ int main(int argc, char** argv)
 	NkMult[0] = inputMap.get("NkxMult", NkMultAll); //override increase in x direction
 	NkMult[1] = inputMap.get("NkyMult", NkMultAll); //override increase in y direction
 	NkMult[2] = inputMap.get("NkzMult", NkMultAll); //override increase in z direction
+	//--- doping / temperature
+	const double dmu = inputMap.get("dmu", 0.) * eV; //optional: shift in fermi level from neutral value / VBM in eV (default: 0)
+	const double T = inputMap.get("T") * Kelvin; //temperature in Kelvin (ambient phonon T = initial electron T)
 	//--- pump
 	const double pumpOmega = inputMap.get("pumpOmega") * eV; //pump frequency in eV
 	const double pumpA0 = inputMap.get("pumpA0"); //pump pulse amplitude / intensity (Units TBD)
@@ -128,8 +200,8 @@ int main(int argc, char** argv)
 		complex(1,0)*inputMap.getVector("pumpPolRe", vector3<>(1.,0.,0.)) +  //Real part of polarization
 		complex(0,1)*inputMap.getVector("pumpPolIm", vector3<>(0.,0.,0.)) ); //Imag part of polarization
 	//--- probes
-	const double omegaMin = inputMap.get("omegaMin", 0.) * eV; //optional start of frequency grid for probe response (default: 0)
-	double omegaMax = inputMap.get("omegaMax", 0.) * eV; //optional end of frequency grid for probe response (default 0 => max available DeltaE)
+	const double omegaMin = inputMap.get("omegaMin") * eV; //start of frequency grid for probe response
+	const double omegaMax = inputMap.get("omegaMax") * eV; //end of frequency grid for probe response
 	const double domega = inputMap.get("domega") * eV; //frequency resolution for probe calculation
 	const double tau = inputMap.get("tau") * fs; //Gaussian probe pulse width in fs
 	std::vector<vector3<complex>> pol;
@@ -145,6 +217,8 @@ int main(int argc, char** argv)
 
 	logPrintf("\nInputs after conversion to atomic units:\n");
 	logPrintf("NkMult = "); NkMult.print(globalLog, " %d ");
+	logPrintf("dmu = %lg\n", dmu);
+	logPrintf("T = %lg\n", T);
 	logPrintf("pumpOmega = %lg\n", pumpOmega);
 	logPrintf("pumpA0 = %lg\n", pumpA0);
 	logPrintf("pumpTau = %lg\n", pumpTau);
@@ -200,42 +274,15 @@ int main(int argc, char** argv)
 		TaskDivision(nOffsets, mpiGroupHead).myRange(oStart, oStop);
 	mpiGroup->bcast(oStart);
 	mpiGroup->bcast(oStop);
-	int noMine = oStop-oStart; //number of offsets handled by current group
-	int oInterval = std::max(1, int(round(noMine/50.))); //interval for reporting progress
 	
-	//Initialize frequency grid:
-	EnergyRange er = { DBL_MAX, -DBL_MAX };
-	fw.eLoop(vector3<>(), EnergyRange::eProcess, &er);
-	mpiWorld->allReduce(er.Emin, MPIUtil::ReduceMin);
-	mpiWorld->allReduce(er.Emax, MPIUtil::ReduceMax);
-	if(!omegaMax) omegaMax = er.Emax - er.Emin;
-
-	/*
-	//Calculate delta-function resolved versions (no broadening yet):
-	CollectImEps cie(tau, A0, domega, omegaFull, omegaMax);
-	cie.prefac = 2. * M_PI * fw->spinWeight / (std::pow(A0,2)*nKeff*fabs(det(fw->R))); //frequency independent part of prefactor
-	cie.Ehat = Ehat;
+	//Create and initialize lindblad calculator:
+	Lindblad lb(fw, k0, oStart, oStop, dmu, T,
+		pumpOmega, pumpA0, pumpTau, pumpPol,
+		omegaMin, omegaMax, domega, tau, pol);
+	lb.initialize();
 	
-	for(int iSpin=0; iSpin<fw->nSpins; iSpin++)
-	{	//Update FeynWann for spin channel if necessary:
-		if(iSpin>0)
-		{	fw = 0; //free memory from previous spin
-			fwp.iSpin = iSpin;
-			fw = std::make_shared<FeynWann>(fwp);
-		}
-		logPrintf("\nCollecting ImEps: "); logFlush();
-		for(int o=0; o<noMine; o++)
-		{	Random::seed(o+oStart); //to make results independent of MPI division
-			//Process with a random offset:
-			vector3<> k0 = fw->randomVector(mpiGroup); //must be constant across group
-			fw->eLoop(k0, CollectImEps::direct, &cie);
-			//Print progress:
-			if((o+1)%oInterval==0) { logPrintf("%d%% ", int(round((o+1)*100./noMine))); logFlush(); }
-		}
-		logPrintf("done.\n"); logFlush();
-	}
-	//current 
-	cie.ImEps.allReduce(MPIUtil::ReduceSum);
-	int iomegaStart, iomegaStop; TaskDivision(nomega, mpiWorld).myRange(iomegaStart, iomegaStop);
-	*/
+	//Cleanup:
+	fw.free();
+	FeynWann::finalize();
+	return 0;
 }
