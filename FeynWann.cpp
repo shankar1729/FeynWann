@@ -336,9 +336,16 @@ FeynWann::FeynWann(FeynWannParams& fwp)
 		invsqrtM.resize(nModes);
 		
 		//Read phonon force matrix
+		std::vector<vector3<int>> phononCellMapCorr = phononCellMap;
 		fname = fwp.wannierPrefix + ".mlwfOmegaSqPh" + spinSuffix;
+		//--- check if a corrected force matrix file exists:
+		string fnameCorr = fwp.wannierPrefix + ".mlwfOmegaSqPhCorr" + spinSuffix;
+		if(fileSize(fnameCorr.c_str()) > 0) //corrected force matrix exists
+		{	fname = fnameCorr; //read it instead, and read corresponding cell map (used only for omegaSq, not HePh)
+			phononCellMapCorr = readCellMap(fwp.wannierPrefix + ".mlwfCellMapPhCorr" + spinSuffix);
+		}
 		OsqW = std::make_shared<DistributedMatrix>(fname, true, //phonon omegaSq is always real
-			mpiGroup, nModes*nModes, phononCellMap, phononSup, false);
+			mpiGroup, nModes*nModes, phononCellMapCorr, phononSup, false);
 		
 		//Read electron-phonon matrix elements
 		fname = fwp.wannierPrefix + ".mlwfHePh" + spinSuffix;
