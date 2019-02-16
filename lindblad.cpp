@@ -174,6 +174,24 @@ struct Lindblad
 		mpiWorld->reduceData(imEps, MPIUtil::ReduceSum);
 	}
 	
+	//Write current imEps to plain-text file:
+	void writeImEps(string fname)
+	{	if(mpiWorld->isHead())
+		{	ofstream ofs(fname);
+			ofs << "#omega[eV]";
+			for(int iPol=0; iPol<int(pol.size()); iPol++)
+				ofs << " ImEps" << (iPol+1);
+			ofs << "\n";
+			for(int iomega=0; iomega<nomega; iomega++)
+			{	double omega = omegaMin + iomega*domega;
+				ofs << omega/eV;
+				for(int iPol=0; iPol<int(pol.size()); iPol++)
+					ofs << '\t' << imEps[iPol*nomega+iomega];
+				ofs << '\n';
+			}
+		}
+	}
+	
 	//Apply pump using perturbation theory (instantly go from before to after pump, skipping time evolution)
 	void applyPump()
 	{	matrix* rhoPtr = rho.data();
@@ -313,6 +331,11 @@ int main(int argc, char** argv)
 		pumpOmega, pumpA0, pumpTau, pumpPol,
 		omegaMin, omegaMax, domega, tau, pol);
 	lb.initialize();
+	
+	//Simple probe-pump-probe:
+	lb.writeImEps("imEps.0");
+	lb.applyPump();
+	lb.writeImEps("imEps.1");
 	
 	//Cleanup:
 	fw.free();
