@@ -111,6 +111,7 @@ add_FeynWann_executable(ImEps)
 add_FeynWann_executable(ImEpsSpin)
 add_FeynWann_executable(ImEpsNonTherm)
 add_FeynWann_executable(phononElectronLinewidth)
+add_FeynWann_executable(lindblad)
 add_FeynWann_executable(ePhRelax)
 target_link_libraries(ePhRelax ${GSL_LIBRARY})
 
