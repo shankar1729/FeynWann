@@ -334,7 +334,7 @@ FeynWann::FeynWann(FeynWannParams& fwp)
 		phononCellMap = readCellMap(fwp.wannierPrefix + ".mlwfCellMapPh" + spinSuffix);
 		
 		//Read phonon force matrix
-		std::vector<vector3<int>> phononCellMapCorr = phononCellMap;
+		phononCellMapCorr = phononCellMap;
 		fname = fwp.wannierPrefix + ".mlwfOmegaSqPh" + spinSuffix;
 		//--- check if a corrected force matrix file exists:
 		string fnameCorr = fwp.wannierPrefix + ".mlwfOmegaSqPhCorr" + spinSuffix;
