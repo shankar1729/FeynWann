@@ -68,19 +68,19 @@ struct Lindblad : public Integrator<DM1>
 	inline int index(int ik) { return ik-ikStart + nkMine*(o-oStart); } //!< index to density matrix at ik and current o
 	
 	const double dmu, T, invT; //!< Fermi level position relative to neutral value / VBM, and temperature
-	const double pumpOmega, pumpA0, pumpTau; const vector3<complex> pumpPol; //!< pump parameters
+	const double pumpOmega, pumpA0, pumpTau; const vector3<complex> pumpPol; const bool pumpEvolve; //!< pump parameters
 	const double omegaMin, domega; const int nomega; //!< probe frequency grid
 	const double tau; const std::vector<vector3<complex>> pol; //!< probe parameters
 	const double dE; //!< energy resolution for distribution functions
 	
 	Lindblad(FeynWann& fw, const std::vector<vector3<>>& k0, int oStart, int oStop,
-		double dmu, double T, double pumpOmega, double pumpA0, double pumpTau, vector3<complex> pumpPol,
+		double dmu, double T, double pumpOmega, double pumpA0, double pumpTau, vector3<complex> pumpPol, bool pumpEvolve,
 		double omegaMin, double omegaMax, double domega, double tau, std::vector<vector3<complex>> pol, double dE)
 	: fw(fw), k0(k0), oStart(oStart), oStop(oStop), noMine(oStop-oStart),
 		ikStart(fw.Hw->ikStart), ikStop(ikStart+fw.Hw->nk), nkMine(ikStop-ikStart),
 		nkTot(k0.size() * fw.eCountPerOffset()), stepID(0), o(0),
 		rho(noMine * nkMine), dmu(dmu), T(T), invT(1./T),
-		pumpOmega(pumpOmega), pumpA0(pumpA0), pumpTau(pumpTau), pumpPol(pumpPol),
+		pumpOmega(pumpOmega), pumpA0(pumpA0), pumpTau(pumpTau), pumpPol(pumpPol), pumpEvolve(pumpEvolve),
 		omegaMin(omegaMin), domega(domega), nomega(1+int(round((omegaMax-omegaMin)/domega))),
 		tau(tau), pol(pol), dE(dE)
 	{
@@ -237,9 +237,11 @@ struct Lindblad : public Integrator<DM1>
 	
 	//Apply pump using perturbation theory (instantly go from before to after pump, skipping time evolution)
 	void applyPump()
-	{	static StopWatch watch("Lindblad::applyPump"); watch.start();
+	{	static StopWatch watch("Lindblad::applyPump"); 
+		if(pumpEvolve) return; //only use this function when perturbing instantly
+		watch.start();
 		matrix* rhoPtr = rho.data();
-		State* sPtr = state.data();
+		const State* sPtr = state.data();
 		//Perturb each k separately:
 		for(int o=oStart; o<oStop; o++)
 			for(int ik=ikStart; ik<ikStop; ik++)
@@ -264,9 +266,35 @@ struct Lindblad : public Integrator<DM1>
 	//Time evolution operator returning drho/dt
 	DM1 compute(double t, const DM1& rho)
 	{	static StopWatch watch("Lindblad::compute"); watch.start();
-		//TODO
+		DM1 rhoDot(nkMine*noMine, zeroes(fw.nBands, fw.nBands));
+		//Pump contribution:
+		if(pumpEvolve)
+		{	double prefac = sqrt(M_PI)*pumpA0*pumpA0/pumpTau * exp(-(t*t)/(pumpTau*pumpTau));
+			//Each k contributes separately:
+			matrix* rhoDotPtr = rhoDot.data();
+			const matrix* rhoPtr = rho.data();
+			const State* sPtr = state.data();
+			for(int o=oStart; o<oStop; o++)
+				for(int ik=ikStart; ik<ikStop; ik++)
+				{	const matrix& rhoCur = *(rhoPtr);
+					const matrix rhoBar = eye(fw.nBands) - rhoCur; //1-rho
+					//Compute and apply perturbation:
+					matrix P = sPtr->pumpPD; //P-
+					matrix Pdag = dagger(P); //P+
+					matrix deltaRho;
+					for(int s=-1; s<=+1; s+=2)
+					{	deltaRho += rhoBar*P*rhoCur*Pdag - Pdag*rhoBar*P*rhoCur;
+						std::swap(P, Pdag); //P- <--> P+
+					}
+					*(rhoDotPtr) += prefac * (deltaRho + dagger(deltaRho));
+					//Advance pointers for next k:
+					rhoDotPtr++;
+					rhoPtr++;
+					sPtr++;
+				}
+		}
 		watch.stop();
-		return DM1(nkMine*noMine, zeroes(fw.nBands, fw.nBands));
+		return rhoDot;
 	}
 	
 	//Stage 2: time evolution operator eLoop  (TODO)
@@ -281,7 +309,7 @@ struct Lindblad : public Integrator<DM1>
 		int nDist = fw.fwp.needSpin ? 4 : 1; //number distribution only, or also spin distribution
 		std::vector<Histogram> dist(nDist, Histogram(Emin, dE, Emax));
 		const double prefac = fw.spinWeight * (1./nkTot);
-		double Etot = 0.;
+		double Etot = 0., dfMax = 0.;
 		const matrix* rhoPtr = rho.data();
 		const State* sPtr = state.data();
 		for(int o=oStart; o<oStop; o++)
@@ -292,6 +320,7 @@ struct Lindblad : public Integrator<DM1>
 				for(int b=0; b<fw.nBands; b++)
 				{	double weight = prefac * drhoData->real();
 					Etot += weight * sPtr->E[b];
+					dfMax = std::max(dfMax, fabs(drhoData->real()));
 					dist[0].addEvent(sPtr->E[b], weight);
 					drhoData += (fw.nBands+1); //advance to next diagonal entry
 				}
@@ -321,10 +350,11 @@ struct Lindblad : public Integrator<DM1>
 				sPtr++;
 			}
 		mpiWorld->reduce(Etot, MPIUtil::ReduceSum);
+		mpiWorld->reduce(dfMax, MPIUtil::ReduceMax);
 		for(Histogram& h: dist) h.reduce(MPIUtil::ReduceSum);
 		if(mpiWorld->isHead())
 		{	//Report step ID and energy:
-			logPrintf("Integrate: Step: %4d   t[fs]: %6.1lf   Etot[eV]: %+.6lf\n", stepID, t/fs, Etot/eV);
+			logPrintf("Integrate: Step: %4d   t[fs]: %6.1lf   Etot[eV]: %.6lf   dfMax: %.3lg\n", stepID, t/fs, Etot/eV, dfMax);
 			//Save distribution functions:
 			ofstream ofs("dist."+ossID.str());
 			ofs << "#E-mu/VBM[eV] n[eV^-1]";
@@ -462,7 +492,7 @@ int main(int argc, char** argv)
 	
 	//Create and initialize lindblad calculator:
 	Lindblad lb(fw, k0, oStart, oStop, dmu, T,
-		pumpOmega, pumpA0, pumpTau, pumpPol,
+		pumpOmega, pumpA0, pumpTau, pumpPol, (pumpMode=="Evolve"),
 		omegaMin, omegaMax, domega, tau, pol, dE);
 	lb.initialize();
 	
