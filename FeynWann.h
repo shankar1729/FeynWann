@@ -140,7 +140,7 @@ public:
 	void bcastState(StateE& state, MPIUtil* mpiUtil, int root); //!< broadcast specified state on specified MPI instance
 	
 	//Phonons:
-	std::vector< vector3<int> > phononCellMap; //cell map for phonon force matrix
+	std::vector< vector3<int> > phononCellMap, phononCellMapCorr; //cell map for phonon force matrix (and a possibly different corrected version for omegaSq alone)
 	diagMatrix invsqrtM; //!< 1/sqrt(M) per nuclear displacement mode
 	std::vector<vector3<>> Zeff; //Born effective charge for polar materials
 	matrix3<> epsInf; // epsilon at infinity for polar material
