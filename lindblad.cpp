@@ -73,16 +73,20 @@ struct Lindblad : public Integrator<DM1>
 	const double tau; const std::vector<vector3<complex>> pol; //!< probe parameters
 	const double dE; //!< energy resolution for distribution functions
 	
+	const bool ePhEnabled; //!< whether e-ph coupling is enabled
+	const double ePhDelta; //!< Gaussian energy conservation width
+	
 	Lindblad(FeynWann& fw, const std::vector<vector3<>>& k0, int oStart, int oStop,
 		double dmu, double T, double pumpOmega, double pumpA0, double pumpTau, vector3<complex> pumpPol, bool pumpEvolve,
-		double omegaMin, double omegaMax, double domega, double tau, std::vector<vector3<complex>> pol, double dE)
+		double omegaMin, double omegaMax, double domega, double tau, std::vector<vector3<complex>> pol, double dE,
+		bool ePhEnabled, double ePhDelta)
 	: fw(fw), k0(k0), oStart(oStart), oStop(oStop), noMine(oStop-oStart),
 		ikStart(fw.Hw->ikStart), ikStop(ikStart+fw.Hw->nk), nkMine(ikStop-ikStart),
 		nkTot(k0.size() * fw.eCountPerOffset()), stepID(0), o(0),
 		rho(noMine * nkMine), dmu(dmu), T(T), invT(1./T),
 		pumpOmega(pumpOmega), pumpA0(pumpA0), pumpTau(pumpTau), pumpPol(pumpPol), pumpEvolve(pumpEvolve),
 		omegaMin(omegaMin), domega(domega), nomega(1+int(round((omegaMax-omegaMin)/domega))),
-		tau(tau), pol(pol), dE(dE)
+		tau(tau), pol(pol), dE(dE), ePhEnabled(ePhEnabled), ePhDelta(ePhDelta)
 	{
 	}
 	
@@ -160,7 +164,14 @@ struct Lindblad : public Integrator<DM1>
 		//Synchronize energy range:
 		mpiWorld->allReduce(Emin, MPIUtil::ReduceMin);
 		mpiWorld->allReduce(Emax, MPIUtil::ReduceMax);
-		logPrintf("Energy grid from %lg eV to %lg eV with spacing %lg eV.\n\n", Emin/eV, Emax/eV, dE/eV);
+		logPrintf("Energy grid from %lg eV to %lg eV with spacing %lg eV.\n", Emin/eV, Emax/eV, dE/eV);
+		
+		//Initialize ePhLoop (if needed):
+		if(ePhEnabled)
+		{	//TODO
+		}
+		
+		logPrintf("\n");
 	}
 	
 	
@@ -265,11 +276,13 @@ struct Lindblad : public Integrator<DM1>
 	
 	//Time evolution operator returning drho/dt
 	DM1 compute(double t, const DM1& rho)
-	{	static StopWatch watch("Lindblad::compute"); watch.start();
+	{	static StopWatch watchPump("Lindblad::compute::Pump");
+		static StopWatch watchEph("Lindblad::compute::ePh");
 		DM1 rhoDot(nkMine*noMine, zeroes(fw.nBands, fw.nBands));
 		//Pump contribution:
 		if(pumpEvolve)
-		{	double prefac = sqrt(M_PI)*pumpA0*pumpA0/pumpTau * exp(-(t*t)/(pumpTau*pumpTau));
+		{	watchPump.start();
+			double prefac = sqrt(M_PI)*pumpA0*pumpA0/pumpTau * exp(-(t*t)/(pumpTau*pumpTau));
 			//Each k contributes separately:
 			matrix* rhoDotPtr = rhoDot.data();
 			const matrix* rhoPtr = rho.data();
@@ -292,8 +305,14 @@ struct Lindblad : public Integrator<DM1>
 					rhoPtr++;
 					sPtr++;
 				}
+			watchPump.stop();
 		}
-		watch.stop();
+		//E-ph relaxation contribution:
+		if(ePhEnabled)
+		{	watchEph.start();
+			//TODO
+			watchEph.stop();
+		}
 		return rhoDot;
 	}
 	
@@ -401,6 +420,8 @@ int main(int argc, char** argv)
 	const double T = inputMap.get("T") * Kelvin; //temperature in Kelvin (ambient phonon T = initial electron T)
 	//--- pump
 	const string pumpMode = inputMap.getString("pumpMode"); //must be Perturb or Evolve
+	if(pumpMode!="Evolve" and pumpMode!="Perturb")
+		die("\npumpMode must be 'Evolve' or 'Perturb'\n");
 	const double pumpOmega = inputMap.get("pumpOmega") * eV; //pump frequency in eV
 	const double pumpA0 = inputMap.get("pumpA0"); //pump pulse amplitude / intensity (Units TBD)
 	const double pumpTau = inputMap.get("pumpTau")*fs; //Gaussian pump pulse width in fs
@@ -426,12 +447,16 @@ int main(int argc, char** argv)
 	const double dt = inputMap.get("dt") * fs; //time interval between reports
 	const double tStop = inputMap.get("tStop") * fs; //stopping time for simulation
 	
+	const string ePhMode = inputMap.getString("ePhMode"); //must be Off or DiagK (add FullK in future)
+	if(ePhMode!="Off" and ePhMode!="DiagK")
+		die("\nePhMode must be 'Off' or 'DiagK'\n");
+	const bool ePhEnabled = (ePhMode != "Off");
+	const double ePhDelta = inputMap.get("ePhDelta") * eV; //energy conservation width for e-ph coupling
+	
 	logPrintf("\nInputs after conversion to atomic units:\n");
 	logPrintf("NkMult = "); NkMult.print(globalLog, " %d ");
 	logPrintf("dmu = %lg\n", dmu);
 	logPrintf("T = %lg\n", T);
-	if(pumpMode!="Evolve" and pumpMode!="Perturb")
-		die("\npumpMode must be 'Evolve' or 'Perturb'\n");
 	logPrintf("pumpMode = %s\n", pumpMode.c_str());
 	logPrintf("pumpOmega = %lg\n", pumpOmega);
 	logPrintf("pumpA0 = %lg\n", pumpA0);
@@ -446,11 +471,16 @@ int main(int argc, char** argv)
 		print(globalLog, pol[iPol]);
 	}
 	logPrintf("dE = %lg\n", dE);
+	logPrintf("dt = %lg\n", dt);
+	logPrintf("tStop = %lg\n", tStop);
+	logPrintf("ePhMode = %s\n", ePhMode.c_str());
+	logPrintf("ePhDelta = %lg\n", ePhDelta);
 
 	//Initialize FeynWann:
 	FeynWannParams fwp;
 	fwp.needVelocity = true;
 	fwp.needSpin = true;
+	fwp.needPhonons = ePhEnabled;
 	FeynWann fw(fwp);
 	
 	//Construct mesh of k-offsets:
@@ -493,18 +523,27 @@ int main(int argc, char** argv)
 	//Create and initialize lindblad calculator:
 	Lindblad lb(fw, k0, oStart, oStop, dmu, T,
 		pumpOmega, pumpA0, pumpTau, pumpPol, (pumpMode=="Evolve"),
-		omegaMin, omegaMax, domega, tau, pol, dE);
+		omegaMin, omegaMax, domega, tau, pol, dE, ePhEnabled, ePhDelta);
 	lb.initialize();
 	
-	if(pumpMode == "Perturb")
-	{	//Simple probe-pump-probe:
+	if(pumpMode=="Perturb" and (not ePhEnabled))
+	{	//Simple probe-pump-probe with no relaxation:
 		lb.report(-dt, lb.rho);
 		lb.applyPump();
 		lb.report(0., lb.rho);
 	}
 	else
-	{	//Set start time to a multiple of dt that covers pulse:
-		double tStart = -dt * ceil(5.*tau/dt);
+	{	double tStart = 0.;
+		if(pumpMode=="Perturb")
+		{	//Do an initial report akin to above and apply the pump:
+			lb.report(-dt, lb.rho);
+			lb.applyPump();
+			tStart = 0.; //integrate will report at t=0 below, before evolving ePh relaxation
+		}
+		else
+		{	//Set start time to a multiple of dt that covers pulse:
+			tStart = -dt * ceil(5.*tau/dt);
+		}
 		//Evolve:
 		lb.integrateAdaptive(lb.rho, tStart, tStop, 1e-4, dt);
 	}
