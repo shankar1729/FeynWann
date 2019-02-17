@@ -58,14 +58,12 @@ struct Lindblad : public Integrator<DM1>
 {	
 	FeynWann& fw;
 	const std::vector<vector3<>>& k0; //!< k-point offsets
-	const int oStart, oStop, noMine; //!< range of offsets handled by this process group
-	const int ikStart, ikStop, nkMine; //!< range of k-points within offset handled by this process
+	const size_t oStart, oStop, noMine; //!< range of offsets handled by this process group
+	const size_t ikStart, ikStop, nkMine; //!< range of k-points within offset handled by this process
 	const size_t nkTot; //!< total number of k-points effectively used in BZ sampling
 	
 	int stepID; //current time and reporting step number
-	int o; //!< current offset being worked on by this process group (used as an outer loop variable)
 	DM1 rho; //!< current density matrices (indexed by offset and ik)
-	inline int index(int ik) { return ik-ikStart + nkMine*(o-oStart); } //!< index to density matrix at ik and current o
 	
 	const double dmu, T, invT; //!< Fermi level position relative to neutral value / VBM, and temperature
 	const double pumpOmega, pumpA0, pumpTau; const vector3<complex> pumpPol; const bool pumpEvolve; //!< pump parameters
@@ -82,7 +80,7 @@ struct Lindblad : public Integrator<DM1>
 		bool ePhEnabled, double ePhDelta)
 	: fw(fw), k0(k0), oStart(oStart), oStop(oStop), noMine(oStop-oStart),
 		ikStart(fw.Hw->ikStart), ikStop(ikStart+fw.Hw->nk), nkMine(ikStop-ikStart),
-		nkTot(k0.size() * fw.eCountPerOffset()), stepID(0), o(0),
+		nkTot(k0.size() * fw.eCountPerOffset()), stepID(0),
 		rho(noMine * nkMine), dmu(dmu), T(T), invT(1./T),
 		pumpOmega(pumpOmega), pumpA0(pumpA0), pumpTau(pumpTau), pumpPol(pumpPol), pumpEvolve(pumpEvolve),
 		omegaMin(omegaMin), domega(domega), nomega(1+int(round((omegaMax-omegaMin)/domega))),
@@ -92,6 +90,12 @@ struct Lindblad : public Integrator<DM1>
 	
 	//--------- Initialize -------------
 	
+	//Entry in e-ph coupling list below:
+	struct GePhEntry
+	{	matrix G; //coupling matrix to partner
+		double omegaPh; //corresponding phonon frequency
+	};
+	
 	//Cache required properties per state
 	struct State
 	{	diagMatrix E; //energy eigenvalues (i.e. H0)
@@ -99,15 +103,15 @@ struct Lindblad : public Integrator<DM1>
 		std::vector<matrix> P; //P matrix elements for each probe polarization (energy conservation delta (D) not included)
 		std::vector<matrix> S; //spin matrix elements (if available)
 		matrix pumpPD; //P matrix elements at pump polarization x energy conservation delta (D), but without A0 and time factor
+		std::vector<std::vector<GePhEntry>> GePh; //list of e-ph partners: first index is global index of other k-point, second is phonon mode
 	};
 	std::vector<State> state;
 	double Emin, Emax; //range of energies in grid
 	
-	inline void initializeE(const FeynWann::StateE& stateE)
-	{	
-		//Identify destination for results:
-		int rhoIndex = index(stateE.ik);
-		State& s = state[rhoIndex];
+	inline void initializeE(const FeynWann::StateE& stateE, int o)
+	{	//Identify destination for results:
+		size_t index = stateE.ik-ikStart + nkMine*(o-oStart);
+		State& s = state[index];
 		
 		//Cache required properties to state:
 		//--- Energies
@@ -140,10 +144,45 @@ struct Lindblad : public Integrator<DM1>
 				: ((expArg > +30.) ? 0.
 				: 1./(1.+exp(expArg)) );
 		}
-		rho[rhoIndex] = s.rho0;
+		rho[index] = s.rho0;
 	}
+	struct InitEparams { Lindblad* lb; size_t o; };
 	static void initializeE(const FeynWann::StateE& stateE, void* params)
-	{	((Lindblad*)params)->initializeE(stateE);
+	{	InitEparams& p = *((InitEparams*)params);
+		p.lb->initializeE(stateE, p.o);
+	}
+	
+	inline void initializeEph(const FeynWann::MatrixEph& mat, int o1, int o2)
+	{	//Identify destination for results:
+		size_t index1 = mat.e1->ik + nkMine*(o1-oStart); //e-ph currently assumes group-size=1
+		size_t index2 = mat.e2->ik + nkMine*o2; //therefore ikStart=0 and nkMine = prod(kfold)
+		State& s = state[index1];
+		if(!s.GePh.size()) s.GePh.resize(nkTot);
+		double sigmaInv = 1./ePhDelta;
+		double deltaPrefac = sqrt(sigmaInv/sqrt(M_PI));
+		for(int alpha=0; alpha<fw.nModes; alpha++)
+		{	GePhEntry g;
+			g.G = mat.M[alpha];
+			g.omegaPh = mat.ph->omega[alpha];
+			if(g.omegaPh < 1e-6) continue; //avoid zero frequency phonons
+			complex* Gdata = g.G.data();
+			bool nonZero = false;
+			for(int n2=0; n2<fw.nBands; n2++)
+				for(int n1=0; n1<fw.nBands; n1++)
+				{	double deltaEbySigma = sigmaInv*(mat.e1->E[n1] - mat.e1->E[n2] - g.omegaPh);
+					if(fabs(deltaEbySigma) < 3.)
+					{	*(Gdata++) *= deltaPrefac * exp(-deltaEbySigma*deltaEbySigma); //apply e-conservation factor
+						nonZero = true;
+					}
+					else *(Gdata++) = 0.; //Neglect because far from energy conserving
+				}
+			if(nonZero) s.GePh[index2].push_back(g);
+		}
+	}
+	struct InitEphParams { Lindblad* lb; size_t o1, o2; };
+	static void initializeEph(const FeynWann::MatrixEph& mat, void* params)
+	{	InitEphParams& p = *((InitEphParams*)params);
+		p.lb->initializeEph(mat, p.o1, p.o2);
 	}
 	
 	void initialize()
@@ -152,10 +191,11 @@ struct Lindblad : public Integrator<DM1>
 		Emax = -DBL_MAX;
 		
 		//Initialize eLoop:
-		int oInterval = std::max(1, int(round(noMine/50.))); //interval for reporting progress
+		size_t oInterval = std::max(1, int(round(noMine/50.))); //interval for reporting progress
 		logPrintf("\nInitializing electronic quantities: "); logFlush();
-		for(o=oStart; o<oStop; o++)
-		{	fw.eLoop(k0[o], Lindblad::initializeE, this);
+		for(size_t o=oStart; o<oStop; o++)
+		{	InitEparams params = {this, o};
+			fw.eLoop(k0[o], Lindblad::initializeE, &params);
 			//Print progress:
 			if((o-oStart+1)%oInterval==0) { logPrintf("%d%% ", int(round((o-oStart+1)*100./noMine))); logFlush(); }
 		}
@@ -164,11 +204,22 @@ struct Lindblad : public Integrator<DM1>
 		//Synchronize energy range:
 		mpiWorld->allReduce(Emin, MPIUtil::ReduceMin);
 		mpiWorld->allReduce(Emax, MPIUtil::ReduceMax);
-		logPrintf("Energy grid from %lg eV to %lg eV with spacing %lg eV.\n", Emin/eV, Emax/eV, dE/eV);
+		logPrintf("Electron energy grid from %lg eV to %lg eV with spacing %lg eV.\n", Emin/eV, Emax/eV, dE/eV);
 		
 		//Initialize ePhLoop (if needed):
 		if(ePhEnabled)
-		{	//TODO
+		{	logPrintf("Initializing e-ph quantities: "); logFlush();
+			size_t noPairsMine = noMine*k0.size();
+			size_t oPairInterval = std::max(1, int(round(noPairsMine/50.))); //interval for reporting progress
+			for(size_t o1=oStart; o1<oStop; o1++)
+				for(size_t o2=0; o2<k0.size(); o2++)
+				{	InitEphParams params = {this, o1, o2};
+					fw.ePhLoop(k0[o1], k0[o2], Lindblad::initializeEph, &params);
+					//Print progress:
+					size_t oPair = (o1-oStart)*k0.size()+o2;
+					if((oPair+1)%oPairInterval==0) { logPrintf("%d%% ", int(round((oPair+1)*100./noPairsMine))); logFlush(); }
+				}
+			logPrintf("done.\n"); logFlush();
 		}
 		
 		logPrintf("\n");
@@ -185,8 +236,8 @@ struct Lindblad : public Integrator<DM1>
 		//Collect contributions from each k at this process:
 		const matrix* rhoPtr = rho.data();
 		const State* sPtr = state.data();
-		for(int o=oStart; o<oStop; o++)
-			for(int ik=ikStart; ik<ikStop; ik++)
+		for(size_t o=oStart; o<oStop; o++)
+			for(size_t ik=ikStart; ik<ikStop; ik++)
 			{	const matrix& rhoCur = *(rhoPtr);
 				matrix rhoBar = eye(fw.nBands) - rhoCur; //1-rho
 				//Probe response:
@@ -202,7 +253,6 @@ struct Lindblad : public Integrator<DM1>
 						{	double tauDeltaE = tau*(sPtr->E[b1] - sPtr->E[b2] - omega);
 							*(deltaData++) = normFac * exp(-0.5*tauDeltaE*tauDeltaE);
 						}
-					//logPrintf("max(delta) = %lg\n", *std::max_element(delta.begin(), delta.end()));
 					//Loop over polarizations:
 					for(int iPol=0; iPol<int(pol.size()); iPol++)
 					{	//Multiply matrix elements with energy conservation:
@@ -254,8 +304,8 @@ struct Lindblad : public Integrator<DM1>
 		matrix* rhoPtr = rho.data();
 		const State* sPtr = state.data();
 		//Perturb each k separately:
-		for(int o=oStart; o<oStop; o++)
-			for(int ik=ikStart; ik<ikStop; ik++)
+		for(size_t o=oStart; o<oStop; o++)
+			for(size_t ik=ikStart; ik<ikStop; ik++)
 			{	matrix& rhoCur = *(rhoPtr);
 				matrix rhoBar = eye(fw.nBands) - rhoCur; //1-rho
 				//Compute and apply perturbation:
@@ -287,8 +337,8 @@ struct Lindblad : public Integrator<DM1>
 			matrix* rhoDotPtr = rhoDot.data();
 			const matrix* rhoPtr = rho.data();
 			const State* sPtr = state.data();
-			for(int o=oStart; o<oStop; o++)
-				for(int ik=ikStart; ik<ikStop; ik++)
+			for(size_t o=oStart; o<oStop; o++)
+				for(size_t ik=ikStart; ik<ikStop; ik++)
 				{	const matrix& rhoCur = *(rhoPtr);
 					const matrix rhoBar = eye(fw.nBands) - rhoCur; //1-rho
 					//Compute and apply perturbation:
@@ -316,10 +366,6 @@ struct Lindblad : public Integrator<DM1>
 		return rhoDot;
 	}
 	
-	//Stage 2: time evolution operator eLoop  (TODO)
-	
-	//Stage 3: time evolution operator ePhLoop (TODO)
-	
 	//Print / dump quantities at each checkpointed step
 	void report(double t, const DM1& rho) const
 	{	static StopWatch watch("Lindblad::report"); watch.start();
@@ -331,8 +377,8 @@ struct Lindblad : public Integrator<DM1>
 		double Etot = 0., dfMax = 0.;
 		const matrix* rhoPtr = rho.data();
 		const State* sPtr = state.data();
-		for(int o=oStart; o<oStop; o++)
-			for(int ik=ikStart; ik<ikStop; ik++)
+		for(size_t o=oStart; o<oStop; o++)
+			for(size_t ik=ikStart; ik<ikStop; ik++)
 			{	matrix drho = *(rhoPtr) - sPtr->rho0;
 				//Energy and distribution:
 				const complex* drhoData = drho.data();
@@ -452,6 +498,8 @@ int main(int argc, char** argv)
 		die("\nePhMode must be 'Off' or 'DiagK'\n");
 	const bool ePhEnabled = (ePhMode != "Off");
 	const double ePhDelta = inputMap.get("ePhDelta") * eV; //energy conservation width for e-ph coupling
+	if(ePhEnabled and mpiGroup->nProcesses()>1)
+		die_alone("\ne-ph mode currently only supports single-level parallelization (don't specify -G)\n");
 	
 	logPrintf("\nInputs after conversion to atomic units:\n");
 	logPrintf("NkMult = "); NkMult.print(globalLog, " %d ");
