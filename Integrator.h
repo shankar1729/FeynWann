@@ -48,43 +48,73 @@ private:
 template<typename Vector> void Integrator<Vector>::integrateFixed(Vector& v, const double tStart, const double tEnd, double dt, double dtRep)
 {
 	double t = tStart;
-	double tRep = tStart + dtRep;
+	double tRep = std::min(tStart + dtRep, tEnd);
+	int nCalls = 0, nCallsPrev = 0;
+	double percentPrev = 0.; //previously reported progress percent
 	report(t, v);
-	int nCalls = 0;
+	logPrintf("Integrate: Evolving: "); logFlush();
 	while(t < tEnd)
 	{	if(t+dt > tRep) dt = tRep-t; //prevent reporting overshoot
-		if(t+dt > tEnd) dt = tEnd-t; //prevent simulation overshoot
 		Vector vPrime = compute(t, v), vErr;
 		stepRK45(v, vPrime, t, dt, v, vErr);
 		t += dt;
 		nCalls += 6;
-		if(t == tRep)
-		{	report(t, v);
-			tRep = tRep + dtRep;
+		//Check and optionally report progress:
+		double percent = 100. - (100./dtRep)*(tRep-t);
+		if(percent - percentPrev >= 10.)
+		{	logPrintf("%d%% ", int(round(percent))); logFlush();
+			percentPrev = percent;
+		}
+		if(fabs(t - tRep) < 1e-6*dtRep)
+		{	logPrintf("Done (%d function calls).\n", nCalls-nCallsPrev); logFlush();
+			nCallsPrev = nCalls;
+			percentPrev = 0.;
+			report(t, v);
+			if(tEnd-t < 1e-6*dtRep) //simulation effectively done
+				break;
+			else
+			{	tRep = std::min(tRep + dtRep, tEnd);
+				logPrintf("Integrate: Evolving: "); logFlush();
+			}
 		}
 	}
-	logPrintf("IntegrateFixed completed with %d function evaluations.\n", nCalls);
+	logPrintf("Integrate: Completed with %d function calls.\n", nCalls);
 }
 
 
 template<typename Vector> void Integrator<Vector>::integrateAdaptive(Vector& v, const double tStart, const double tEnd, double tol, double dtRep)
 {
 	double t=tStart;
-	double tRep = tStart + dtRep;
+	double tRep = std::min(tStart + dtRep, tEnd);
 	double dt = tol*(tEnd-tStart); //initial time step estimate
-	int nCalls = 0;
+	int nCalls = 0, nCallsPrev = 0;
+	double percentPrev = 0.; //previously reported progress percent
 	report(t, v);
+	logPrintf("Integrate: Evolving: "); logFlush();
 	while(t < tEnd)
 	{	if(t+dt > tRep) dt = tRep-t; //prevent reporting overshoot
-		if(t+dt > tEnd) dt = tEnd-t; //prevent simulation overshoot
 		Vector vPrime = compute(t, v);
 		nCalls += 1 + 5*stepRK45adaptive(v, vPrime, t, dt, tol);
-		if(t == tRep)
-		{	report(t, v);
-			tRep = tRep + dtRep;
+		//Check and optionally report progress:
+		double percent = 100. - (100./dtRep)*(tRep-t);
+		if(percent - percentPrev >= 10.)
+		{	logPrintf("%d%% ", int(round(percent))); logFlush();
+			percentPrev = percent;
+		}
+		if(fabs(t - tRep) < 1e-6*dtRep)
+		{	logPrintf("Done (%d function calls).\n", nCalls-nCallsPrev); logFlush();
+			nCallsPrev = nCalls;
+			percentPrev = 0.;
+			report(t, v);
+			if(tEnd-t < 1e-6*dtRep) //simulation effectively done
+				break;
+			else
+			{	tRep = std::min(tRep + dtRep, tEnd);
+				logPrintf("Integrate: Evolving: "); logFlush();
+			}
 		}
 	}
-	logPrintf("IntegrateAdaptive completed with %d function evaluations.\n", nCalls);
+	logPrintf("Integrate: Completed with %d function calls.\n\n", nCalls);
 }
 
 template<typename Vector>
