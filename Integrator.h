@@ -61,7 +61,7 @@ template<typename Vector> void Integrator<Vector>::integrateFixed(Vector& v, con
 		nCalls += 6;
 		//Check and optionally report progress:
 		double percent = 100. - (100./dtRep)*(tRep-t);
-		if(percent - percentPrev >= 10.)
+		if(percent - percentPrev >= 5.)
 		{	logPrintf("%d%% ", int(round(percent))); logFlush();
 			percentPrev = percent;
 		}
@@ -97,7 +97,7 @@ template<typename Vector> void Integrator<Vector>::integrateAdaptive(Vector& v, 
 		nCalls += 1 + 5*stepRK45adaptive(v, vPrime, t, dt, tol);
 		//Check and optionally report progress:
 		double percent = 100. - (100./dtRep)*(tRep-t);
-		if(percent - percentPrev >= 10.)
+		if(percent - percentPrev >= 5.)
 		{	logPrintf("%d%% ", int(round(percent))); logFlush();
 			percentPrev = percent;
 		}

@@ -32,7 +32,26 @@ inline matrix dot(const matrix* P, vector3<complex> pol)
 {	return pol[0]*P[0] + pol[1]*P[1] + pol[2]*P[2];
 }
 
+//Time evolution data type and required functions:
 typedef std::vector<matrix> DM1; //array of density matrices at each k
+double dot(const DM1& x, const DM1& y)
+{	assert(x.size()==y.size());
+	double result = 0.;
+	for(size_t i=0; i<x.size(); i++)
+		result += dot(x[i], y[i]);
+	mpiWorld->allReduce(result, MPIUtil::ReduceSum, true);
+	return result;
+}
+void axpy(double a, const DM1& x, DM1& y)
+{	assert(x.size()==y.size());
+	for(size_t i=0; i<x.size(); i++)
+		axpy(a, x[i], y[i]);
+}
+DM1& operator*=(DM1& x, double a)
+{	for(matrix& x_i: x) x_i *= a;
+	return x;
+}
+DM1 clone(const DM1& x) { return x; }
 
 //Lindblad initialization, time evolution and measurement operators using FeynWann callback
 struct Lindblad : public Integrator<DM1>
@@ -244,8 +263,10 @@ struct Lindblad : public Integrator<DM1>
 	
 	//Time evolution operator returning drho/dt
 	DM1 compute(double t, const DM1& rho)
-	{
-		return DM1();
+	{	static StopWatch watch("Lindblad::compute"); watch.start();
+		//TODO
+		watch.stop();
+		return DM1(nkMine*noMine, zeroes(fw.nBands, fw.nBands));
 	}
 	
 	//Stage 2: time evolution operator eLoop  (TODO)
@@ -303,7 +324,7 @@ struct Lindblad : public Integrator<DM1>
 		for(Histogram& h: dist) h.reduce(MPIUtil::ReduceSum);
 		if(mpiWorld->isHead())
 		{	//Report step ID and energy:
-			logPrintf("Step: %4d   t[fs]: %6.1lf   Etot[eV]: %+.6lf\n", stepID, t/fs, Etot/eV);
+			logPrintf("Integrate: Step: %4d   t[fs]: %6.1lf   Etot[eV]: %+.6lf\n", stepID, t/fs, Etot/eV);
 			//Save distribution functions:
 			ofstream ofs("dist."+ossID.str());
 			ofs << "#E-mu/VBM[eV] n[eV^-1]";
@@ -452,7 +473,10 @@ int main(int argc, char** argv)
 		lb.report(0., lb.rho);
 	}
 	else
-	{	die("Not yet implemented.\n");
+	{	//Set start time to a multiple of dt that covers pulse:
+		double tStart = -dt * ceil(5.*tau/dt);
+		//Evolve:
+		lb.integrateAdaptive(lb.rho, tStart, tStop, 1e-4, dt);
 	}
 	
 	//Cleanup:
