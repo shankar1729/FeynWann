@@ -173,8 +173,7 @@ void Integrator<Vector>::stepRK45(const Vector& v, const Vector& vPrime, double 
 template<typename Vector>
 int Integrator<Vector>::stepRK45adaptive(Vector& v, const Vector& vPrime, double& t, double& dt, double tol)
 {
-	static const double safetyFactor=0.9, shrinkExponent=-0.25;
-	static const double growExponent=-0.25, growThreshold = 1.89e-4;
+	static const double safetyFactor=0.9, shrinkExponent=-0.25, growExponent=-0.25;
 	double relErr = 0.; Vector vTmp;
 	int nSteps = 0; //number of times stepRK45 is called
 	while(true)
@@ -183,14 +182,14 @@ int Integrator<Vector>::stepRK45adaptive(Vector& v, const Vector& vPrime, double
 		relErr = sqrt(dot(vErr,vErr))/tol;
 		nSteps++;
 		if(relErr <= 1.) break;
-		dt *= std::max(0.1, safetyFactor * std::pow(relErr, shrinkExponent));
+		dt *= std::max(0.2, safetyFactor * std::pow(relErr, shrinkExponent));
 		//logPrintf("at t= %lf, dt = %.10e.\n", t,dt);
 		if(t + dt == t)
 			die("Stepsize underflow: accuracy could not be achieved at t=%lf\n", t);
 	}
 	t += dt;
 	v = vTmp;
-	dt *= ((relErr>growThreshold) ? safetyFactor * std::pow(relErr, growExponent) : 5.);
+	dt *= std::min(safetyFactor * std::pow(relErr, growExponent), 5.);
 	return nSteps;
 }
 
