@@ -169,9 +169,9 @@ struct Lindblad : public Integrator<DM1>
 			bool nonZero = false;
 			for(int n2=0; n2<fw.nBands; n2++)
 				for(int n1=0; n1<fw.nBands; n1++)
-				{	double deltaEbySigma = sigmaInv*(mat.e1->E[n1] - mat.e1->E[n2] - g.omegaPh);
+				{	double deltaEbySigma = sigmaInv*(mat.e1->E[n1] - mat.e2->E[n2] - g.omegaPh);
 					if(fabs(deltaEbySigma) < 3.)
-					{	*(Gdata++) *= deltaPrefac * exp(-deltaEbySigma*deltaEbySigma); //apply e-conservation factor
+					{	*(Gdata++) *= deltaPrefac * exp(-0.5*deltaEbySigma*deltaEbySigma); //apply e-conservation factor
 						nonZero = true;
 					}
 					else *(Gdata++) = 0.; //Neglect because far from energy conserving
@@ -329,6 +329,7 @@ struct Lindblad : public Integrator<DM1>
 	{	static StopWatch watchPump("Lindblad::compute::Pump");
 		static StopWatch watchEph("Lindblad::compute::ePh");
 		DM1 rhoDot(nkMine*noMine, zeroes(fw.nBands, fw.nBands));
+		matrix id = eye(fw.nBands); //identity used below repeatedly
 		//Pump contribution:
 		if(pumpEvolve)
 		{	watchPump.start();
@@ -340,16 +341,14 @@ struct Lindblad : public Integrator<DM1>
 			for(size_t o=oStart; o<oStop; o++)
 				for(size_t ik=ikStart; ik<ikStop; ik++)
 				{	const matrix& rhoCur = *(rhoPtr);
-					const matrix rhoBar = eye(fw.nBands) - rhoCur; //1-rho
+					const matrix rhoBar = id - rhoCur; //1-rho
 					//Compute and apply perturbation:
 					matrix P = sPtr->pumpPD; //P-
 					matrix Pdag = dagger(P); //P+
-					matrix deltaRho;
 					for(int s=-1; s<=+1; s+=2)
-					{	deltaRho += rhoBar*P*rhoCur*Pdag - Pdag*rhoBar*P*rhoCur;
+					{	*(rhoDotPtr) += prefac * (rhoBar*P*rhoCur*Pdag - Pdag*rhoBar*P*rhoCur); //+ h.c. added together below
 						std::swap(P, Pdag); //P- <--> P+
 					}
-					*(rhoDotPtr) += prefac * (deltaRho + dagger(deltaRho));
 					//Advance pointers for next k:
 					rhoDotPtr++;
 					rhoPtr++;
@@ -360,9 +359,52 @@ struct Lindblad : public Integrator<DM1>
 		//E-ph relaxation contribution:
 		if(ePhEnabled)
 		{	watchEph.start();
-			//TODO
+			const double prefac = M_PI/nkTot;
+			//Loop over second k index, which is owned contiguously over processes:
+			TaskDivision td(k0.size(), mpiWorld); //same as for mpiGroupHead assuming group size=1
+			size_t nkPerOffset = fw.eCountPerOffset();
+			int iProc = mpiGroup->iProcess();
+			for(int jProc=0; jProc<mpiWorld->nProcesses(); jProc++)
+			{	//Range of global k-point indices owned by jProc:
+				size_t index2start = td.start(jProc)*nkPerOffset;
+				size_t index2stop = td.stop(jProc)*nkPerOffset;
+				for(size_t index2=index2start; index2<index2stop; index2++)
+				{	//Make current rho2 available on all processes:
+					matrix rho2 = (iProc==jProc)
+						? rho[index2-index2start]
+						: zeroes(fw.nBands, fw.nBands);
+					mpiWorld->bcastData(rho2, jProc);
+					const matrix rho2bar = id - rho2;
+					matrix rho2dot = zeroes(fw.nBands, fw.nBands); //contributions to remote derivative
+					//Loop over rho1 local to each process:
+					for(size_t index1=0; index1<rho.size(); index1++) //local index
+					{	matrix& rho1dot = rhoDot[index1];
+						const matrix& rho1 = rho[index1];
+						const matrix rho1bar = id - rho1;
+						for(const GePhEntry& g: state[index1].GePh[index2])
+						{	//Phonon occupation factor:
+							double omegaPhByT = g.omegaPh/T;
+							double nPh = omegaPhByT>36 ? 0. : 1./(exp(std::max(1e-3, omegaPhByT)) - 1.); //avoid overflow
+							matrix A = dagger(g.G) * rho1 * (prefac*(nPh+1));
+							matrix B = g.G * rho2bar;
+							matrix C = rho1bar * g.G;
+							matrix D = rho2 * dagger(g.G) * (prefac*nPh);
+							rho1dot += C*D - B*A; //+ h.c. added together below
+							rho2dot += A*B - D*C; //+ h.c. added together below
+						}
+					}
+					//Collect remote contributions:
+					mpiWorld->allReduceData(rho2dot, MPIUtil::ReduceSum);
+					if(jProc==iProc) rhoDot[index2-index2start] += rho2dot;
+				}
+			}
 			watchEph.stop();
+			logPrintf("\n\tComputed at t: %lg fs ", t/fs); logFlush(); //HACK
 		}
+		
+		//Add + h.c. (omited everywhere above):
+		for(matrix& m: rhoDot)
+			m += dagger(m);
 		return rhoDot;
 	}
 	
