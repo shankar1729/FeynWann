@@ -152,6 +152,10 @@ struct Lindblad : public Integrator<DM1>
 		p.lb->initializeE(stateE, p.o);
 	}
 	
+	double termMax;
+	size_t nNZ;
+	int nNZmatMax;
+	
 	inline void initializeEph(const FeynWann::MatrixEph& mat, int o1, int o2)
 	{	//Identify destination for results:
 		size_t index1 = mat.e1->ik + nkMine*(o1-oStart); //e-ph currently assumes group-size=1
@@ -167,16 +171,22 @@ struct Lindblad : public Integrator<DM1>
 			if(g.omegaPh < 1e-6) continue; //avoid zero frequency phonons
 			complex* Gdata = g.G.data();
 			bool nonZero = false;
+			int nNZmat = 0;
 			for(int n2=0; n2<fw.nBands; n2++)
 				for(int n1=0; n1<fw.nBands; n1++)
 				{	double deltaEbySigma = sigmaInv*(mat.e1->E[n1] - mat.e2->E[n2] - g.omegaPh);
 					if(fabs(deltaEbySigma) < 3.)
 					{	*(Gdata++) *= deltaPrefac * exp(-0.5*deltaEbySigma*deltaEbySigma); //apply e-conservation factor
 						nonZero = true;
+						
+						//HACK:
+						termMax = std::max(termMax, (Gdata-1)->norm()/(exp(g.omegaPh/T)-1.));
+						nNZ++;
+						nNZmat++;
 					}
 					else *(Gdata++) = 0.; //Neglect because far from energy conserving
 				}
-			if(nonZero) s.GePh[index2].push_back(g);
+			nNZmatMax = std::max(nNZmatMax, nNZmat); //HACK if(nonZero) s.GePh[index2].push_back(g);
 		}
 	}
 	struct InitEphParams { Lindblad* lb; size_t o1, o2; };
@@ -211,6 +221,11 @@ struct Lindblad : public Integrator<DM1>
 		{	logPrintf("Initializing e-ph quantities: "); logFlush();
 			size_t noPairsMine = noMine*k0.size();
 			size_t oPairInterval = std::max(1, int(round(noPairsMine/50.))); //interval for reporting progress
+			
+			nNZ = 0;
+			nNZmatMax = 0;
+			termMax = 0.;
+			
 			for(size_t o1=oStart; o1<oStop; o1++)
 				for(size_t o2=0; o2<k0.size(); o2++)
 				{	InitEphParams params = {this, o1, o2};
@@ -220,6 +235,12 @@ struct Lindblad : public Integrator<DM1>
 					if((oPair+1)%oPairInterval==0) { logPrintf("%d%% ", int(round((oPair+1)*100./noPairsMine))); logFlush(); }
 				}
 			logPrintf("done.\n"); logFlush();
+			
+			mpiWorld->allReduce(nNZ, MPIUtil::ReduceSum);
+			mpiWorld->allReduce(nNZmatMax, MPIUtil::ReduceMax);
+			mpiWorld->allReduce(termMax, MPIUtil::ReduceMax);
+			die("\nTesting:  sparsity: %lg  nNZmatMax: %d  termMax: %le\n",
+				nNZ*1./(std::pow(nkTot*fw.nBands, 2)*fw.nModes), nNZmatMax, termMax*M_PI/nkTot);
 		}
 		
 		logPrintf("\n");
@@ -635,7 +656,7 @@ int main(int argc, char** argv)
 			tStart = -dt * ceil(5.*tau/dt);
 		}
 		//Evolve:
-		lb.integrateAdaptive(lb.rho, tStart, tStop, 1e-4, dt);
+		lb.integrateAdaptive(lb.rho, tStart, tStop, 1e-4*sqrt(lb.nkTot)*fw.nBands, dt);
 	}
 	
 	//Cleanup:
