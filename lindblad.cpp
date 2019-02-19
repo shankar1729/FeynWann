@@ -53,6 +53,59 @@ DM1& operator*=(DM1& x, double a)
 }
 DM1 clone(const DM1& x) { return x; }
 
+//----- Triplet format square sparse matrix with restricted operations ----
+struct SparseEntry
+{	int i, j;
+	complex val;
+};
+typedef std::vector<SparseEntry> SparseMatrix;
+
+//Multiply dagger(S)*M*S for sparse matrix S and dense matrix M
+SparseMatrix SdagMS(const SparseMatrix& S, const matrix& M)
+{	SparseMatrix result; result.reserve(S.size()*S.size());
+	const complex* m = M.data();
+	for(const SparseEntry& s1: S)
+		for(const SparseEntry& s2: S)
+		{	SparseEntry sr;
+			sr.i = s1.j;
+			sr.j = s2.j;
+			sr.val = s1.val.conj() * m[M.index(s1.i,s2.i)] * s2.val;
+			result.push_back(sr);
+		}
+	return result;
+}
+
+//Multiply S*M*dagger(S) for sparse matrix S and dense matrix M
+SparseMatrix SMSdag(const SparseMatrix& S, const matrix& M)
+{	SparseMatrix result; result.reserve(S.size()*S.size());
+	const complex* m = M.data();
+	for(const SparseEntry& s1: S)
+		for(const SparseEntry& s2: S)
+		{	SparseEntry sr;
+			sr.i = s1.i;
+			sr.j = s2.i;
+			sr.val = s1.val * m[M.index(s1.j,s2.j)] * s2.val.conj();
+			result.push_back(sr);
+		}
+	return result;
+}
+
+//Multiply sparse matrix with dense matrix:
+matrix operator*(const matrix& M, const SparseMatrix& S)
+{	int N = M.nRows(); //assumed square
+	matrix R = zeroes(N, N);
+	complex* r = R.data();
+	const complex* m = M.data();
+	for(const SparseEntry& s: S)
+	{	complex* rCur = r + N*s.j;
+		const complex* mCur = m + N*s.i;
+		for(int k=0; k<N; k++)
+			*(rCur++) += *(mCur++) * s.val;
+	}
+	return R;
+}
+
+
 //Lindblad initialization, time evolution and measurement operators using FeynWann callback
 struct Lindblad : public Integrator<DM1>
 {	
@@ -93,7 +146,7 @@ struct Lindblad : public Integrator<DM1>
 	
 	//Entry in e-ph coupling list below:
 	struct GePhEntry
-	{	matrix G; //coupling matrix to partner
+	{	SparseMatrix G; //coupling matrix to partner
 		double omegaPh; //corresponding phonon frequency
 	};
 	
@@ -163,21 +216,22 @@ struct Lindblad : public Integrator<DM1>
 		double deltaPrefac = sqrt(sigmaInv/sqrt(M_PI));
 		for(int alpha=0; alpha<fw.nModes; alpha++)
 		{	GePhEntry g;
-			g.G = mat.M[alpha];
 			g.omegaPh = mat.ph->omega[alpha];
 			if(g.omegaPh < 1e-6) continue; //avoid zero frequency phonons
-			complex* Gdata = g.G.data();
-			bool nonZero = false;
+			const complex* Gdata = mat.M[alpha].data();
 			for(int n2=0; n2<fw.nBands; n2++)
 				for(int n1=0; n1<fw.nBands; n1++)
 				{	double deltaEbySigma = sigmaInv*(mat.e1->E[n1] - mat.e2->E[n2] - g.omegaPh);
 					if(fabs(deltaEbySigma) < 3. and (mat.e1->E[n1] > mat.e2->E[n2]))
-					{	*(Gdata++) *= deltaPrefac * exp(-0.5*deltaEbySigma*deltaEbySigma); //apply e-conservation factor
-						nonZero = true;
+					{	SparseEntry s;
+						s.i = n1;
+						s.j = n2;
+						s.val = *(Gdata++) * (deltaPrefac*exp(-0.5*deltaEbySigma*deltaEbySigma)); //apply e-conservation factor
+						g.G.push_back(s);
 					}
-					else *(Gdata++) = 0.; //Neglect because far from energy conserving
+					else Gdata++; //Neglect because far from energy conserving
 				}
-			if(nonZero) s.GePh[index2].push_back(g);
+			if(g.G.size()) s.GePh[index2].push_back(g);
 		}
 	}
 	struct InitEphParams { Lindblad* lb; size_t o1, o2; };
@@ -381,17 +435,22 @@ struct Lindblad : public Integrator<DM1>
 					for(size_t index1=0; index1<rho.size(); index1++) //local index
 					{	matrix& rho1dot = rhoDot[index1];
 						const matrix& rho1 = rho[index1];
-						const matrix rho1bar = id - rho1;
+						//const matrix rho1bar = id - rho1;
 						for(const GePhEntry& g: state[index1].GePh[index2])
 						{	//Phonon occupation factor:
+							/* Old dense implementation with temperature 
 							double omegaPhByT = g.omegaPh/T;
-							double nPh = 0.; //HACK omegaPhByT>36 ? 0. : 1./(exp(std::max(1e-3, omegaPhByT)) - 1.); //avoid overflow
+							double nPh = omegaPhByT>36 ? 0. : 1./(exp(std::max(1e-3, omegaPhByT)) - 1.); //avoid overflow
 							matrix A = dagger(g.G) * rho1 * (prefac*(nPh+1));
 							matrix B = g.G * rho2bar;
 							matrix C = rho1bar * g.G;
 							matrix D = rho2 * dagger(g.G) * (prefac*nPh);
 							rho1dot += C*D - B*A; //+ h.c. added together below
 							rho2dot += A*B - D*C; //+ h.c. added together below
+							*/
+							//Sparse implementation currently at T=0:
+							rho1dot -= prefac * (rho1 * SMSdag(g.G, rho2bar));
+							rho2dot += prefac * (rho2bar * SdagMS(g.G, rho1));
 						}
 					}
 					//Collect remote contributions:
