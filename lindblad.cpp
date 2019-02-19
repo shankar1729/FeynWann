@@ -73,18 +73,19 @@ struct Lindblad : public Integrator<DM1>
 	
 	const bool ePhEnabled; //!< whether e-ph coupling is enabled
 	const double ePhDelta; //!< Gaussian energy conservation width
+	const bool verbose; //!< whether to print more detailed stats during evolution
 	
 	Lindblad(FeynWann& fw, const std::vector<vector3<>>& k0, int oStart, int oStop,
 		double dmu, double T, double pumpOmega, double pumpA0, double pumpTau, vector3<complex> pumpPol, bool pumpEvolve,
 		double omegaMin, double omegaMax, double domega, double tau, std::vector<vector3<complex>> pol, double dE,
-		bool ePhEnabled, double ePhDelta)
+		bool ePhEnabled, double ePhDelta, bool verbose)
 	: fw(fw), k0(k0), oStart(oStart), oStop(oStop), noMine(oStop-oStart),
 		ikStart(fw.Hw->ikStart), ikStop(ikStart+fw.Hw->nk), nkMine(ikStop-ikStart),
 		nkTot(k0.size() * fw.eCountPerOffset()), stepID(0),
 		rho(noMine * nkMine), dmu(dmu), T(T), invT(1./T),
 		pumpOmega(pumpOmega), pumpA0(pumpA0), pumpTau(pumpTau), pumpPol(pumpPol), pumpEvolve(pumpEvolve),
 		omegaMin(omegaMin), domega(domega), nomega(1+int(round((omegaMax-omegaMin)/domega))),
-		tau(tau), pol(pol), dE(dE), ePhEnabled(ePhEnabled), ePhDelta(ePhDelta)
+		tau(tau), pol(pol), dE(dE), ePhEnabled(ePhEnabled), ePhDelta(ePhDelta), verbose(verbose)
 	{
 	}
 	
@@ -405,24 +406,26 @@ struct Lindblad : public Integrator<DM1>
 		for(matrix& m: rhoDot)
 			m += dagger(m);
 		
-		//Report current statistics:
-		double rhoDotMax = 0.;
-		for(const matrix& m: rhoDot)
-			rhoDotMax = std::max(rhoDotMax, m.data()[cblas_izamax(m.nData(), m.data(), 1)].abs());
-		double rhoEigMin = +DBL_MAX, rhoEigMax = -DBL_MAX;
-		for(const matrix& m: rho)
-		{	matrix V; diagMatrix f;
-			m.diagonalize(V, f);
-			rhoEigMin = std::min(rhoEigMin, f.front());
-			rhoEigMax = std::max(rhoEigMax, f.back());
+		if(verbose)
+		{	//Report current statistics:
+			double rhoDotMax = 0.;
+			for(const matrix& m: rhoDot)
+				rhoDotMax = std::max(rhoDotMax, m.data()[cblas_izamax(m.nData(), m.data(), 1)].abs());
+			double rhoEigMin = +DBL_MAX, rhoEigMax = -DBL_MAX;
+			for(const matrix& m: rho)
+			{	matrix V; diagMatrix f;
+				m.diagonalize(V, f);
+				rhoEigMin = std::min(rhoEigMin, f.front());
+				rhoEigMax = std::max(rhoEigMax, f.back());
+			}
+			mpiWorld->reduce(rhoDotMax, MPIUtil::ReduceMax);
+			mpiWorld->reduce(rhoEigMax, MPIUtil::ReduceMax);
+			mpiWorld->reduce(rhoEigMin, MPIUtil::ReduceMin);
+			logPrintf("\n\tComputed at t[fs]: %lg  max(rhoDot): %lg rhoEigRange: [ %lg %lg ] ",
+				t/fs, rhoDotMax, rhoEigMin, rhoEigMax); logFlush();
 		}
-		
-		mpiWorld->reduce(rhoDotMax, MPIUtil::ReduceMax);
-		mpiWorld->reduce(rhoEigMax, MPIUtil::ReduceMax);
-		mpiWorld->reduce(rhoEigMin, MPIUtil::ReduceMin);
-		logPrintf("\n\tComputed at t[fs]: %lg  max(rhoDot): %lg rhoEigRange: [ %lg %lg ] ",
-			t/fs, rhoDotMax, rhoEigMin, rhoEigMax); logFlush();
-		
+		else logPrintf("(t[fs]: %lg) ", t/fs);
+		logFlush();
 		return rhoDot;
 	}
 	
@@ -560,6 +563,10 @@ int main(int argc, char** argv)
 	const double ePhDelta = inputMap.get("ePhDelta") * eV; //energy conservation width for e-ph coupling
 	if(ePhEnabled and mpiGroup->nProcesses()>1)
 		die_alone("\ne-ph mode currently only supports single-level parallelization (don't specify -G)\n");
+	const string verboseMode = inputMap.getString("verbose"); //must be yes or no
+	if(verboseMode!="yes" and verboseMode!="no")
+		die("\nverboseMode must be 'yes' or 'no'\n");
+	const bool verbose = (verboseMode=="yes");
 	
 	logPrintf("\nInputs after conversion to atomic units:\n");
 	logPrintf("NkMult = "); NkMult.print(globalLog, " %d ");
@@ -583,7 +590,8 @@ int main(int argc, char** argv)
 	logPrintf("tStop = %lg\n", tStop);
 	logPrintf("ePhMode = %s\n", ePhMode.c_str());
 	logPrintf("ePhDelta = %lg\n", ePhDelta);
-
+	logPrintf("verbose = %s\n", verboseMode.c_str());
+	
 	//Initialize FeynWann:
 	FeynWannParams fwp;
 	fwp.needVelocity = true;
@@ -631,7 +639,7 @@ int main(int argc, char** argv)
 	//Create and initialize lindblad calculator:
 	Lindblad lb(fw, k0, oStart, oStop, dmu, T,
 		pumpOmega, pumpA0, pumpTau, pumpPol, (pumpMode=="Evolve"),
-		omegaMin, omegaMax, domega, tau, pol, dE, ePhEnabled, ePhDelta);
+		omegaMin, omegaMax, domega, tau, pol, dE, ePhEnabled, ePhDelta, verbose);
 	lb.initialize();
 	
 	if(pumpMode=="Perturb" and (not ePhEnabled))
