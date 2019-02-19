@@ -170,7 +170,7 @@ struct Lindblad : public Integrator<DM1>
 			for(int n2=0; n2<fw.nBands; n2++)
 				for(int n1=0; n1<fw.nBands; n1++)
 				{	double deltaEbySigma = sigmaInv*(mat.e1->E[n1] - mat.e2->E[n2] - g.omegaPh);
-					if(fabs(deltaEbySigma) < 3.)
+					if(fabs(deltaEbySigma) < 3. and (mat.e1->E[n1] > mat.e2->E[n2]))
 					{	*(Gdata++) *= deltaPrefac * exp(-0.5*deltaEbySigma*deltaEbySigma); //apply e-conservation factor
 						nonZero = true;
 					}
@@ -384,7 +384,7 @@ struct Lindblad : public Integrator<DM1>
 						for(const GePhEntry& g: state[index1].GePh[index2])
 						{	//Phonon occupation factor:
 							double omegaPhByT = g.omegaPh/T;
-							double nPh = omegaPhByT>36 ? 0. : 1./(exp(std::max(1e-3, omegaPhByT)) - 1.); //avoid overflow
+							double nPh = 0.; //HACK omegaPhByT>36 ? 0. : 1./(exp(std::max(1e-3, omegaPhByT)) - 1.); //avoid overflow
 							matrix A = dagger(g.G) * rho1 * (prefac*(nPh+1));
 							matrix B = g.G * rho2bar;
 							matrix C = rho1bar * g.G;
@@ -407,10 +407,21 @@ struct Lindblad : public Integrator<DM1>
 		
 		//Report current statistics:
 		double rhoDotMax = 0.;
-		for(matrix& m: rhoDot)
+		for(const matrix& m: rhoDot)
 			rhoDotMax = std::max(rhoDotMax, m.data()[cblas_izamax(m.nData(), m.data(), 1)].abs());
+		double rhoEigMin = +DBL_MAX, rhoEigMax = -DBL_MAX;
+		for(const matrix& m: rho)
+		{	matrix V; diagMatrix f;
+			m.diagonalize(V, f);
+			rhoEigMin = std::min(rhoEigMin, f.front());
+			rhoEigMax = std::max(rhoEigMax, f.back());
+		}
+		
 		mpiWorld->reduce(rhoDotMax, MPIUtil::ReduceMax);
-		logPrintf("\n\tComputed at t[fs]: %lg  max(rhoDot): %lg ", t/fs, rhoDotMax); logFlush();
+		mpiWorld->reduce(rhoEigMax, MPIUtil::ReduceMax);
+		mpiWorld->reduce(rhoEigMin, MPIUtil::ReduceMin);
+		logPrintf("\n\tComputed at t[fs]: %lg  max(rhoDot): %lg rhoEigRange: [ %lg %lg ] ",
+			t/fs, rhoDotMax, rhoEigMin, rhoEigMax); logFlush();
 		
 		return rhoDot;
 	}
@@ -642,7 +653,7 @@ int main(int argc, char** argv)
 			tStart = -dt * ceil(5.*tau/dt);
 		}
 		//Evolve:
-		lb.integrateAdaptive(lb.rho, tStart, tStop, 1e-4*sqrt(lb.nkTot)*fw.nBands, dt);
+		lb.integrateAdaptive(lb.rho, tStart, tStop, 1e-3, dt);
 	}
 	
 	//Cleanup:
