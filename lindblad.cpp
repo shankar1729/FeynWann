@@ -113,7 +113,7 @@ struct Lindblad : public Integrator<DM1>
 	const std::vector<vector3<>>& k0; //!< k-point offsets
 	const size_t oStart, oStop, noMine; //!< range of offsets handled by this process group
 	const size_t ikStart, ikStop, nkMine; //!< range of k-points within offset handled by this process
-	const size_t nkTot; //!< total number of k-points effectively used in BZ sampling
+	const size_t nkOffset, nkTot; //!< numbe rof k-points per offset, and total k-points effectively used in BZ sampling
 	
 	int stepID; //current time and reporting step number
 	DM1 rho; //!< current density matrices (indexed by offset and ik)
@@ -134,7 +134,7 @@ struct Lindblad : public Integrator<DM1>
 		bool ePhEnabled, double ePhDelta, bool verbose)
 	: fw(fw), k0(k0), oStart(oStart), oStop(oStop), noMine(oStop-oStart),
 		ikStart(fw.Hw->ikStart), ikStop(ikStart+fw.Hw->nk), nkMine(ikStop-ikStart),
-		nkTot(k0.size() * fw.eCountPerOffset()), stepID(0),
+		nkOffset(fw.eCountPerOffset()), nkTot(nkOffset*k0.size()), stepID(0),
 		rho(noMine * nkMine), dmu(dmu), T(T), invT(1./T),
 		pumpOmega(pumpOmega), pumpA0(pumpA0), pumpTau(pumpTau), pumpPol(pumpPol), pumpEvolve(pumpEvolve),
 		omegaMin(omegaMin), domega(domega), nomega(1+int(round((omegaMax-omegaMin)/domega))),
@@ -149,6 +149,41 @@ struct Lindblad : public Integrator<DM1>
 	{	SparseMatrix G; //coupling matrix to partner
 		double omegaPh; //corresponding phonon frequency
 	};
+	typedef std::vector<std::vector<GePhEntry>> GePhSet; //first index is global index of other k-point, second is phonon mode
+	//---Serialize for MPI communications:
+	void sendGePh(const std::vector<GePhEntry>& gArr, int dest, int tag)
+	{	ostringstream oss;
+		//Overall size:
+		size_t nMatrices = gArr.size();
+		oss.write((const char*)&nMatrices, sizeof(size_t));
+		//Write each sparse matrix:
+		for(const GePhEntry& g: gArr)
+		{	size_t nEntries = g.G.size();
+			oss.write((const char*)&nEntries, sizeof(size_t));
+			oss.write((const char*)g.G.data(), sizeof(SparseEntry)*nEntries);
+			oss.write((const char*)&g.omegaPh, sizeof(double));
+		}
+		//Send over MPI:
+		mpiGroup->send(oss.str(), dest, tag);
+	}
+	void recvGePh(std::vector<GePhEntry>& gArr, int src, int tag)
+	{	//Receive over MPI:
+		string buf;
+		mpiGroup->recv(buf, src, tag);
+		istringstream iss(buf);
+		//Overall size:
+		size_t nMatrices;
+		iss.read((char*)&nMatrices, sizeof(size_t));
+		gArr.resize(nMatrices);
+		//Read each matrix:
+		for(GePhEntry& g: gArr)
+		{	size_t nEntries = 0;
+			iss.read((char*)&nEntries, sizeof(size_t));
+			g.G.resize(nEntries);
+			iss.read((char*)g.G.data(), sizeof(SparseEntry)*nEntries);
+			iss.read((char*)&g.omegaPh, sizeof(double));
+		}
+	}
 	
 	//Cache required properties per state
 	struct State
@@ -157,7 +192,7 @@ struct Lindblad : public Integrator<DM1>
 		std::vector<matrix> P; //P matrix elements for each probe polarization (energy conservation delta (D) not included)
 		std::vector<matrix> S; //spin matrix elements (if available)
 		matrix pumpPD; //P matrix elements at pump polarization x energy conservation delta (D), but without A0 and time factor
-		std::vector<std::vector<GePhEntry>> GePh; //list of e-ph partners: first index is global index of other k-point, second is phonon mode
+		GePhSet GePh; //list of e-ph partners
 	};
 	std::vector<State> state;
 	double Emin, Emax; //range of energies in grid
@@ -206,12 +241,11 @@ struct Lindblad : public Integrator<DM1>
 		p.lb->initializeE(stateE, p.o);
 	}
 	
+	std::vector<GePhSet> GePhGroup; //temporary GePh storage within process group for initializeEph: first index is index of k in group
 	inline void initializeEph(const FeynWann::MatrixEph& mat, int o1, int o2)
 	{	//Identify destination for results:
-		size_t index1 = mat.e1->ik + nkMine*(o1-oStart); //e-ph currently assumes group-size=1
-		size_t index2 = mat.e2->ik + nkMine*o2; //therefore ikStart=0 and nkMine = prod(kfold)
-		State& s = state[index1];
-		if(!s.GePh.size()) s.GePh.resize(nkTot);
+		size_t index1 = mat.e1->ik + nkOffset*(o1-oStart); //net index of state 1 in group (may not be mine)
+		size_t index2 = mat.e2->ik + nkOffset*o2; //global index of state 2
 		double sigmaInv = 1./ePhDelta;
 		double deltaPrefac = sqrt(sigmaInv/sqrt(M_PI));
 		for(int alpha=0; alpha<fw.nModes; alpha++)
@@ -231,7 +265,7 @@ struct Lindblad : public Integrator<DM1>
 					}
 					else Gdata++; //Neglect because far from energy conserving
 				}
-			if(g.G.size()) s.GePh[index2].push_back(g);
+			if(g.G.size()) GePhGroup[index1][index2].push_back(g);
 		}
 	}
 	struct InitEphParams { Lindblad* lb; size_t o1, o2; };
@@ -266,6 +300,7 @@ struct Lindblad : public Integrator<DM1>
 		{	logPrintf("Initializing e-ph quantities: "); logFlush();
 			size_t noPairsMine = noMine*k0.size();
 			size_t oPairInterval = std::max(1, int(round(noPairsMine/50.))); //interval for reporting progress
+			GePhGroup.assign(noMine*nkOffset, GePhSet(nkTot)); //temporary storage by group-index k1 and global index k2
 			for(size_t o1=oStart; o1<oStop; o1++)
 				for(size_t o2=0; o2<k0.size(); o2++)
 				{	InitEphParams params = {this, o1, o2};
@@ -275,6 +310,50 @@ struct Lindblad : public Integrator<DM1>
 					if((oPair+1)%oPairInterval==0) { logPrintf("%d%% ", int(round((oPair+1)*100./noPairsMine))); logFlush(); }
 				}
 			logPrintf("done.\n"); logFlush();
+			//Redistribute GePhGroup to the appropriate state:
+			logPrintf("Redistributing e-ph quantities: "); logFlush();
+			size_t nIndex1 = GePhGroup.size();
+			size_t index1interval = std::max(1, int(round(nIndex1/50.))); //interval for reporting progress
+			int iProc = mpiGroup->iProcess(); //current process in group
+			for(size_t o1=oStart; o1<oStop; o1++)
+			{	for(int jProc=0; jProc<mpiGroup->nProcesses(); jProc++) //who has the state for index1
+					for(int ik=fw.Hw->ikStartProc[jProc]; ik<fw.Hw->ikStartProc[jProc+1]; ik++) //all ik belonging to jProc
+					{	size_t index1 = ik + (o1-oStart)*nkOffset; //belongs on jProc, but this is group index
+						State* state1 = 0;
+						if(jProc == iProc)
+						{	state1 = state.data() + (ik-ikStart + (o1-oStart)*nkMine); //this is the local index
+							state1->GePh.resize(nkTot);
+						}
+						//Map out who has which sets of index2:
+						std::vector<std::pair<int,int>> nGwhose(nkTot); //number of ePh entries and owner process, per index2
+						for(size_t index2=0; index2<nkTot; index2++)
+						{	nGwhose[index2].first = int(GePhGroup[index1][index2].size()); //number of ePh entries
+							nGwhose[index2].second = iProc; //current process; will be replaced by process that owns the ePh entries on teh reduce below
+						}
+						#ifdef MPI_ENABLED
+						if(mpiGroup->nProcesses() > 1)
+						{	MPI_Allreduce(MPI_IN_PLACE, nGwhose.data(), nkTot, MPI_2INT, MPI_MAXLOC, mpiGroup->communicator());
+						} //else results are already up to date on each process (each owns all the data of that group)
+						#endif
+						//Transfer to the correct process:
+						for(size_t index2=0; index2<nkTot; index2++)
+						{	int srcProc = nGwhose[index2].second; //need to transfer from srcProc to jProc
+							if(iProc == srcProc)
+							{	if(iProc == jProc) //State is local
+									state1->GePh[index2] = GePhGroup[index1][index2];
+								else //Belongs elsewhere; send over MPI
+									sendGePh(GePhGroup[index1][index2], jProc, index2);
+							}
+							else if(iProc == jProc) //Belongs here, but this is not srcProc, so recv over MPI
+								recvGePh(state1->GePh[index2], jProc, index2);
+						}
+						//Print progress:
+						if((index1+1)%index1interval==0) { logPrintf("%d%% ", int(round((index1+1)*100./nIndex1))); logFlush(); }
+					}
+			}
+			logPrintf("done.\n"); logFlush();
+			
+			die("Testing.\n");
 		}
 		
 		logPrintf("\n");
@@ -620,8 +699,6 @@ int main(int argc, char** argv)
 		die("\nePhMode must be 'Off' or 'DiagK'\n");
 	const bool ePhEnabled = (ePhMode != "Off");
 	const double ePhDelta = inputMap.get("ePhDelta") * eV; //energy conservation width for e-ph coupling
-	if(ePhEnabled and mpiGroup->nProcesses()>1)
-		die_alone("\ne-ph mode currently only supports single-level parallelization (don't specify -G)\n");
 	const string verboseMode = inputMap.getString("verbose"); //must be yes or no
 	if(verboseMode!="yes" and verboseMode!="no")
 		die("\nverboseMode must be 'yes' or 'no'\n");
