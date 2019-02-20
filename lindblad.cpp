@@ -785,6 +785,8 @@ int main(int argc, char** argv)
 		pumpOmega, pumpA0, pumpTau, pumpPol, (pumpMode=="Evolve"),
 		omegaMin, omegaMax, domega, tau, pol, dE, ePhEnabled, ePhDelta, verbose);
 	lb.initialize();
+	logPrintf("Initialization completed successfully at t[s]: %9.2lf\n\n", clock_sec());
+	logFlush();
 	
 	if(pumpMode=="Perturb" and (not ePhEnabled))
 	{	//Simple probe-pump-probe with no relaxation:
