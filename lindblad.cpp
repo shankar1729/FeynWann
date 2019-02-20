@@ -172,7 +172,7 @@ struct Lindblad : public Integrator<DM1>
 		mpiGroup->recv(buf, src, tag);
 		istringstream iss(buf);
 		//Overall size:
-		size_t nMatrices;
+		size_t nMatrices = 0;
 		iss.read((char*)&nMatrices, sizeof(size_t));
 		gArr.resize(nMatrices);
 		//Read each matrix:
@@ -242,6 +242,7 @@ struct Lindblad : public Integrator<DM1>
 	}
 	
 	std::vector<GePhSet> GePhGroup; //temporary GePh storage within process group for initializeEph: first index is index of k in group
+	std::vector<int> whoseIndex; //which process (mpiWorld index) owns each global k-point index
 	inline void initializeEph(const FeynWann::MatrixEph& mat, int o1, int o2)
 	{	//Identify destination for results:
 		size_t index1 = mat.e1->ik + nkOffset*(o1-oStart); //net index of state 1 in group (may not be mine)
@@ -313,7 +314,7 @@ struct Lindblad : public Integrator<DM1>
 			//Redistribute GePhGroup to the appropriate state:
 			logPrintf("Redistributing e-ph quantities: "); logFlush();
 			size_t nIndex1 = GePhGroup.size();
-			size_t index1interval = std::max(1, int(round(nIndex1/50.))); //interval for reporting progress
+			size_t index1interval = std::max(1, int(round(nIndex1/20.))); //interval for reporting progress
 			int iProc = mpiGroup->iProcess(); //current process in group
 			for(size_t o1=oStart; o1<oStop; o1++)
 			{	for(int jProc=0; jProc<mpiGroup->nProcesses(); jProc++) //who has the state for index1
@@ -328,7 +329,7 @@ struct Lindblad : public Integrator<DM1>
 						std::vector<std::pair<int,int>> nGwhose(nkTot); //number of ePh entries and owner process, per index2
 						for(size_t index2=0; index2<nkTot; index2++)
 						{	nGwhose[index2].first = int(GePhGroup[index1][index2].size()); //number of ePh entries
-							nGwhose[index2].second = iProc; //current process; will be replaced by process that owns the ePh entries on teh reduce below
+							nGwhose[index2].second = iProc; //current process; will be replaced by process that owns the ePh entries on the reduce below
 						}
 						#ifdef MPI_ENABLED
 						if(mpiGroup->nProcesses() > 1)
@@ -337,7 +338,8 @@ struct Lindblad : public Integrator<DM1>
 						#endif
 						//Transfer to the correct process:
 						for(size_t index2=0; index2<nkTot; index2++)
-						{	int srcProc = nGwhose[index2].second; //need to transfer from srcProc to jProc
+						{	if(not nGwhose[index2].first) continue; //no matrix elements to transfer
+							int srcProc = nGwhose[index2].second; //need to transfer from srcProc to jProc
 							if(iProc == srcProc)
 							{	if(iProc == jProc) //State is local
 									state1->GePh[index2] = GePhGroup[index1][index2];
@@ -345,17 +347,27 @@ struct Lindblad : public Integrator<DM1>
 									sendGePh(GePhGroup[index1][index2], jProc, index2);
 							}
 							else if(iProc == jProc) //Belongs here, but this is not srcProc, so recv over MPI
-								recvGePh(state1->GePh[index2], jProc, index2);
+								recvGePh(state1->GePh[index2], srcProc, index2);
 						}
 						//Print progress:
 						if((index1+1)%index1interval==0) { logPrintf("%d%% ", int(round((index1+1)*100./nIndex1))); logFlush(); }
 					}
 			}
 			logPrintf("done.\n"); logFlush();
-			
-			die("Testing.\n");
+			//Initialize global array of who (in mpiWorld) owns which k-point:
+			std::vector<std::pair<int,int>> whoseTemp(nkTot);
+			for(size_t o1=oStart; o1<oStop; o1++)
+				for(size_t ik=ikStart; ik<ikStop; ik++)
+					whoseTemp[ik+o1*nkOffset] = std::make_pair(1, mpiWorld->iProcess());
+			#ifdef MPI_ENABLED
+			if(mpiWorld->nProcesses() > 1)
+			{	MPI_Allreduce(MPI_IN_PLACE, whoseTemp.data(), nkTot, MPI_2INT, MPI_MAXLOC, mpiWorld->communicator());
+			} //else results are already up to date on the only process (which necessarily owns all the data)
+			#endif
+			whoseIndex.resize(nkTot);
+			for(size_t index=0; index<nkTot; index++)
+				whoseIndex[index] = whoseTemp[index].second; //only keep the process indices from above
 		}
-		
 		logPrintf("\n");
 	}
 	
@@ -494,24 +506,21 @@ struct Lindblad : public Integrator<DM1>
 		if(ePhEnabled)
 		{	watchEph.start();
 			const double prefac = M_PI/nkTot;
-			//Loop over second k index, which is owned contiguously over processes:
-			TaskDivision td(k0.size(), mpiWorld); //same as for mpiGroupHead assuming group size=1
-			size_t nkPerOffset = fw.eCountPerOffset();
-			int iProc = mpiWorld->iProcess();
-			for(int jProc=0; jProc<mpiWorld->nProcesses(); jProc++)
-			{	//Range of global k-point indices owned by jProc:
-				size_t index2start = td.start(jProc)*nkPerOffset;
-				size_t index2stop = td.stop(jProc)*nkPerOffset;
-				for(size_t index2=index2start; index2<index2stop; index2++)
-				{	//Make current rho2 available on all processes:
+			//Loop over second k index by going over all offsets and ik
+			int iProc = mpiWorld->iProcess(); //current process
+			for(size_t o2=0; o2<k0.size(); o2++)
+				for(size_t ik2=0; ik2<nkOffset; ik2++)
+				{	size_t index2 = ik2 + o2*nkOffset; //global index2
+					int jProc = whoseIndex[index2]; //who owns index2
+					//Make current rho2 available on all processes:
 					matrix rho2 = (jProc==iProc)
-						? rho[index2-index2start]
+						? rho[ik2-ikStart+(o2-oStart)*nkMine] //local index2, only on process that owns it
 						: zeroes(fw.nBands, fw.nBands);
 					mpiWorld->bcastData(rho2, jProc);
 					const matrix rho2bar = id - rho2;
 					matrix rho2dot = zeroes(fw.nBands, fw.nBands); //contributions to remote derivative
 					//Loop over rho1 local to each process:
-					for(size_t index1=0; index1<rho.size(); index1++) //local index
+					for(size_t index1=0; index1<rho.size(); index1++) //local index1
 					{	matrix& rho1dot = rhoDot[index1];
 						const matrix& rho1 = rho[index1];
 						//const matrix rho1bar = id - rho1;
@@ -534,9 +543,8 @@ struct Lindblad : public Integrator<DM1>
 					}
 					//Collect remote contributions:
 					mpiWorld->allReduceData(rho2dot, MPIUtil::ReduceSum);
-					if(jProc==iProc) rhoDot[index2-index2start] += rho2dot;
+					if(jProc==iProc) rhoDot[ik2-ikStart+(o2-oStart)*nkMine] += rho2dot; //local index2, only on process that owns it
 				}
-			}
 			watchEph.stop();
 		}
 		
