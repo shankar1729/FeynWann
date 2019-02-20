@@ -114,5 +114,4 @@ add_FeynWann_executable(phononElectronLinewidth)
 add_FeynWann_executable(lindblad)
 add_FeynWann_executable(ePhRelax)
 target_link_libraries(ePhRelax ${GSL_LIBRARY})
-
-target_link_libraries(lindblad gslcblas)
+target_link_libraries(lindblad ${GSL_BLAS_LIBRARY})
