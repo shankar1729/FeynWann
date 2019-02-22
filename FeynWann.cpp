@@ -115,6 +115,25 @@ std::vector<vector3<>> readArrayVec3(string fname)
 FeynWann::FeynWann(FeynWannParams& fwp)
 : fwp(fwp), nSpins(0), nSpinor(0), spinWeight(0), mu(NAN), nElectrons(0)
 {	
+	//Create inter-group communicator if requested:
+	std::shared_ptr<MPIUtil> mpiInterGroup;
+	const char* envFwSharedRead = getenv("FW_SHARED_READ");
+	if(envFwSharedRead and string(envFwSharedRead)=="yes")
+	{	int groupSizeMin = mpiGroup->nProcesses();
+		int groupSizeMax = mpiGroup->nProcesses();
+		mpiWorld->allReduce(groupSizeMin, MPIUtil::ReduceMin);
+		mpiWorld->allReduce(groupSizeMax, MPIUtil::ReduceMax);
+		if(groupSizeMin != groupSizeMax)
+			logPrintf("\nIgnoring FW_SHARED_READ=yes due to non-uniform process grid.\n");
+		else
+		{	std::vector<int> ranks;
+			for(int i=mpiGroup->iProcess(); i<mpiWorld->nProcesses(); i+=mpiGroup->nProcesses())
+				ranks.push_back(i);
+			mpiInterGroup = std::make_shared<MPIUtil>(mpiWorld, ranks);
+			logPrintf("\nFound FW_SHARED_READ=yes and initialized inter-group communicators for shared read.\n");
+		}
+	}
+
 	//Read relevant parameters from totalE.out:
 	string fname = fwp.totalEprefix + ".out";
 	logPrintf("\nReading '%s' ... ", fname.c_str()); logFlush();
@@ -285,7 +304,7 @@ FeynWann::FeynWann(FeynWannParams& fwp)
 	realPartOnly = (nSpinor==1);
 	fname = fwp.wannierPrefix + ".mlwfH" + spinSuffix;
 	Hw = std::make_shared<DistributedMatrix>(fname, realPartOnly,
-		mpiGroup, nBands*nBands, cellMap, kfold, false);
+		mpiGroup, nBands*nBands, cellMap, kfold, false, mpiInterGroup);
 	
 	//Read cell weights (if needed):
 	if(fwp.needCellWeights)
@@ -343,12 +362,12 @@ FeynWann::FeynWann(FeynWannParams& fwp)
 			phononCellMapCorr = readCellMap(fwp.wannierPrefix + ".mlwfCellMapPhCorr" + spinSuffix);
 		}
 		OsqW = std::make_shared<DistributedMatrix>(fname, true, //phonon omegaSq is always real
-			mpiGroup, nModes*nModes, phononCellMapCorr, phononSup, false);
+			mpiGroup, nModes*nModes, phononCellMapCorr, phononSup, false, mpiInterGroup);
 		
 		//Read electron-phonon matrix elements
 		fname = fwp.wannierPrefix + ".mlwfHePh" + spinSuffix;
 		HePhW = std::make_shared<DistributedMatrix>(fname, realPartOnly,
-			mpiGroup, nModes*nBands*nBands, phononCellMap, phononSup, true);
+			mpiGroup, nModes*nBands*nBands, phononCellMap, phononSup, true, mpiInterGroup);
 		
 		if(fwp.polar)
 		{	invsqrtM = readPhononBasis(fwp.totalEprefix + ".phononBasis");
@@ -363,33 +382,33 @@ FeynWann::FeynWann(FeynWannParams& fwp)
 	if(fwp.needVelocity)
 	{	fname = fwp.wannierPrefix + ".mlwfP" + spinSuffix;
 		Pw = std::make_shared<DistributedMatrix>(fname, realPartOnly,
-			mpiGroup, 3*nBands*nBands, cellMap, kfold, false);
+			mpiGroup, 3*nBands*nBands, cellMap, kfold, false, mpiInterGroup);
 	}
 	//Spin matrix elements
 	if(not isRelativistic()) fwp.needSpin = false; //spin only available in relatvistic mode
 	if(fwp.needSpin)
 	{	fname = fwp.wannierPrefix + ".mlwfS" + spinSuffix;
 		Sw = std::make_shared<DistributedMatrix>(fname, realPartOnly,
-			mpiGroup, 3*nBands*nBands, cellMap, kfold, false);
+			mpiGroup, 3*nBands*nBands, cellMap, kfold, false, mpiInterGroup);
 	}
 	//Linewidths:
 	if(fwp.needLinewidth_ee)
 	{	//e-e:
 		fname = fwp.wannierPrefix + ".mlwfImSigma_ee" + spinSuffix;
 		ImSigma_eeW = std::make_shared<DistributedMatrix>(fname, realPartOnly,
-			mpiGroup, nBands*nBands, cellMap, kfold, false);
+			mpiGroup, nBands*nBands, cellMap, kfold, false, mpiInterGroup);
 	}
 	if(fwp.needLinewidth_ePh)
 	{	//e-ph:
 		fname = fwp.wannierPrefix + ".mlwfImSigma_ePh" + spinSuffix;
 		ImSigma_ePhW = std::make_shared<DistributedMatrix>(fname, realPartOnly,
-			mpiGroup, nBands*nBands*FeynWannParams::fGrid_ePh.size(), cellMap, kfold, false);
+			mpiGroup, nBands*nBands*FeynWannParams::fGrid_ePh.size(), cellMap, kfold, false, mpiInterGroup);
 	}
 	if(fwp.needLinewidthP_ePh)
 	{	//e-ph:
 		fname = fwp.wannierPrefix + ".mlwfImSigmaP_ePh" + spinSuffix;
 		ImSigmaP_ePhW = std::make_shared<DistributedMatrix>(fname, realPartOnly,
-			mpiGroup, nBands*nBands*FeynWannParams::fGrid_ePh.size(), cellMap, kfold, false);
+			mpiGroup, nBands*nBands*FeynWannParams::fGrid_ePh.size(), cellMap, kfold, false, mpiInterGroup);
 	}
 	
 	logPrintf("\n");

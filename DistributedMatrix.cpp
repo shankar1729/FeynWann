@@ -20,21 +20,25 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 #include "DistributedMatrix.h"
 #include <fftw3-mpi.h>
 
-template<typename scalar> void readMatrix(const MPIUtil* mpiUtil, string fname,
-	int nElemsTot, int nElems, int iElemStart, int nCellsTot, complex* dest)
+template<typename scalar> void readMatrix(const MPIUtil* mpiUtil, const std::shared_ptr<MPIUtil> mpiInterGroup,
+	string fname, int nElemsTot, int nElems, int iElemStart, int nCellsTot, complex* dest)
 {
 	logPrintf("Reading '%s' ... ", fname.c_str()); fflush(globalLog);
 	size_t fsizeExpected = nCellsTot * nElemsTot * sizeof(scalar);
-	MPIUtil::File fp;
-	mpiUtil->fopenRead(fp, fname.c_str(), fsizeExpected);
-	std::vector<scalar> column(nElems); //temporary storage to hold local portion of column
-	for(int iCell=0; iCell<nCellsTot; iCell++)
-	{	mpiUtil->fseek(fp, (iCell*nElemsTot+iElemStart)*sizeof(scalar), SEEK_SET);
-		mpiUtil->fread(column.data(), sizeof(scalar), nElems, fp);
-		for(int iElem=0; iElem<nElems; iElem++)
-			dest[iCell+nCellsTot*iElem] = column[iElem]; //store transposed
+	if(!mpiInterGroup || mpiInterGroup->isHead()) //read everywhere if no intergroup MPI, or only on head of inter-group communicator
+	{	MPIUtil::File fp;
+		mpiUtil->fopenRead(fp, fname.c_str(), fsizeExpected);
+		std::vector<scalar> column(nElems); //temporary storage to hold local portion of column
+		for(int iCell=0; iCell<nCellsTot; iCell++)
+		{	mpiUtil->fseek(fp, (iCell*nElemsTot+iElemStart)*sizeof(scalar), SEEK_SET);
+			mpiUtil->fread(column.data(), sizeof(scalar), nElems, fp);
+			for(int iElem=0; iElem<nElems; iElem++)
+				dest[iCell+nCellsTot*iElem] = column[iElem]; //store transposed
+		}
+		mpiUtil->fclose(fp);
 	}
-	mpiUtil->fclose(fp);
+	if(mpiInterGroup) //broadcast within each inter-group communictaor
+		mpiInterGroup->bcast<complex>(dest, nCellsTot*nElems);
 	logPrintf("done.\n");
 }
 
@@ -46,7 +50,8 @@ struct PlanSet
 };
 
 DistributedMatrix::DistributedMatrix(string fname, bool realOnly, const MPIUtil* mpiUtil, int nElemsTot,
-	const std::vector<vector3<int>>& cellMap, const vector3<int>& kfold, bool squared)
+	const std::vector<vector3<int>>& cellMap, const vector3<int>& kfold, bool squared,
+	const std::shared_ptr<MPIUtil>  mpiInterGroup)
 : mpiUtil(mpiUtil), nElemsTot(nElemsTot), cellMap(cellMap), kfold(kfold), squared(squared)
 {
 	nCellsTot = cellMap.size();
@@ -81,8 +86,8 @@ DistributedMatrix::DistributedMatrix(string fname, bool realOnly, const MPIUtil*
 	buf.init(nTot); //nTot = max(nElems*nkTot, nElemsTot*nk)
 	
 	//Read matrix:
-	if(realOnly) readMatrix<double>(mpiUtil, fname, nElemsTot, nElems, iElemStart, nCellsTot, mat.data());
-	else readMatrix<complex>(mpiUtil, fname, nElemsTot, nElems, iElemStart, nCellsTot, mat.data());
+	if(realOnly) readMatrix<double>(mpiUtil, mpiInterGroup, fname, nElemsTot, nElems, iElemStart, nCellsTot, mat.data());
+	else readMatrix<complex>(mpiUtil, mpiInterGroup, fname, nElemsTot, nElems, iElemStart, nCellsTot, mat.data());
 	
 	//Create FFTW plans:
 	complex* bufData = buf.data();

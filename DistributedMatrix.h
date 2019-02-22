@@ -44,9 +44,11 @@ public:
 	std::vector<int> ikStartProc; //!< ikStart for each process in MPI group
 	
 	//! Initialize from file, containing complex or real elements as specified by realOnly
+	//! If mpiInterGroup is non-null, then read only in one group and broadcast to rest (require regular process grid)
 	//! (remaining parameters are as specified in the class)
 	DistributedMatrix(string fname, bool realOnly, const MPIUtil* mpiUtil, int nElemsTot,
-		const std::vector<vector3<int>>& cellMap, const vector3<int>& kfold, bool squared);
+		const std::vector<vector3<int>>& cellMap, const vector3<int>& kfold, bool squared,
+		const std::shared_ptr<MPIUtil> mpiInterGroup=0);
 	~DistributedMatrix();
 	
 	void transform(vector3<> k0); //!< prepare results for k-point mesh offset by k0 (squared=false only)
