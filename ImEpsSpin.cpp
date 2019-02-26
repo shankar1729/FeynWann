@@ -118,7 +118,6 @@ struct CollectImEps
 				for(size_t iChannel=0; iChannel<nChannels; iChannel++)
 				{	double weight = weight_F * (F[iChannel][v]-F[iChannel][c]);
 					ImEps[iChannel].addEvent(omega, weight);
-					//breadth[iChannel].addEvent(omega, weight*(ImE[iChannel][c]+ImE[iChannel][v]+GammaS));
 					if(iChannel==0)
 					{	ImEps_E.addEvent(E[v], omega, -weight); //hole
 						ImEps_E.addEvent(E[c], omega, +weight); //electron
