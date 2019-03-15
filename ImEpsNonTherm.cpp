@@ -178,8 +178,8 @@ struct CollectImEps
 						//Collect results:
 						watchHist.start();
 						int iOmega; double tOmega; //coordinates of frequency on frequency grid
-						ImEps[0].eventPrecalc(omega, iOmega, tOmega); //all histograms on same frequency grid
-						for(int iT=0; iT<numTimes; iT++)
+						bool useEvent =ImEps[0].eventPrecalc(omega, iOmega, tOmega); //all histograms on same frequency grid
+						if(useEvent) for(int iT=0; iT<numTimes; iT++)
 						{	double weight = weight_occ * (nPhAlpha[iT] + 0.5*(1.-ae)) * (F1v[iT]-F2c[iT]);
 							ImEps[iT].addEventPrecalc(iOmega, tOmega, weight);
 							breadth[iT].addEventPrecalc(iOmega, tOmega, fabs(weight)*(ImE2c[iT]+ImE1v[iT]+GammaS));
