@@ -25,6 +25,7 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 #include "FeynWann.h"
 #include "Histogram.h"
 #include "InputMap.h"
+#include "Interp1.h"
 #include <core/Units.h>
 
 //Get energy range from an eLoop call:
@@ -50,7 +51,9 @@ struct CollectImEps
 	double T, invT;
 	double GammaS;
 	double domega, omegaFull, omegaMax;
-	std::vector<Histogram> ImEps, breadth, breadthDen;
+	const Interp1* dfInterp; //change in occupations due to perturbation
+	size_t nChannels;
+	std::vector<Histogram> ImEps;
 	Histogram2D ImEps_E;  //ImEpsDelta resolved by carrier density; collected only for first mu
 	std::vector<Histogram2D> ImEps_S;
 	double prefac;
@@ -59,11 +62,10 @@ struct CollectImEps
 	double EvMax, EcMin;
 	
 	
-	CollectImEps(const std::vector<double>& dmu, double T, double domega, double omegaFull, double omegaMax)
-	: dmu(dmu), T(T), invT(1./T), domega(domega), omegaFull(omegaFull), omegaMax(omegaMax),
-		ImEps(dmu.size(), Histogram(0, domega, omegaFull)),
-		breadth(dmu.size(), Histogram(0, domega, omegaFull)),
-		breadthDen(dmu.size(), Histogram(0, domega, omegaFull)),
+	CollectImEps(const std::vector<double>& dmu, double T, double domega, double omegaFull, double omegaMax, const Interp1* dfInterp)
+	: dmu(dmu), T(T), invT(1./T), domega(domega), omegaFull(omegaFull), omegaMax(omegaMax), dfInterp(dfInterp),
+		nChannels(dmu.size()*(dfInterp ? 2 : 1)),
+		ImEps(nChannels, Histogram(0, domega, omegaFull)),
 		ImEps_E(-omegaMax, domega, omegaMax,  0, domega, omegaFull), //ImEpsDelta resolved by carrier density; collected only for first mu
 		ImEps_S(3, Histogram2D(-omegaMax, domega, omegaMax,  0, domega, omegaFull)) //ImEpsDelta resolved by spin carrier density; collected only for first mu
 	{	logPrintf("Initialized frequency grid: 0 to %lg eV with %d points.\n", ImEps[0].Emax()/eV, ImEps[0].nE);
@@ -71,19 +73,26 @@ struct CollectImEps
 		EcMin = *std::min_element(dmu.begin(), dmu.end()) - 10*T;
 	}
 	
-	void calcStateRelated(const FeynWann::StateE& state, std::vector<diagMatrix>& F, std::vector<diagMatrix>& ImE)
+	void calcStateRelated(const FeynWann::StateE& state, std::vector<diagMatrix>& F)
 	{	int nBands = state.E.nRows();
-		F.assign(dmu.size(), diagMatrix(nBands));
-        //ImE.assign(dmu.size(), state.ImSigma_ee); //e-e part
-		
+		F.assign(nChannels, diagMatrix(nBands));
 		for(unsigned iMu=0; iMu<dmu.size(); iMu++)
 		{	for(int b=0; b<nBands; b++)
-			{	double expArg = (state.E[b]-dmu[iMu])*invT;
+			{	//Fermi distribution
+				double expArg = (state.E[b]-dmu[iMu])*invT;
 				F[iMu][b] = (expArg < -30.) ? 1.
 					: ((expArg > +30.) ? 0.
 					: 1./(1.+exp(expArg)) );
-				//ImE[iMu][b] += state.ImSigma_ePh(b, F[iMu][b]);
 			}
+		}
+		//Compute perturbed versions if needed:
+		diagMatrix dF;
+		if(dfInterp)
+		{	dF.resize(nBands);
+			for(int b=0; b<nBands; b++)
+				dF[b] = (*dfInterp)(0,state.E[b]);
+			for(unsigned iMu=0; iMu<dmu.size(); iMu++)
+				F[iMu+dmu.size()] = F[iMu] + dF;
 		}
 	}
 	
@@ -92,8 +101,8 @@ struct CollectImEps
 	{	int nBands = state.E.nRows();
 		//Calculate Fermi fillings and linewidths:
 		const diagMatrix& E = state.E;
-		std::vector<diagMatrix> F, ImE;
-		calcStateRelated(state, F, ImE);
+		std::vector<diagMatrix> F;
+		calcStateRelated(state, F);
 		//Project dipole matrix elements on field:
 		matrix P;
 		for(int iDir=0; iDir<3; iDir++)
@@ -106,11 +115,10 @@ struct CollectImEps
 				const vector3<>& Sc = state.Svec[c];
 				if(omega<domega || omega>=omegaFull) continue; //irrelevant event
 				double weight_F = (prefac/(omega*omega)) * P(c,v).norm(); //event weight except for occupation factors
-				for(unsigned iMu=0; iMu<dmu.size(); iMu++)
-				{	double weight = weight_F * (F[iMu][v]-F[iMu][c]);
-					ImEps[iMu].addEvent(omega, weight);
-					//breadth[iMu].addEvent(omega, weight*(ImE[iMu][c]+ImE[iMu][v]+GammaS));
-					if(iMu==0)
+				for(size_t iChannel=0; iChannel<nChannels; iChannel++)
+				{	double weight = weight_F * (F[iChannel][v]-F[iChannel][c]);
+					ImEps[iChannel].addEvent(omega, weight);
+					if(iChannel==0)
 					{	ImEps_E.addEvent(E[v], omega, -weight); //hole
 						ImEps_E.addEvent(E[c], omega, +weight); //electron
 						for (int iDir=0; iDir<3; iDir++)
@@ -132,9 +140,9 @@ struct CollectImEps
 		//Calculate Fermi fillings and linewidths:
 		const diagMatrix& E1 = mat.e1->E;
 		const diagMatrix& E2 = mat.e2->E;
-		std::vector<diagMatrix> F1, F2, ImE1, ImE2;
-		calcStateRelated(*mat.e1, F1, ImE1);
-		calcStateRelated(*mat.e2, F2, ImE2);
+		std::vector<diagMatrix> F1, F2;
+		calcStateRelated(*mat.e1, F1);
+		calcStateRelated(*mat.e2, F2);
 		//Project dipole matrix elements on field:
 		matrix P1, P2;
 		for(int iDir=0; iDir<3; iDir++)
@@ -176,12 +184,10 @@ struct CollectImEps
 						for(int z=0; z<nExtrap; z++)
 							MeffSqExtrap += extrapCoeff[z] * Meff[z].norm();
 						double weight_F = (prefac/(omega*omega)) * (nPh[alpha] + 0.5*(1.-ae)) * MeffSqExtrap;
-						for(unsigned iMu=0; iMu<dmu.size(); iMu++)
-						{	double weight = weight_F * (F1[iMu][v]-F2[iMu][c]);
-							ImEps[iMu].addEvent(omega, weight);
-							//breadth[iMu].addEvent(omega, fabs(weight)*(ImE2[iMu][c]+ImE1[iMu][v]+GammaS));
-							breadthDen[iMu].addEvent(omega, fabs(weight));
-							if(iMu==0)
+						for(size_t iChannel=0; iChannel<nChannels; iChannel++)
+						{	double weight = weight_F * (F1[iChannel][v]-F2[iChannel][c]);
+							ImEps[iChannel].addEvent(omega, weight);
+							if(iChannel==0)
 							{	ImEps_E.addEvent(E1[v], omega, -weight); //hole
 								ImEps_E.addEvent(E2[c], omega, +weight); //electron	
 								for (int iDir=0; iDir<3; iDir++)
@@ -207,7 +213,12 @@ inline double lorentzianOdd(double omega, double omega0, double breadth)
 		( 1./(breadthSq + std::pow(omega-omega0, 2))
 		- 1./(breadthSq + std::pow(omega+omega0, 2)) );
 }
-
+inline void print(FILE* fp, const vector3<complex>& v, const char* format="%lg ")
+{	std::fprintf(fp, "[ "); for(int k=0; k<3; k++) fprintf(fp, format, v[k].real()); std::fprintf(fp, "] + 1j*");
+	std::fprintf(fp, "[ "); for(int k=0; k<3; k++) fprintf(fp, format, v[k].imag()); std::fprintf(fp, "]\n");
+}
+inline vector3<complex> normalize(const vector3<complex>& v) { return v * (1./sqrt(v[0].norm() + v[1].norm() + v[2].norm())); }
+inline double fermiPrime(double x) { return 0.25*(std::pow(tanh(0.5*x), 2) - 1.); } //avoid overflow issues
 int main(int argc, char** argv)
 {	
 	InitParams ip = FeynWann::initialize(argc, argv, "Wannier calculation of imaginary dielectric tensor (ImEps)");
@@ -218,16 +229,22 @@ int main(int argc, char** argv)
 	const double omegaMax = inputMap.get("omegaMax") * eV;
 	const double T = inputMap.get("T") * Kelvin;
 	const double dE = inputMap.get("dE") * eV; //energy resolution used for output and energy conservation
-	const vector3<> polRe = inputMap.getVector("polRe", vector3<>(1.,0.,0.)); //Real part of polarization
-	const vector3<> polIm = inputMap.getVector("polIm", vector3<>(0.,0.,0.)); //Imag part of polarization
+	const vector3<complex> pol = normalize(
+		complex(1,0)*inputMap.getVector("polRe", vector3<>(1.,0.,0.)) +  //Real part of polarization
+		complex(0,1)*inputMap.getVector("polIm", vector3<>(0.,0.,0.)) ); //Imag part of polarization
 	const double GammaS = inputMap.get("GammaS", 0.) * eV; //surface contribution for broadening (default to 0.0 eV)
 	const double eta = inputMap.get("eta", 0.1) * eV; //on-shell extrapolation width (default to 0.1 eV)
 	const double dmuMin = inputMap.get("dmuMin", 0.) * eV; //optional shift in chemical potential from neutral value; start of range (default to 0)
 	const double dmuMax = inputMap.get("dmuMax", 0.) * eV; //optional shift in chemical potential from neutral value; end of range (default to 0)
 	const int dmuCount = inputMap.get("dmuCount", 1); assert(dmuCount>0); //number of chemical potential shifts
-	string contribution = inputMap.getString("contribution"); //direct / phonon
-	string runName = inputMap.getString("runName"); //prefix to use for output files
+	const string contribution = inputMap.getString("contribution"); //direct / phonon
+	const string runName = inputMap.getString("runName"); //prefix to use for output files
 
+	//Probe mode calculation triggered by non-zero Uabs (will read eDOS.dat and a carrier distribution file):
+	const double pumpUabs = inputMap.get("pumpUabs", 0.) * Joule/std::pow(meter,3); //absorbed laser energy per unit volume in Joule/meter^3
+	const double pumpOmega = inputMap.get("pumpOmega", 0.) * eV; //pump photon energy in eV (pump pol is what was used in the phase 1 calc)
+	const string pumpRunName = pumpUabs ? inputMap.getString("pumpRunName") : string(); //run name to read carrier distribution of pump from
+	
 	//Check contribution:
 	enum ContribType { Direct, Phonon };
 	EnumStringMap<ContribType> contribMap(Direct, "Direct", Phonon, "Phonon");
@@ -241,8 +258,7 @@ int main(int argc, char** argv)
 	logPrintf("omegaMax = %lg\n", omegaMax);
 	logPrintf("T = %lg\n", T);
 	logPrintf("dE = %lg\n", dE);
-	logPrintf("polRe = "); polRe.print(globalLog, " %lg ");
-	logPrintf("polIm = "); polIm.print(globalLog, " %lg ");
+	logPrintf("pol = "); print(globalLog, pol);
 	logPrintf("GammaS = %lg\n", GammaS);
 	logPrintf("eta = %lg\n", eta);
 	logPrintf("dmuMin = %lg\n", dmuMin);
@@ -250,6 +266,11 @@ int main(int argc, char** argv)
 	logPrintf("dmuCount = %d\n", dmuCount);
 	logPrintf("contribution = %s\n", contribMap.getString(contribType));
 	logPrintf("runName = %s\n", runName.c_str());
+	if(pumpUabs)
+	{	logPrintf("pumpUabs = %lg\n", pumpUabs);
+		logPrintf("pumpOmega = %lg\n", pumpOmega);
+		logPrintf("pumpRunName = %s\n", pumpRunName.c_str());
+	}
 
 	//Initialize FeynWann:
 	FeynWannParams fwp;
@@ -261,12 +282,6 @@ int main(int argc, char** argv)
 	std::shared_ptr<FeynWann> fw = std::make_shared<FeynWann>(fwp);
 	size_t nKeff = nOffsets * (contribType==Direct ? fw->eCountPerOffset() : fw->ePhCountPerOffset());
 	logPrintf("Effectively sampled %s: %lu\n", (contribType==Direct ? "nKpts" : "nKpairs"), nKeff);
-
-	//Calculate normalized polarization vector:
-	vector3<complex> Ehat = complex(1,0)*polRe + complex(0,1)*polIm; //Efield direction
-	Ehat *= (1./sqrt(Ehat[0].norm() + Ehat[1].norm() + Ehat[2].norm())); //normalize to unit complex vector
-	logPrintf("Ehat: [ %lg+%lgi , %lg+%lgi , %lg+%lgi ]\n", Ehat[0].real(), Ehat[0].imag(),
-		Ehat[1].real(), Ehat[1].imag(), Ehat[2].real(), Ehat[2].imag() );
 	
 	if(ip.dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
@@ -275,7 +290,6 @@ int main(int argc, char** argv)
 		return 0;
 	}
 	logPrintf("\n");
-
 	//Initialize sampling parameters:
 	int oStart=0, oStop=0;
 	if(mpiGroup->isHead())
@@ -298,12 +312,36 @@ int main(int argc, char** argv)
 	for(int iMu=1; iMu<dmuCount; iMu++) //set remaining values (if any)
 		dmu[iMu] = dmuMin + iMu*(dmuMax-dmuMin)/(dmuCount-1);
 	
-	//Calculate delta-function resolved versions (no broadening yet):
-	CollectImEps cie(dmu, T, domega, omegaFull, omegaMax);
+	//Initialize change in fillings if required
+	Interp1 dfInterp;
+	if(pumpUabs)
+	{	//Read carrier distributions and DOS:
+		Histogram2D distribDirect("carrierDistrib"+fileSuffix+pumpRunName+".dat", 1./eV, 1./eV, 1.);
+		Interp1 dos; dos.init("eDOS.dat", eV, 1.);
+		//Calculate and normalize change in fillings:
+		diagMatrix dfPert;
+		int nE = dos.xGrid.size();
+		double dE = dos.dx;
+		dfPert.resize(nE);
+		double Upert = 0.;
+		for(int ie=0; ie<nE; ie++)
+		{	const double& Ei = dos.xGrid[ie];
+			double dni = distribDirect.interp1(Ei, pumpOmega); //induced carrier number change at given energy
+			Upert += dni * Ei * dE; //calculate energy of perturbation
+			dfPert[ie] = dni / std::max(dos.yGrid[0][ie], 1e-6); //divide by DOS to get the effective filling change (regularize to avoid Infs)
+		}
+		dfPert *= pumpUabs / Upert; //normalize to match absorbed laser energy per unit volume
+		//Set to dfInterp:
+		dfInterp = dos;
+		dfInterp.yGrid[0] = dfPert;
+	}
+	
+
+	CollectImEps cie(dmu, T, domega, omegaFull, omegaMax, (pumpUabs ? &dfInterp : 0));
 	cie.prefac = 4. * std::pow(M_PI,2) * fw->spinWeight / (nKeff*fabs(det(fw->R))); //frequency independent part of prefactor
 	cie.eta = eta;
 	cie.GammaS = GammaS;
-	cie.Ehat = Ehat;
+	cie.Ehat = pol;
 	
 	for(int iSpin=0; iSpin<fw->nSpins; iSpin++)
 	{	//Update FeynWann for spin channel if necessary:
@@ -335,45 +373,21 @@ int main(int argc, char** argv)
 		logPrintf("done.\n"); logFlush();
 	}
 	
-	for(int iMu=0; iMu<dmuCount; iMu++)
-	{	cie.ImEps[iMu].allReduce(MPIUtil::ReduceSum);
-		cie.breadth[iMu].allReduce(MPIUtil::ReduceSum);
-		if(contribType==Direct)
-			cie.breadthDen[iMu] = cie.ImEps[iMu]; //normalization weight is just ImEps
-		else
-			cie.breadthDen[iMu].allReduce(MPIUtil::ReduceSum); //collected separately due to extrapolation sign
-	}
-	cie.ImEps_E.allReduce(MPIUtil::ReduceSum);
-	logPrintf("done.\n"); logFlush();
-	
-	
-	//Normalize the breadths:
-	int nomega = cie.breadth[0].nE;
-	for(int iomega=0; iomega<nomega; iomega++)
-		for(int iMu=0; iMu<dmuCount; iMu++)
-		{	cie.breadth[iMu].out[iomega] = std::max(T, 
-				cie.breadthDen[iMu].out[iomega]
-					? cie.breadth[iMu].out[iomega]/cie.breadthDen[iMu].out[iomega]
-					: 0.);
-		}
-	cie.breadth[0].print("breadth"+fileSuffix+".dat", 1./eV, 1./eV); 
-	
 	//Apply broadening:
-	std::vector<Histogram> ImEps(dmuCount, Histogram(0, domega, omegaFull));
+	std::vector<Histogram> ImEps(cie.nChannels, Histogram(0, domega, omegaFull));
 	Histogram2D ImEps_E(-omegaMax, domega, omegaMax,  0, domega, omegaMax);
 	std::vector<Histogram2D> ImEps_S(3, Histogram2D(-omegaMax, domega, omegaMax,  0, domega, omegaMax));
-	int iomegaStart, iomegaStop; TaskDivision(nomega, mpiWorld).myRange(iomegaStart, iomegaStop);
+	int iomegaStart, iomegaStop; TaskDivision(ImEps_E.nomega, mpiWorld).myRange(iomegaStart, iomegaStop);
 	logPrintf("Applying broadening ... "); logFlush();
-	for(int iMu=0; iMu<dmuCount; iMu++)
+	for(size_t iChannel=0; iChannel<cie.nChannels; iChannel++)
 	{	for(int iomega=iomegaStart; iomega<iomegaStop; iomega++) //input frequency grid split over MPI
 		{	double omegaCur = iomega*domega;
-			double b = cie.breadth[iMu].out[iomega];
-			for(size_t jomega=0; jomega<ImEps[iMu].out.size(); jomega++) //output frequency grid
+			for(size_t jomega=0; jomega<ImEps[iChannel].out.size(); jomega++) //output frequency grid
 			{	double omega = jomega*domega;
 				double kernel = lorentzianOdd(omega, omegaCur,0.000367) * domega;
-				ImEps[iMu].out[jomega] += kernel * cie.ImEps[iMu].out[iomega];
+				ImEps[iChannel].out[jomega] += kernel * cie.ImEps[iChannel].out[iomega];
 				//Carrier distributions:
-				if(iMu==0 && int(jomega)<ImEps_E.nomega)
+				if(iChannel==0 && int(jomega)<ImEps_E.nomega)
 				{	const int nE = ImEps_E.nE; assert(nE == cie.ImEps_E.nE);
 					for(int iE=0; iE<nE; iE++)
 					{	int iOE = iomega*nE + iE;
@@ -381,31 +395,37 @@ int main(int argc, char** argv)
 						ImEps_E.out[jOE] += kernel * cie.ImEps_E.out[iOE];
 						for (int iDir=0; iDir<3; iDir++)
 						{	ImEps_S[iDir].out[jOE] += kernel * cie.ImEps_S[iDir].out[iOE];
-						}							
+						}
 					}
 				}
 			}
 		}
-		ImEps[iMu].allReduce(MPIUtil::ReduceSum);
+		ImEps[iChannel].allReduce(MPIUtil::ReduceSum);
 	}
-	ImEps_E.allReduce(MPIUtil::ReduceSum); ImEps_E.print("carrierDistrib"+fileSuffix+runName +".dat", 1./eV, 1./eV, 1.);
-	ImEps_S[0].allReduce(MPIUtil::ReduceSum); ImEps_S[0].print("carrierDistrib"+fileSuffix+runName +"Sx.dat", 1./eV, 1./eV, 1.);
-	ImEps_S[1].allReduce(MPIUtil::ReduceSum); ImEps_S[1].print("carrierDistrib"+fileSuffix+runName +"Sy.dat", 1./eV, 1./eV, 1.);
-	ImEps_S[2].allReduce(MPIUtil::ReduceSum); ImEps_S[2].print("carrierDistrib"+fileSuffix+runName +"Sz.dat", 1./eV, 1./eV, 1.);
+	if(not pumpUabs)
+	{	ImEps_E.allReduce(MPIUtil::ReduceSum); ImEps_E.print("carrierDistrib"+fileSuffix+runName +".dat", 1./eV, 1./eV, 1.);
+		ImEps_S[0].allReduce(MPIUtil::ReduceSum); ImEps_S[0].print("carrierDistrib"+fileSuffix+runName +"Sx.dat", 1./eV, 1./eV, 1.);
+		ImEps_S[1].allReduce(MPIUtil::ReduceSum); ImEps_S[1].print("carrierDistrib"+fileSuffix+runName +"Sy.dat", 1./eV, 1./eV, 1.);
+		ImEps_S[2].allReduce(MPIUtil::ReduceSum); ImEps_S[2].print("carrierDistrib"+fileSuffix+runName +"Sz.dat", 1./eV, 1./eV, 1.);
+	}
 	logPrintf("done.\n"); logFlush();
 	
 	//Output ImEps:
 	if(mpiWorld->isHead())
-	{	ofstream ofs("ImEps"+fileSuffix+".dat");
+	{	ofstream ofs("ImEps"+fileSuffix+runName+".dat");
 		ofs << "#omega[eV]";
 		for(int iMu=0; iMu<dmuCount; iMu++)
 			ofs << " ImEps[mu=" << dmu[iMu]/eV << "eV]";
+		if(pumpUabs)
+		{	for(int iMu=0; iMu<dmuCount; iMu++)
+				ofs << " ImEpsPert[mu=" << dmu[iMu]/eV << "eV]";
+		}
 		ofs << "\n";
 		for(size_t iOmega=0; iOmega<ImEps[0].out.size(); iOmega++)
 		{	double omega = ImEps[0].Emin + ImEps[0].dE * iOmega;
 			ofs << omega/eV;
-			for(int iMu=0; iMu<dmuCount; iMu++)
-				ofs << '\t' << ImEps[iMu].out[iOmega];
+			for(size_t iChannel=0; iChannel<cie.nChannels; iChannel++)
+				ofs << '\t' << ImEps[iChannel].out[iOmega];
 			ofs << '\n';
 		}
 	}

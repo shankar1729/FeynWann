@@ -56,13 +56,13 @@ struct ePhRelax
 		logPrintf("Z = %lg\n", Z);
 		logPrintf("T = %lg\n", T);
 		logPrintf("E range in carrier distrib = (%lg, %lg)\n", minEcut, maxEcut);
-                logPrintf("Probability a carrier gets injected: %lg\n", pInject);
+		logPrintf("Probability a carrier gets injected: %lg\n", pInject);
 		logPrintf("Uabs = %lg\n", Uabs);
 		logPrintf("Eplasmon = %lg\n", Eplasmon);
 		logPrintf("De = %lg\n", De);
 		logPrintf("runName = %s\n", runName.c_str());
-		logPrintf("R:\n");
-		R.print(globalLog, " %lg ");
+		logPrintf("R:\n"); R.print(globalLog, " %lg ");
+		logPrintf("detR = %lg\n", detR);
 		
 		//Read electron and phonon DOS (and convert to atomic units and per-unit volume):
 		dos.init("eDOS.dat", eV, 1./(detR*eV));
@@ -116,12 +116,12 @@ struct ePhRelax
 		{	const double& Ei = Egrid(ie);
 			double dni = distribDirect.interp1(Ei, Eplasmon) + distribPhonon.interp1(Ei, Eplasmon); //induced carrier number change at given energy
 			Upert += dni * Ei * dE; //calculate energy of perturbation
-                        if (Ei < minEcut || Ei > maxEcut)
-                        {       double dniInjected = dni * pInject;
-                                dZ -= dniInjected * dE; //count electrons/holes removed
-                                dni -= dniInjected;
-                        }
-                        fPert[ie] = dni / std::max(dos.yGrid[0][ie], 1e-3*dos0); //divide by DOS to get the effective filling change (regularize to avoid Infs)
+			if (Ei < minEcut || Ei > maxEcut)
+			{	double dniInjected = dni * pInject;
+				dZ -= dniInjected * dE; //count electrons/holes removed
+				dni -= dniInjected;
+			}
+			fPert[ie] = dni / std::max(dos.yGrid[0][ie], 1e-3*dos0); //divide by DOS to get the effective filling change (regularize to avoid Infs)
 		}
 		fPert *= Uabs / Upert; //normalize to match absorbed laser energy per unit volume
 		dZ *= detR * Uabs / Upert; //correspondingly normalize (but per unit cell)
@@ -301,6 +301,7 @@ int main(int argc, char** argv)
 	logPrintf("\nSolving boltzmann eqn:\n");
 	logPrintf("%5s  %19s  %19s  %19s  %7s  %s\n", "t[fs]",  "Ee[J/m^3]", "El[J/m^3]", "(El+Ee)[J/m^3]", "Tl[K]", "Progress");
 	logFlush();
+	
 	while(t < e.tMax-1e-3*e.dt)
 	{	int status = gsl_odeiv2_driver_apply(odeDriver, &t, t+e.dt, f.data());
 		if(status != GSL_SUCCESS) die("Error %d in ODE propagation", status)
