@@ -27,15 +27,18 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 #include "InputMap.h"
 #include <core/Units.h>
 
-//Get energy range from an eLoop call:
+//Get energy and speed range from an eLoop call:
 struct EnergyRange
 {	double Emin;
 	double Emax;
+	double vMax;
 	
 	static void eProcess(const FeynWann::StateE& state, void* params)
 	{	EnergyRange& er = *((EnergyRange*)params);
 		er.Emin = std::min(er.Emin, state.E.front()); //E is in ascending order
 		er.Emax = std::max(er.Emax, state.E.back()); //E is in ascending order
+		for(const vector3<>& v: state.vVec)
+			er.vMax = std::max(er.vMax, v.length()); //v is not ordered
 	}
 };
 
@@ -50,20 +53,23 @@ struct CollectImEps
 	double T, invT;
 	double GammaS;
 	double domega, omegaFull, omegaMax;
+	double dv, vMax;
 	std::vector<Histogram> ImEps, breadth, breadthDen;
-	Histogram2D ImEps_E; //ImEpsDelta resolved by carrier density; collected only for first mu
+	Histogram2D ImEps_E; //ImEpsDelta resolved by carrier energy; collected only for first mu
+	Histogram2D ImEps_v; //ImEpsDelta resolved by carrier speed; collected only for first mu
 	double prefac;
 	double eta; //singularity extrapolation width
 	vector3<complex> Ehat;
 	double EvMax, EcMin;
 	
 	
-	CollectImEps(const std::vector<double>& dmu, double T, double domega, double omegaFull, double omegaMax)
-	: dmu(dmu), T(T), invT(1./T), domega(domega), omegaFull(omegaFull), omegaMax(omegaMax),
+	CollectImEps(const std::vector<double>& dmu, double T, double domega, double omegaFull, double omegaMax, double dv, double vMax)
+	: dmu(dmu), T(T), invT(1./T), domega(domega), omegaFull(omegaFull), omegaMax(omegaMax), dv(dv), vMax(vMax),
 		ImEps(dmu.size(), Histogram(0, domega, omegaFull)),
 		breadth(dmu.size(), Histogram(0, domega, omegaFull)),
 		breadthDen(dmu.size(), Histogram(0, domega, omegaFull)),
-		ImEps_E(-omegaMax, domega, omegaMax,  0, domega, omegaFull) //ImEpsDelta resolved by carrier density; collected only for first mu
+		ImEps_E(-omegaMax, domega, omegaMax,  0, domega, omegaFull),
+		ImEps_v(-vMax, dv, vMax,  0, domega, omegaFull)
 	{	logPrintf("Initialized frequency grid: 0 to %lg eV with %d points.\n", ImEps[0].Emax()/eV, ImEps[0].nE);
 		EvMax = *std::max_element(dmu.begin(), dmu.end()) + 10*T;
 		EcMin = *std::min_element(dmu.begin(), dmu.end()) - 10*T;
@@ -108,6 +114,9 @@ struct CollectImEps
 					if(iMu==0)
 					{	ImEps_E.addEvent(E[v], omega, -weight); //hole
 						ImEps_E.addEvent(E[c], omega, +weight); //electron
+						//speed distribution:
+						ImEps_v.addEvent(-state.vVec[v].length(), omega, -weight); //hole
+						ImEps_v.addEvent(+state.vVec[c].length(), omega, +weight); //electron
 					}
 				}
 			}
@@ -173,6 +182,9 @@ struct CollectImEps
 							if(iMu==0)
 							{	ImEps_E.addEvent(E1[v], omega, -weight); //hole
 								ImEps_E.addEvent(E2[c], omega, +weight); //electron
+								//speed distribution:
+								ImEps_v.addEvent(-mat.e1->vVec[v].length(), omega, -weight); //hole
+								ImEps_v.addEvent(+mat.e2->vVec[c].length(), omega, +weight); //electron
 							}
 						}
 					}
@@ -267,11 +279,14 @@ int main(int argc, char** argv)
 	
 	//Initialize frequency grid:
 	const double domega = T;
-	EnergyRange er = { DBL_MAX, -DBL_MAX };
+	EnergyRange er = { DBL_MAX, -DBL_MAX, 0. };
 	fw->eLoop(vector3<>(), EnergyRange::eProcess, &er);
 	mpiWorld->allReduce(er.Emin, MPIUtil::ReduceMin);
 	mpiWorld->allReduce(er.Emax, MPIUtil::ReduceMax);
+	mpiWorld->allReduce(er.vMax, MPIUtil::ReduceMax);
 	double omegaFull = er.Emax - er.Emin;
+	double vMax = 1.1*er.vMax; //add some margin
+	double dv = 0.01; //in atomic units (since typical vF is 0.5 - 1)
 	
 	//dmu array:
 	std::vector<double> dmu(dmuCount, dmuMin); //set first value here
@@ -279,7 +294,7 @@ int main(int argc, char** argv)
 		dmu[iMu] = dmuMin + iMu*(dmuMax-dmuMin)/(dmuCount-1);
 	
 	//Calculate delta-function resolved versions (no broadening yet):
-	CollectImEps cie(dmu, T, domega, omegaFull, omegaMax);
+	CollectImEps cie(dmu, T, domega, omegaFull, omegaMax, dv, vMax);
 	cie.prefac = 4. * std::pow(M_PI,2) * fw->spinWeight / (nKeff*fabs(det(fw->R))); //frequency independent part of prefactor
 	cie.eta = eta;
 	cie.GammaS = GammaS;
@@ -323,6 +338,7 @@ int main(int argc, char** argv)
 			cie.breadthDen[iMu].allReduce(MPIUtil::ReduceSum); //collected separately due to extrapolation sign
 	}
 	cie.ImEps_E.allReduce(MPIUtil::ReduceSum);
+	cie.ImEps_v.allReduce(MPIUtil::ReduceSum);
 	logPrintf("done.\n"); logFlush();
 	
 	//Normalize the breadths:
@@ -339,6 +355,7 @@ int main(int argc, char** argv)
 	//Apply broadening:
 	std::vector<Histogram> ImEps(dmuCount, Histogram(0, domega, omegaFull));
 	Histogram2D ImEps_E(-omegaMax, domega, omegaMax,  0, domega, omegaMax);
+	Histogram2D ImEps_v(-vMax, dv, vMax,  0, domega, omegaMax);
 	int iomegaStart, iomegaStop; TaskDivision(nomega, mpiWorld).myRange(iomegaStart, iomegaStop);
 	logPrintf("Applying broadening ... "); logFlush();
 	for(int iMu=0; iMu<dmuCount; iMu++)
@@ -349,7 +366,7 @@ int main(int argc, char** argv)
 			{	double omega = jomega*domega;
 				double kernel = lorentzianOdd(omega, omegaCur, b) * domega;
 				ImEps[iMu].out[jomega] += kernel * cie.ImEps[iMu].out[iomega];
-				//Carrier distributions:
+				//Carrier energy / speed distributions:
 				if(iMu==0 && int(jomega)<ImEps_E.nomega)
 				{	const int nE = ImEps_E.nE; assert(nE == cie.ImEps_E.nE);
 					for(int iE=0; iE<nE; iE++)
@@ -357,12 +374,19 @@ int main(int argc, char** argv)
 						int jOE = jomega*nE + iE;
 						ImEps_E.out[jOE] += kernel * cie.ImEps_E.out[iOE];
 					}
+					const int nv = ImEps_v.nE; assert(nv == cie.ImEps_v.nE);
+					for(int iv=0; iv<nv; iv++)
+					{	int iOv = iomega*nv + iv;
+						int jOv = jomega*nv + iv;
+						ImEps_v.out[jOv] += kernel * cie.ImEps_v.out[iOv];
+					}
 				}
 			}
 		}
 		ImEps[iMu].allReduce(MPIUtil::ReduceSum);
 	}
 	ImEps_E.allReduce(MPIUtil::ReduceSum); ImEps_E.print("carrierDistrib"+fileSuffix+".dat", 1./eV, 1./eV, 1.);
+	ImEps_v.allReduce(MPIUtil::ReduceSum); ImEps_v.print("velocityDistrib"+fileSuffix+".dat", 1., 1./eV, 1.);
 	logPrintf("done.\n"); logFlush();
 	
 	//Output ImEps:
