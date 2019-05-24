@@ -27,10 +27,6 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 
 template<typename T> T prod(const vector3<T>& v) { return v[0]*v[1]*v[2]; }
 
-complex c0(0., 0.);
-complex c1(1., 0.);
-complex cm1(-1., 0.);
-
 struct T1params
 {
 	unsigned nSpinTime; //number of spin relaxation/dephasing times; currently, only T1 is computed and it must be 1
@@ -69,79 +65,39 @@ struct CollectEph
 	const FeynWann& fw;
 	int nBands, nk, nOffsets1, nOffsets2, o1, o2;
 	std::vector<double> wko1, wko2;
-	std::vector<std::vector<diagMatrix>> E; //electron energies on k2 meshes
 	std::vector<vector3<>> kmesh; //DFT k-point mesh (full version i.e. unreduced)
 	double T1, NS, prefacT1kn; // actually T1 inverse; prefacT1kn is 2pi/hbar*EconservePrefac/prod(kFine)
 	std::vector<std::vector<diagMatrix>> T1kn; // actually T1 inverse, nOffsets2*nkfold*nBands
-	double ***SzdegSq;
-	bool **b_skip; // storing which k2 should be skipped due to tiny dfde
-	int **band0_used, **nband_used; // not used
-	double dfdemax, thr_skip, thr_deg; // thrhold for skipping a particular k2 where dfde are all tiny, set in CollectEph
-
+	const double thr_deg; //degeneracy threshold
+	
 	CollectEph(const FeynWann& fw, InputMap &map, const vector3<int> NkMult[], const int nOffsets[], const std::vector<double> wko[])
 		: fw(fw), nBands(fw.nBands), nk(prod(fw.kfold)),
 		nOffsets1(nOffsets[0]), nOffsets2(nOffsets[1]),
-		wko1(nOffsets1), wko2(nOffsets2),
-		E(nOffsets2, std::vector<diagMatrix>(nk)), kmesh(nk),
-		T1kn(nOffsets2, std::vector<diagMatrix>(nk, diagMatrix(nBands)))
+		wko1(nOffsets1), wko2(nOffsets2), kmesh(nk),
+		T1kn(nOffsets2, std::vector<diagMatrix>(nk, diagMatrix(nBands))),
+		thr_deg(1e-6)
 	{
 		for (int io = 0; io < nOffsets1; io++) { wko1[io] = wko[0][io]; }
 		for (int io = 0; io < nOffsets2; io++) { wko2[io] = wko[1][io]; }
 		T1 = 0.0; NS=0.0;
 		prefacT1kn = 2 * M_PI / nk / prod(NkMult[0]) * T1p->EconservePrefac; // including Gaussian prefactor
-		b_skip = new bool*[nOffsets2]; for (int io = 0; io < nOffsets2; io++) { b_skip[io] = new bool[nk]; }
-		band0_used = new int*[nOffsets2]; for (int io = 0; io < nOffsets2; io++) { band0_used[io] = new int[nk]; }
-		nband_used = new int*[nOffsets2]; for (int io = 0; io < nOffsets2; io++) { nband_used[io] = new int[nk]; }
-		dfdemax = 0.; thr_skip = 1e-8; thr_deg = 1e-6;
-		SzdegSq = new double**[nOffsets2]; 
-		for (int io = 0; io < nOffsets2; io++){
-			SzdegSq[io] = new double*[nk];
-			for (int ik = 0; ik < nk; ik++)
-				SzdegSq[io][ik] = new double[nBands];
-		}
 	}
 
-	//---- Collect energies and kmesh ----
+	//---- Collect kmesh and NS ----
 	static void collectE(const FeynWann::StateE& state, void* params)
-	{
-		CollectEph& cEph = *((CollectEph*)params);
-		cEph.E[cEph.o2][state.ik] = state.E;
-		if (state.E.size() > 0)
-		for (int b1 = 0; b1 < cEph.nBands; b1++){
-			double dtmp = cEph.FD(state.E[b1])*(1. - cEph.FD(state.E[b1]));
-			cEph.SzdegSq[cEph.o2][state.ik][b1] = 0;
-			for (int b2 = 0; b2 < cEph.nBands; b2++){
-				if (fabs(state.E[b1] - state.E[b2]) < cEph.thr_deg)
-					cEph.SzdegSq[cEph.o2][state.ik][b1] += state.S[2](b1, b2).norm();
-			}
-			cEph.NS += cEph.SzdegSq[cEph.o2][state.ik][b1] * dtmp * cEph.wko2[cEph.o2];
-			if (dtmp > cEph.dfdemax)
-				cEph.dfdemax = dtmp;
+	{	CollectEph& cEph = *((CollectEph*)params);
+		for(int b1 = 0; b1 < cEph.nBands; b1++)
+		{	//Collect degenerate Sz^2:
+			double SzdegSq = 0.;
+			for(int b2 = 0; b2 < cEph.nBands; b2++)
+				if(fabs(state.E[b1] - state.E[b2]) < cEph.thr_deg)
+					SzdegSq += state.S[2](b1, b2).norm();
+			//Compute contribution to degeneracy factor:
+			double f1 = cEph.FD(state.E[b1]);
+			cEph.NS += cEph.wko2[cEph.o2] * SzdegSq * f1*(1.-f1);
 		}
 		if (cEph.o2 == 0)
 			cEph.kmesh[state.ik] = state.k;
-	}
-	
-	void get_skip()
-	{
-		for (int io = 0; io < nOffsets2; io++)
-		for (int ik = 0; ik < nk; ik++){
-			b_skip[io][ik] = true;
-			band0_used[io][ik] = nBands;
-			nband_used[io][ik] = 0;
-			for (int b1 = 0; b1 < nBands; b1++)
-			if (FD(E[io][ik][b1])*(1 - FD(E[io][ik][b1])) / dfdemax > thr_skip){
-				b_skip[io][ik] = false;
-				band0_used[io][ik] = b1;
-				nband_used[io][ik]++;
-				for (int b2 = b1 + 1; b2 < nBands; b2++)
-				if (FD(E[io][ik][b1])*(1 - FD(E[io][ik][b1])) / dfdemax > thr_skip)
-					nband_used[io][ik]++;
-				else
-					break;
-				break;
-			}
-		}
 	}
 	
 	inline matrix degenerateProject(const matrix& in, const diagMatrix& E)
@@ -157,8 +113,7 @@ struct CollectEph
 	}
 	
 	void process(const FeynWann::MatrixEph& mEph)
-	{
-		const FeynWann::StateE& e1 = *(mEph.e1);
+	{	const FeynWann::StateE& e1 = *(mEph.e1);
 		const FeynWann::StateE& e2 = *(mEph.e2);
 		const FeynWann::StatePh& ph = *(mEph.ph);
 		const int nModes = ph.omega.nRows();
@@ -196,6 +151,9 @@ struct CollectEph
 					* nPh * f2[b2] * (1 - f[b1]); //occupation factors
 		}
 	}
+	static void ePhProcess(const FeynWann::MatrixEph& mEph, void* params)
+	{	((CollectEph*)params)->process(mEph);
+	}
 	
 	void get_T1()
 	{
@@ -222,9 +180,7 @@ struct CollectEph
 	
 	double FD(double E) { return 1. / (exp((E - T1p->dmu) / T1p->T) + 1.); }
 	
-	static void ePhProcess(const FeynWann::MatrixEph& mEph, void* params){
-		((CollectEph*)params)->process(mEph);
-	}
+
 };
 
 void find_equiv_k(std::vector<vector3<>> &kmesh, FeynWann &fw, std::vector<int> &invertList, std::vector<int> &equiv_k, std::vector<int> &kReduced){
@@ -245,19 +201,6 @@ void find_equiv_k(std::vector<vector3<>> &kmesh, FeynWann &fw, std::vector<int> 
 			kReduced.push_back(i0);
 		}
 	}
-}
-
-void write_equiv_k(std::vector<vector3<>> &kmesh, std::vector<int> &equiv_k, std::vector<int> &kReduced){
-	string fname = "equiv_k.dat";
-	FILE* fp = fopen(fname.c_str(), "w");
-	fprintf(fp, "reduced k points %lu:\n", kReduced.size());
-	for (int i : kReduced)
-		fprintf(fp, "%4d %12.8lf %12.8lf %12.8lf\n", i, kmesh[i][0], kmesh[i][1], kmesh[i][2]);
-	fprintf(fp, "other k points:\n");
-	for (size_t i = 0; i < kmesh.size(); i++)
-	if (equiv_k[i]>0)
-		fprintf(fp, "%4lu %4d %12.8lf %12.8lf %12.8lf\n", i, equiv_k[i], kmesh[i][0], kmesh[i][1], kmesh[i][2]);
-	fclose(fp);
 }
 
 void get_kMult(InputMap &inputMap, FeynWann &fw, vector3<int> NkMult[], std::vector<vector3<>> kMult[], vector3<> &kshift, vector3<int> &NkFine){
@@ -391,21 +334,11 @@ int main(int argc, char** argv){
 
 	//Initialize cEph and Collect energies, k-point mesh, NS and skip
 	CollectEph cEph(fw, inputMap, NkMult, nOffsets, wko);
-	for (cEph.o2 = 0; cEph.o2 < cEph.nOffsets2; cEph.o2++){
+	for(cEph.o2 = 0; cEph.o2 < cEph.nOffsets2; cEph.o2++)
 		fw.eLoop(ko[1][cEph.o2], CollectEph::collectE, &cEph);
-		//--- make available on all processes:
-		for (int i = 0; i < cEph.nk; i++){
-			int root = cEph.E[cEph.o2][i].size() ? mpiGroup->iProcess() : mpiGroup->nProcesses(); //my process ID or N, depending on whether I have E[i]
-			mpiGroup->allReduce(root, MPIUtil::ReduceMin); //lowest process number which has E[i] available
-			cEph.E[cEph.o2][i].resize(fw.nBands);
-			mpiGroup->bcast(cEph.E[cEph.o2][i].data(), fw.nBands, root);
-		}
-	}
 	mpiGroup->allReduce(&cEph.kmesh[0][0], 3 * cEph.kmesh.size(), MPIUtil::ReduceSum);
 	mpiGroup->allReduce(&cEph.NS, 1, MPIUtil::ReduceSum);
-	mpiGroup->allReduce(&cEph.dfdemax, 1, MPIUtil::ReduceMax);
 
-	cEph.get_skip();
 	std::vector<int> equiv_k(cEph.kmesh.size()), kReduced;
 	find_equiv_k(cEph.kmesh, fw, invertList, equiv_k, kReduced);
 
