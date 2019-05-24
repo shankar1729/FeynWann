@@ -29,6 +29,7 @@ template<typename T> T prod(const vector3<T>& v) { return v[0]*v[1]*v[2]; }
 
 complex c0(0., 0.);
 complex c1(1., 0.);
+complex cm1(-1., 0.);
 
 struct T1params{
 	bool debug;
@@ -39,9 +40,10 @@ struct T1params{
 	double EconserveWidth;
 	double EconserveExpFac, EconservePrefac; //energy conserving Gaussian exponential and pre-factor
 	// phDOS(omega close to 0) should be proportional to omega^2
-	// but due to numeric errors or the existence of imaginary phonon frequencies, it is not alway true, so we can suppress tiny phonon frequencies
+	// but due to numeric errors or the existence of maginary phonon frequencies, it is not alway true, so we can suppress tiny phonon frequencies
 	double omegaStart; // in unit of Kelvin
 	vector3<> kshift;
+	bool acousticonly;
 
 	T1params(const FeynWann& fw, InputMap &map){
 		nSpinTime = fw.isRelativistic() ? 1 : 0;
@@ -49,15 +51,18 @@ struct T1params{
 		T = map.get("T", 300.) * Kelvin;
 		dmu = map.get("dmu", 0.0) * eV;
 		EconserveWidth = map.get("EconserveWidth", 0.01) * eV;
-		EconserveExpFac = -0.25 / std::pow(EconserveWidth, 2); EconservePrefac = 1. / (sqrt(2.*M_PI)*EconserveWidth); // two sqrt of Gaussian
+		EconserveExpFac = -0.5 / std::pow(EconserveWidth, 2); EconservePrefac = 1. / (sqrt(2.*M_PI)*EconserveWidth); // two sqrt of Gaussian
 		omegaStart = map.get("omegaStart", 0.0) * Kelvin;
 		kshift = map.getVector("kshift", vector3<>(0.5, 0.5, 0.5));
+		acousticonly = map.get("acousticonly", false);
 		logPrintf("\nInputs after conversion to atomic units:\n");
 		logPrintf("T = %g\n", T);
 		logPrintf("dmu= %lg\n", dmu);
 		logPrintf("EconserveWidth = %lg\n", EconserveWidth);
 		logPrintf("omegaStart = %g\n", omegaStart);
 		logPrintf("kshift = %12.8lf %12.8lf %12.8lf\n", kshift[0], kshift[1], kshift[2]);
+		logPrintf("acousticonly = %d\n", acousticonly);
+		logPrintf("debug = %d\n", debug);
 
 		debug = map.get("debug", false);
 		nocc = map.get("nocc", 1);
@@ -67,25 +72,26 @@ struct T1params{
 } *T1p;
 
 struct CollectEph{
-
 	const FeynWann& fw;
 	int nBands, nk, nOffsets1, nOffsets2, o1, o2;
 	std::vector<double> wko1, wko2;
 	std::vector<std::vector<diagMatrix>> E; //electron energies on k2 meshes
 	std::vector<vector3<>> kmesh; //DFT k-point mesh (full version i.e. unreduced)
 	double T1, NS, prefacT1kn; // actually T1 inverse; prefacT1kn is 2pi/hbar*EconservePrefac/prod(kFine)
-	std::vector<std::vector<diagMatrix>> T1kn; // actually T1 inverse, nOffsets2*nkfold*nBands
+	std::vector<std::vector<diagMatrix>> T1kn, Tkn; // actually T1 inverse, nOffsets2*nkfold*nBands, Tkn - carrier lifetime
 	complex **Sz_debug; // Sz around VBM and CBM
+	double ***SzdegSq;
 	bool **b_skip; // storing which k2 should be skipped due to tiny dfde
 	int **band0_used, **nband_used; // not used
-	double dfdemax, thr_skip; // thrhold for skipping a particular k2 where dfde are all tiny, by default 1e-12
+	double dfdemax, thr_skip, thr_deg; // thrhold for skipping a particular k2 where dfde are all tiny, set in CollectEph
 	FILE *fdebug;
 	CollectEph(const FeynWann& fw, InputMap &map, const vector3<int> NkMult[], const int nOffsets[], const std::vector<double> wko[])
 		: fw(fw), nBands(fw.nBands), nk(prod(fw.kfold)),
 		nOffsets1(nOffsets[0]), nOffsets2(nOffsets[1]),
 		wko1(nOffsets1), wko2(nOffsets2),
 		E(nOffsets2, std::vector<diagMatrix>(nk)), kmesh(nk),
-		T1kn(nOffsets2, std::vector<diagMatrix>(nk, diagMatrix(nBands))){
+		T1kn(nOffsets2, std::vector<diagMatrix>(nk, diagMatrix(nBands))),
+		Tkn(nOffsets2, std::vector<diagMatrix>(nk, diagMatrix(nBands))){
 		for (int io = 0; io < nOffsets1; io++) { wko1[io] = wko[0][io]; }
 		for (int io = 0; io < nOffsets2; io++) { wko2[io] = wko[1][io]; }
 		T1 = 0.0; NS=0.0;
@@ -93,7 +99,13 @@ struct CollectEph{
 		b_skip = new bool*[nOffsets2]; for (int io = 0; io < nOffsets2; io++) { b_skip[io] = new bool[nk]; }
 		band0_used = new int*[nOffsets2]; for (int io = 0; io < nOffsets2; io++) { band0_used[io] = new int[nk]; }
 		nband_used = new int*[nOffsets2]; for (int io = 0; io < nOffsets2; io++) { nband_used[io] = new int[nk]; }
-		dfdemax = 0.; thr_skip = 1e-12;
+		dfdemax = 0.; thr_skip = 1e-8; thr_deg = 1e-6;
+		SzdegSq = new double**[nOffsets2]; 
+		for (int io = 0; io < nOffsets2; io++){
+			SzdegSq[io] = new double*[nk];
+			for (int ik = 0; ik < nk; ik++)
+				SzdegSq[io][ik] = new double[nBands];
+		}
 		if (T1p->debug){
 			Sz_debug = new complex*[nk]; for (int ik = 0; ik < nk; ik++){ Sz_debug[ik] = new complex[nBands*nBands]; }
 			string fname = "debug.dat";
@@ -107,8 +119,13 @@ struct CollectEph{
 		cEph.E[cEph.o2][state.ik] = state.E;
 		if (state.E.size() > 0)
 		for (int b1 = 0; b1 < cEph.nBands; b1++){
-			double dtmp = cEph.dfdE(state.E[b1]);
-			cEph.NS += dtmp * cEph.wko2[cEph.o2];
+			double dtmp = cEph.FD(state.E[b1])*(1. - cEph.FD(state.E[b1]));
+			cEph.SzdegSq[cEph.o2][state.ik][b1] = 0;
+			for (int b2 = 0; b2 < cEph.nBands; b2++){
+				if (fabs(state.E[b1] - state.E[b2]) < cEph.thr_deg)
+					cEph.SzdegSq[cEph.o2][state.ik][b1] += state.S[2](b1, b2).norm();
+			}
+			cEph.NS += cEph.SzdegSq[cEph.o2][state.ik][b1] * dtmp * cEph.wko2[cEph.o2];
 			if (dtmp > cEph.dfdemax)
 				cEph.dfdemax = dtmp;
 		}
@@ -127,15 +144,15 @@ struct CollectEph{
 			band0_used[io][ik] = nBands;
 			nband_used[io][ik] = 0;
 			for (int b1 = 0; b1 < nBands; b1++)
-			if (dfdE(E[io][ik][b1]) / dfdemax > thr_skip){
+			if (FD(E[io][ik][b1])*(1 - FD(E[io][ik][b1])) / dfdemax > thr_skip){
 				b_skip[io][ik] = false;
 				band0_used[io][ik] = b1;
 				nband_used[io][ik]++;
 				for (int b2 = b1 + 1; b2 < nBands; b2++)
-					if (dfdE(E[io][ik][b2]) / dfdemax > thr_skip)
-						nband_used[io][ik]++;
-					else
-						break;
+				if (FD(E[io][ik][b1])*(1 - FD(E[io][ik][b1])) / dfdemax > thr_skip)
+					nband_used[io][ik]++;
+				else
+					break;
 				break;
 			}
 		}
@@ -150,11 +167,12 @@ struct CollectEph{
 					fprintf(fp, "(%8.5f,%8.5f)", Sz_debug[i][nBands*b1 + b2].real(), Sz_debug[i][nBands*b1 + b2].imag());
 				fprintf(fp, "\n");
 			}
+			fprintf(fp, "Sz^2:\n");
 			complex sz2[nBands*nBands];
 			cblas_zhemm(CblasRowMajor, CblasLeft, CblasUpper, nBands, nBands, &c1, Sz_debug[i], nBands, Sz_debug[i], nBands, &c0, sz2, nBands);
 			for (int b1 = std::max(0, T1p->nocc - 6); b1 < std::min(T1p->nocc + 2, nBands); b1++){
                                 for (int b2 = std::max(0, T1p->nocc - 6); b2 < std::min(T1p->nocc + 2, nBands); b2++)
-                                        fprintf(fp, "(%8.5f,%8.5f)", sz2[nBands*b1 + b2].real(), sz2[nBands*b1 + b2].imag());
+                                        fprintf(fp, "(%9.7f,%9.7f)", sz2[nBands*b1 + b2].real(), sz2[nBands*b1 + b2].imag());
 				fprintf(fp, "\n");
 			}
 		}
@@ -170,11 +188,11 @@ struct CollectEph{
 			for (int i : kReduced){
 				fprintf(fp, "k: %4d\n", i);
 				for (int b1 = 0; b1 < nBands; b1++)
-					fprintf(fp, "band=%d, E=%g, dfdE=%g\n", b1, E[io][i][b1], dfdE(E[io][i][b1]));
+					fprintf(fp, "band=%d, E=%g, NSkn=%g\n", b1, E[io][i][b1], SzdegSq[io][i][b1] * FD(E[io][i][b1])*(1 - FD(E[io][i][b1])));
 			}
 			for (int i = 0; i < nk; i++)
 			for (int b1 = 0; b1 < nBands; b1++)
-				NS_recalc += dfdE(E[io][i][b1]) * wko2[io];
+				NS_recalc += SzdegSq[io][i][b1] * FD(E[io][i][b1])*(1 - FD(E[io][i][b1])) * wko2[io];
 		}
 		fprintf(fp, "NS_recalc = %g\n", NS_recalc);
 		fclose(fp);
@@ -196,76 +214,85 @@ struct CollectEph{
 		const FeynWann::StateE& e2 = *(mEph.e2);
 		const FeynWann::StatePh& ph = *(mEph.ph);
 		const int nModes = ph.omega.nRows();
-		double F[nBands];
-		complex Gpm[nBands*nBands], sk[nBands*nBands], sk2[nBands*nBands], sG[nBands*nBands], sGs[nBands*nBands];
+		double f[nBands], f2[nBands], Fp[nBands], Fm[nBands];
+		complex g[nBands*nBands], skdeg[nBands*nBands], sk2deg[nBands*nBands], sg_commute[nBands*nBands];
+		bool b_debug;
 
-		if (T1p->debug && (o1 != 0 || o2 != 0 || (e2.ik != 0 && e2.ik != 1))) return;
+		b_debug = o2 == 0 && e2.ik == 0;
+		if (T1p->debug && !b_debug) return;
+		//if (b_skip[o2][e2.ik]) return;
+		if (T1p->debug) fprintf(fdebug, "T1kn, o1=%2d, o2=%2d, k=%4d, k2=%4d\n", o1, o2, e1.ik, e2.ik);
 
-		if (b_skip[o2][e2.ik]) return;
-
-		for (int b1 = 0; b1 < nBands; b1++)
-		for (int b2 = 0; b2 < nBands; b2++){
-			sk[b1*nBands + b2] = e1.S[2](b1, b2); // factor 0.5 is cancelled by that in NS
-			sk2[b1*nBands + b2] = e2.S[2](b1, b2); // factor 0.5 is cancelled by that in NS
+		for (int b1 = 0; b1 < nBands; b1++){
+			f[b1] = FD(e1.E[b1]);
+			f2[b1] = FD(e2.E[b1]);
+			for (int b2 = 0; b2 < nBands; b2++){
+				if (fabs(e1.E[b1] - e1.E[b2]) < thr_deg) // thr_deg=1e-6
+					skdeg[b1*nBands + b2] = e1.S[2](b1, b2);
+				else
+					skdeg[b1*nBands + b2] = 0.;
+				if (fabs(e2.E[b1] - e2.E[b2]) < thr_deg)
+					sk2deg[b1*nBands + b2] = e2.S[2](b1, b2);
+				else
+					sk2deg[b1*nBands + b2] = 0.;
+			}
 		}
+		if (T1p->debug) write_debug(skdeg, "skdeg matrix\n");
+		if (T1p->debug) write_debug(sk2deg, "sk2deg matrix\n");
 		if (T1p->debug) write_debug(mEph.M, "g matrix\n");
 
-		// 1/T1_k2 = 4pi/N_k Re sum_k Tr{ [sk G^+-_kk2 sk2]^dagger F_k (G^+-_kk2)}
-		for (int ae = -1; ae <= +1; ae += 2){ //Loop over absorption and emission
-			for (int alpha = 0; alpha < nModes; alpha++){ //Loop over phonon modes
+		// 1/T1kn = prefac / NS sum_k k2 |sk^deg g_kk2 - g_kk2 sk2^deg|^2 delta n_q f' (1-f)
+		int nModes_ = T1p->acousticonly ? 3 : nModes;
+		for (int alpha = 0; alpha < nModes_; alpha++){ //Loop over phonon modes
 
-				const double& omegaPh = ph.omega[alpha];
-				if (omegaPh < T1p->omegaStart) continue;
-				if (T1p->debug) fprintf(fdebug, "ae = %2d, alpha = %4d\n", ae, alpha);
-
-				double nPh = BoseEinstein(omegaPh) + 0.5 + 0.5 * ae;
-				for (int b1 = 0; b1 < nBands; b1++){
-					F[b1] = nPh - ae*FD(e1.E[b1]);
-					if (T1p->debug && b1 >= T1p->nocc-2 && b1 < T1p->nocc+2) fprintf(fdebug, "omega = %g, nPh = %g, FD= %g, F= %g\n", omegaPh, nPh, FD(e1.E[b1]), F[b1]);
-				}
-
-				// G = g * sqrt(delta)
-				for (int b1 = 0; b1 < nBands; b1++){
-					const double& E1 = e1.E[b1];
-					for (int b2 = 0; b2 < nBands; b2++){
-						const double& E2 = e2.E[b2];
-						Gpm[b1*nBands + b2] = mEph.M[alpha](b1, b2) * sqrt_Gaussian(E1 - E2 + ae*omegaPh); // notice that prefactor of Gaussian has been included in prefecT1kn
-					}
-				}
-				if (T1p->debug) write_debug(Gpm, "G^{+-} matrix\n");
-
-				cblas_zhemm(CblasRowMajor, CblasLeft, CblasUpper, nBands, nBands, &c1, sk, nBands, Gpm, nBands, &c0, sG, nBands);
-				cblas_zhemm(CblasRowMajor, CblasRight, CblasUpper, nBands, nBands, &c1, sk2, nBands, sG, nBands, &c0, sGs, nBands);
-
-				for (int b1 = 0; b1 < nBands; b1++)
-				for (int b2 = 0; b2 < nBands; b2++)
-					T1kn[o2][e2.ik][b2] += wko1[o1] * ( norm(Gpm[b1*nBands + b2]) - real(conj(sGs[b1*nBands + b2]) * Gpm[b1*nBands + b2]) ) * F[b1];
-				if (T1p->debug)
-					for (int b2 = 0; b2 < nBands; b2++)
-						fprintf(fdebug, "T1kn[%4d][%4d][%4d] = %g\n", o2, e2.ik, b2, T1kn[o2][e2.ik][b2]);
+			const double& omegaPh = ph.omega[alpha];
+			if (omegaPh < T1p->omegaStart) continue;
+			double nPh = BoseEinstein(omegaPh);
+			if (T1p->debug) fprintf(fdebug, "alpha=%4d, omega=%g, nPh=%g\n", alpha, omegaPh, nPh);
+			for (int b = 0; b < nBands; b++){
+				Fp[b] = nPh + 1 - f[b];
+				Fm[b] = nPh + f[b];
 			}
+			
+			for (int b1 = 0; b1 < nBands; b1++)
+				for (int b2 = 0; b2 < nBands; b2++)
+					g[b1*nBands + b2] = mEph.M[alpha](b1, b2);
+
+			cblas_zhemm(CblasRowMajor, CblasRight, CblasUpper, nBands, nBands, &c1, sk2deg, nBands, g, nBands, &c0, sg_commute, nBands);
+			cblas_zhemm(CblasRowMajor, CblasLeft, CblasUpper, nBands, nBands, &c1, skdeg, nBands, g, nBands, &cm1, sg_commute, nBands);
+
+			for (int b1 = 0; b1 < nBands; b1++)
+			for (int b2 = 0; b2 < nBands; b2++){
+				T1kn[o2][e2.ik][b2] += wko1[o1] * sg_commute[b1*nBands + b2].norm() 
+					* Gaussian(e1.E[b1] - e2.E[b2] - omegaPh) * nPh * f2[b2] * (1 - f[b1]);
+				Tkn[o2][e2.ik][b2] += wko1[o1] * g[b1*nBands + b2].norm()
+					* (Fp[b1] * Gaussian(e1.E[b1] - e2.E[b2] + omegaPh) + Fm[b1] * Gaussian(e1.E[b1] - e2.E[b2] - omegaPh));
+			}
+			if (T1p->debug && o2==0 && e2.ik==0)
+				for (int b2 = T1p->nocc-6; b2 < T1p->nocc+2; b2++)
+					fprintf(fdebug, "T1kn-[%4d][%4d][%4d] = %g\n", o2, e2.ik, b2, T1kn[o2][e2.ik][b2]);
 		}
 	}
 	void get_T1(){
 		for (int io = 0; io < nOffsets2; io++){
 			double dtmp = 0.;
 			for (int ik = 0; ik < nk; ik++)
-			for (int b1 = 0; b1 < nBands; b1++){
-				T1kn[io][ik][b1] *= prefacT1kn;
-				dtmp += T1kn[io][ik][b1] * dfdE(E[io][ik][b1]);
+			for (int b = 0; b < nBands; b++){
+				T1kn[io][ik][b] *= prefacT1kn;
+				Tkn[io][ik][b] *= prefacT1kn;
+				dtmp += T1kn[io][ik][b];
 			}
 			T1 += dtmp * wko2[io];
 		}
 		T1 /= NS;
 	}
-	double sqrt_Gaussian(double E){ return exp(T1p->EconserveExpFac * E * E); }
+	double Gaussian(double E){ return exp(T1p->EconserveExpFac * E * E); }
 	double BoseEinstein(const double omegaPh){
 		double omegaPhByT = omegaPh / T1p->T;
 		if (omegaPhByT < 1e-3) return 0.; //avoid 0./0. below
 		return omegaPhByT>36 ? 0. : 1. / (exp(omegaPhByT) - 1.); //avoid overflow
 	}
 	double FD(double E){ return 1. / (exp((E - T1p->dmu) / T1p->T) + 1.); }
-	double dfdE(double E){ return FD(E)*(1. - FD(E)) / T1p->T; }
 	void write_debug(complex *a, string s){
 		fprintf(fdebug, s.c_str());
 		for (int b1 = std::max(0, T1p->nocc - 6); b1 < std::min(T1p->nocc + 2, nBands); b1++){
@@ -378,43 +405,6 @@ void get_kMult(InputMap &inputMap, FeynWann &fw, vector3<int> NkMult[], std::vec
 	NkFine.print(globalLog, " %d ");
 }
 
-void estimate_NkMult_min(CollectEph &cEph, FeynWann &fw, vector3<int> &NkFine){
-	//--- Get density of states:
-	TetrahedralDOS dosEval(cEph.kmesh, std::vector<int>(), fw.R, Diag(fw.kfold), 1, fw.nBands, 1);
-	double Etol = 1e-4;
-	dosEval.setEigs(cEph.E[0]);
-	dosEval.weldEigenvalues(Etol);
-	TetrahedralDOS::Lspline dos = dosEval.gaussSmooth(dosEval.getDOS(0, Etol), T1p->EconserveWidth); //dos within EconserveWidth of each energy
-	//--- Find minimum DOS at each DFT eigenvalue
-	double Ecut = 5 * eV; //only include states ~ 5 eV from fermi level / VBM
-	double dosMin = DBL_MAX;
-	double E0 = dos[0].first;
-	double dEinv = 1. / (dos[1].first - E0);
-	int ikStart, ikStop; TaskDivision(cEph.nk, mpiWorld).myRange(ikStart, ikStop);
-	for (int ik = ikStart; ik < ikStop; ik++)
-	for (double E : cEph.E[0][ik])
-	if (fabs(E) < Ecut)
-	{
-		double t = dEinv*(E - E0);
-		int i = floor(t); t -= i;
-		double dosCur = dos[i].second[0] * (1. - t) + dos[i + 1].second[0] * t;
-		dosMin = std::min(dosMin, dosCur);
-	}
-	mpiWorld->allReduce(dosMin, MPIUtil::ReduceMin);
-	//--- Calculate minimum folding such that minimum average states per EconserveWidth
-	double prodNkFineMin = 100. / (dosMin * T1p->EconserveWidth);
-	int nDim = 0;
-	for (int iDir = 0; iDir<3; iDir++)
-	if (NkFine[iDir]>1)
-		nDim++; //only count directions which have more than one k-point
-	int NkMultDim = round(std::pow(prodNkFineMin / cEph.kmesh.size(), 1. / nDim));
-	vector3<int> NkMultMin;
-	for (int iDir = 0; iDir<3; iDir++)
-		NkMultMin[iDir] = (NkFine[iDir]>1) ? NkMultDim : 1;
-	logPrintf("\nFor 100 states within EconserveWidth, NkMult ~ ");
-	NkMultMin.print(globalLog, " %d ");
-}
-
 void get_ko(FeynWann &fw, std::vector<int> &invertList, std::vector<vector3<>> kMult[], std::vector<vector3<>> ko[], std::vector<double> wko[], int nOffsets[]){
 	matrix3<> G = 2 * M_PI*inv(fw.R), GGT = G*(~G);
 	//--- Compile list of inversions to check:
@@ -508,7 +498,6 @@ int main(int argc, char** argv){
 	mpiGroup->allReduce(&cEph.NS, 1, MPIUtil::ReduceSum);
 	mpiGroup->allReduce(&cEph.dfdemax, 1, MPIUtil::ReduceMax);
 
-	estimate_NkMult_min(cEph, fw, NkFine);
 	cEph.get_skip();
 	std::vector<int> equiv_k(cEph.kmesh.size()), kReduced;
 	find_equiv_k(cEph.kmesh, fw, invertList, equiv_k, kReduced);
@@ -536,7 +525,7 @@ int main(int argc, char** argv){
 	int noMine = oStop - oStart; //number of offsets handled by current group
 	int oInterval = std::max(1, int(round(noMine / 50.))); //interval for reporting progress
 
-	//Collect results for each offset
+	//For T1kn, collect results for each offset
 	logPrintf("Collecting 1/T1kn: "); logFlush();
 	for (int o = oStart; o < oStop; o++){
 		cEph.o1 = o / cEph.nOffsets2;
@@ -545,13 +534,16 @@ int main(int argc, char** argv){
 		//Print progress:
 		if ((o - oStart + 1) % oInterval == 0) { logPrintf("%d%%(%2d,%2d) ", int(round((o - oStart + 1)*100. / noMine)), cEph.o1, cEph.o2); logFlush(); }
 	}
-	logPrintf("done.\n"); logFlush();
-	if ( T1p->debug) fclose(cEph.fdebug);
-
 	//Collect results from all processes:
 	for (std::vector<diagMatrix>& dArr : cEph.T1kn)
 	for (diagMatrix& d : dArr)
 		mpiWorld->allReduceData(d, MPIUtil::ReduceSum);
+	for (std::vector<diagMatrix>& dArr : cEph.Tkn)
+        for (diagMatrix& d : dArr)
+                mpiWorld->allReduceData(d, MPIUtil::ReduceSum);
+
+	logPrintf("done.\n"); logFlush();
+	if (T1p->debug) fclose(cEph.fdebug);
 	cEph.get_T1();
 
 	//Output T1, T1kn and energies in text file:
@@ -561,14 +553,34 @@ int main(int argc, char** argv){
 		FILE* fp = fopen(fname.c_str(), "w");
 		for (int io = 0; io < cEph.nOffsets2; io++){
 			fprintf(fp, "Offset: %d, weight: %lf\n", io, cEph.wko2[io]);
-			for (int i : kReduced){
-				fprintf(fp, "reduced k point %d\n", i);
-				for (int b = 0; b < cEph.nBands; b++)
-					fprintf(fp, "%+16.12lf  %19.12le\n", cEph.E[io][i][b], cEph.T1kn[io][i][b]);
+			for (int i = 0; i < cEph.nk; i++){
+				int itmp;
+				for (itmp = 0; itmp < cEph.nBands; itmp++)
+				if (cEph.T1kn[io][i][itmp] * cEph.wko2[io] / cEph.NS / cEph.T1 > 1e-4)
+					break;
+				if (itmp < cEph.nBands){
+					fprintf(fp, "k point %d\n", i);
+					for (int b = itmp; b < cEph.nBands; b++)
+					if (cEph.T1kn[io][i][b] * cEph.wko2[io] / cEph.NS / cEph.T1 > 1e-4)
+						fprintf(fp, "%+16.12lf %13.6le %13.6le\n", cEph.E[io][i][b], cEph.T1kn[io][i][b] / T1p->T, cEph.T1kn[io][i][b] * cEph.wko2[io] / cEph.NS);
+				}
 			}
 		}
+		logPrintf("T1 is %19.12le or %19.12le ps\n",1. / cEph.T1, 1 / cEph.T1 / fs / 1.e3 );
 		fprintf(fp, "inv of T1 is %19.12le or %19.12le ps^-1\n", cEph.T1, cEph.T1*fs*1.e3);
-		fprintf(fp, "T1 is %19.12le or %19.12le ps\n", 1./cEph.T1, 1/cEph.T1/fs/1.e3);
+		fprintf(fp, "T1 is %19.12le or %19.12le ps\n", 1. / cEph.T1, 1 / cEph.T1 / fs / 1.e3);
+		fclose(fp);
+
+		fname = "inv_Tkn.dat";
+		fp = fopen(fname.c_str(), "w");
+		for (int io = 0; io < cEph.nOffsets2; io++){
+			fprintf(fp, "Offset: %d, weight: %lf\n", io, cEph.wko2[io]);
+			for (int i = 0; i < cEph.nk; i++){
+				fprintf(fp, "k point %d\n", i);
+				for (int b = 0; b < cEph.nBands; b++)
+					fprintf(fp, "%+16.12lf %13.6le %13.6le\n", cEph.E[io][i][b], cEph.Tkn[io][i][b], 1.0 / cEph.Tkn[io][i][b] / fs / 1.e3);
+			}
+		}
 		fclose(fp);
 		logPrintf("done.\n");
 		logPrintf("HINT: check convergence of above numbers with NkMult.\n\n");
