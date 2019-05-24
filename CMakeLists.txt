@@ -117,4 +117,3 @@ add_FeynWann_executable(eph_T1)
 
 target_link_libraries(lindblad ${GSL_BLAS_LIBRARY})
 target_link_libraries(ePhRelax ${GSL_LIBRARY})
-target_link_libraries(eph_T1 ${GSL_BLAS_LIBRARY})
