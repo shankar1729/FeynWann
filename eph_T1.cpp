@@ -31,9 +31,8 @@ complex c0(0., 0.);
 complex c1(1., 0.);
 complex cm1(-1., 0.);
 
-struct T1params{
-	bool debug;
-	int nocc; // be careful that the starting band after wannierization can be different from that in DFT
+struct T1params
+{
 	unsigned nSpinTime; //number of spin relaxation/dephasing times; currently, only T1 is computed and it must be 1
 	double T;
 	double dmu;
@@ -62,16 +61,11 @@ struct T1params{
 		logPrintf("omegaStart = %g\n", omegaStart);
 		logPrintf("kshift = %12.8lf %12.8lf %12.8lf\n", kshift[0], kshift[1], kshift[2]);
 		logPrintf("acousticonly = %d\n", acousticonly);
-		logPrintf("debug = %d\n", debug);
-
-		debug = map.get("debug", false);
-		nocc = map.get("nocc", 1);
-		logPrintf("debug = %d\n", debug);
-		logPrintf("nocc = %d\n", nocc);
 	}
 } *T1p;
 
-struct CollectEph{
+struct CollectEph
+{
 	const FeynWann& fw;
 	int nBands, nk, nOffsets1, nOffsets2, o1, o2;
 	std::vector<double> wko1, wko2;
@@ -79,19 +73,19 @@ struct CollectEph{
 	std::vector<vector3<>> kmesh; //DFT k-point mesh (full version i.e. unreduced)
 	double T1, NS, prefacT1kn; // actually T1 inverse; prefacT1kn is 2pi/hbar*EconservePrefac/prod(kFine)
 	std::vector<std::vector<diagMatrix>> T1kn, Tkn; // actually T1 inverse, nOffsets2*nkfold*nBands, Tkn - carrier lifetime
-	complex **Sz_debug; // Sz around VBM and CBM
 	double ***SzdegSq;
 	bool **b_skip; // storing which k2 should be skipped due to tiny dfde
 	int **band0_used, **nband_used; // not used
 	double dfdemax, thr_skip, thr_deg; // thrhold for skipping a particular k2 where dfde are all tiny, set in CollectEph
-	FILE *fdebug;
+
 	CollectEph(const FeynWann& fw, InputMap &map, const vector3<int> NkMult[], const int nOffsets[], const std::vector<double> wko[])
 		: fw(fw), nBands(fw.nBands), nk(prod(fw.kfold)),
 		nOffsets1(nOffsets[0]), nOffsets2(nOffsets[1]),
 		wko1(nOffsets1), wko2(nOffsets2),
 		E(nOffsets2, std::vector<diagMatrix>(nk)), kmesh(nk),
 		T1kn(nOffsets2, std::vector<diagMatrix>(nk, diagMatrix(nBands))),
-		Tkn(nOffsets2, std::vector<diagMatrix>(nk, diagMatrix(nBands))){
+		Tkn(nOffsets2, std::vector<diagMatrix>(nk, diagMatrix(nBands)))
+	{
 		for (int io = 0; io < nOffsets1; io++) { wko1[io] = wko[0][io]; }
 		for (int io = 0; io < nOffsets2; io++) { wko2[io] = wko[1][io]; }
 		T1 = 0.0; NS=0.0;
@@ -106,15 +100,11 @@ struct CollectEph{
 			for (int ik = 0; ik < nk; ik++)
 				SzdegSq[io][ik] = new double[nBands];
 		}
-		if (T1p->debug){
-			Sz_debug = new complex*[nk]; for (int ik = 0; ik < nk; ik++){ Sz_debug[ik] = new complex[nBands*nBands]; }
-			string fname = "debug.dat";
-			fdebug = fopen(fname.c_str(), "w");
-		}
 	}
 
 	//---- Collect energies and kmesh ----
-	static void collectE(const FeynWann::StateE& state, void* params){
+	static void collectE(const FeynWann::StateE& state, void* params)
+	{
 		CollectEph& cEph = *((CollectEph*)params);
 		cEph.E[cEph.o2][state.ik] = state.E;
 		if (state.E.size() > 0)
@@ -129,15 +119,12 @@ struct CollectEph{
 			if (dtmp > cEph.dfdemax)
 				cEph.dfdemax = dtmp;
 		}
-		if (cEph.o2 == 0){
+		if (cEph.o2 == 0)
 			cEph.kmesh[state.ik] = state.k;
-			if (state.E.size() > 0 && T1p->debug)
-				for (int b1 = 0; b1 < cEph.nBands; b1++)
-				for (int b2 = 0; b2 < cEph.nBands; b2++)
-					cEph.Sz_debug[state.ik][b1*cEph.nBands + b2] = state.S[2](b1, b2);
-		}
 	}
-	void get_skip(){
+	
+	void get_skip()
+	{
 		for (int io = 0; io < nOffsets2; io++)
 		for (int ik = 0; ik < nk; ik++){
 			b_skip[io][ik] = true;
@@ -157,71 +144,15 @@ struct CollectEph{
 			}
 		}
 	}
-	void write_Sz(std::vector<int> &kReduced){
-		string fname = "Sz_bandedges.dat";
-		FILE* fp = fopen(fname.c_str(), "w");
-		for (int i : kReduced){
-			fprintf(fp, "k: %4d\n", i);
-			for (int b1 = std::max(0, T1p->nocc - 6); b1 < std::min(T1p->nocc + 2, nBands); b1++){
-				for (int b2 = std::max(0, T1p->nocc - 6); b2 < std::min(T1p->nocc + 2, nBands); b2++)
-					fprintf(fp, "(%8.5f,%8.5f)", Sz_debug[i][nBands*b1 + b2].real(), Sz_debug[i][nBands*b1 + b2].imag());
-				fprintf(fp, "\n");
-			}
-			fprintf(fp, "Sz^2:\n");
-			complex sz2[nBands*nBands];
-			cblas_zhemm(CblasRowMajor, CblasLeft, CblasUpper, nBands, nBands, &c1, Sz_debug[i], nBands, Sz_debug[i], nBands, &c0, sz2, nBands);
-			for (int b1 = std::max(0, T1p->nocc - 6); b1 < std::min(T1p->nocc + 2, nBands); b1++){
-                                for (int b2 = std::max(0, T1p->nocc - 6); b2 < std::min(T1p->nocc + 2, nBands); b2++)
-                                        fprintf(fp, "(%9.7f,%9.7f)", sz2[nBands*b1 + b2].real(), sz2[nBands*b1 + b2].imag());
-				fprintf(fp, "\n");
-			}
-		}
-		fclose(fp);
-	}
-	void write_NS(std::vector<int> &kReduced){
-		string fname = "NS.dat";
-		FILE* fp = fopen(fname.c_str(), "w");
-		fprintf(fp, "NS = %g\n", NS);
-		double NS_recalc = 0.;
-		for (int io = 0; io < nOffsets2; io++){
-			fprintf(fp, "Offset: %4d, weight: %lf\n", io, wko2[io]);
-			for (int i : kReduced){
-				fprintf(fp, "k: %4d\n", i);
-				for (int b1 = 0; b1 < nBands; b1++)
-					fprintf(fp, "band=%d, E=%g, NSkn=%g\n", b1, E[io][i][b1], SzdegSq[io][i][b1] * FD(E[io][i][b1])*(1 - FD(E[io][i][b1])));
-			}
-			for (int i = 0; i < nk; i++)
-			for (int b1 = 0; b1 < nBands; b1++)
-				NS_recalc += SzdegSq[io][i][b1] * FD(E[io][i][b1])*(1 - FD(E[io][i][b1])) * wko2[io];
-		}
-		fprintf(fp, "NS_recalc = %g\n", NS_recalc);
-		fclose(fp);
-	}
-	void write_skip(std::vector<int> &kReduced){
-		string fname = "skip.dat";
-		FILE* fp = fopen(fname.c_str(), "w");
-		fprintf(fp, "dfdemax = %g", dfdemax);
-		for (int io = 0; io < nOffsets2; io++){
-			fprintf(fp, "Offset: %4d\n", io);
-			for (int i : kReduced)
-				fprintf(fp, "k: %4d, b_skip = %d, band0 = %d, nband = %d\n", i, b_skip[io][i], band0_used[io][i], nband_used[io][i]);
-		}
-		fclose(fp);
-	}
 	
-	void process(const FeynWann::MatrixEph& mEph){
+	void process(const FeynWann::MatrixEph& mEph)
+	{
 		const FeynWann::StateE& e1 = *(mEph.e1);
 		const FeynWann::StateE& e2 = *(mEph.e2);
 		const FeynWann::StatePh& ph = *(mEph.ph);
 		const int nModes = ph.omega.nRows();
 		double f[nBands], f2[nBands], Fp[nBands], Fm[nBands];
 		complex g[nBands*nBands], skdeg[nBands*nBands], sk2deg[nBands*nBands], sg_commute[nBands*nBands];
-		bool b_debug;
-
-		b_debug = o2 == 0 && e2.ik == 0;
-		if (T1p->debug && !b_debug) return;
-		//if (b_skip[o2][e2.ik]) return;
-		if (T1p->debug) fprintf(fdebug, "T1kn, o1=%2d, o2=%2d, k=%4d, k2=%4d\n", o1, o2, e1.ik, e2.ik);
 
 		for (int b1 = 0; b1 < nBands; b1++){
 			f[b1] = FD(e1.E[b1]);
@@ -237,9 +168,6 @@ struct CollectEph{
 					sk2deg[b1*nBands + b2] = 0.;
 			}
 		}
-		if (T1p->debug) write_debug(skdeg, "skdeg matrix\n");
-		if (T1p->debug) write_debug(sk2deg, "sk2deg matrix\n");
-		if (T1p->debug) write_debug(mEph.M, "g matrix\n");
 
 		// 1/T1kn = prefac / NS sum_k k2 |sk^deg g_kk2 - g_kk2 sk2^deg|^2 delta n_q f' (1-f)
 		int nModes_ = T1p->acousticonly ? 3 : nModes;
@@ -248,7 +176,6 @@ struct CollectEph{
 			const double& omegaPh = ph.omega[alpha];
 			if (omegaPh < T1p->omegaStart) continue;
 			double nPh = BoseEinstein(omegaPh);
-			if (T1p->debug) fprintf(fdebug, "alpha=%4d, omega=%g, nPh=%g\n", alpha, omegaPh, nPh);
 			for (int b = 0; b < nBands; b++){
 				Fp[b] = nPh + 1 - f[b];
 				Fm[b] = nPh + f[b];
@@ -268,12 +195,11 @@ struct CollectEph{
 				Tkn[o2][e2.ik][b2] += wko1[o1] * g[b1*nBands + b2].norm()
 					* (Fp[b1] * Gaussian(e1.E[b1] - e2.E[b2] + omegaPh) + Fm[b1] * Gaussian(e1.E[b1] - e2.E[b2] - omegaPh));
 			}
-			if (T1p->debug && o2==0 && e2.ik==0)
-				for (int b2 = T1p->nocc-6; b2 < T1p->nocc+2; b2++)
-					fprintf(fdebug, "T1kn-[%4d][%4d][%4d] = %g\n", o2, e2.ik, b2, T1kn[o2][e2.ik][b2]);
 		}
 	}
-	void get_T1(){
+	
+	void get_T1()
+	{
 		for (int io = 0; io < nOffsets2; io++){
 			double dtmp = 0.;
 			for (int ik = 0; ik < nk; ik++)
@@ -286,32 +212,17 @@ struct CollectEph{
 		}
 		T1 /= NS;
 	}
-	double Gaussian(double E){ return exp(T1p->EconserveExpFac * E * E); }
-	double BoseEinstein(const double omegaPh){
+	
+	double Gaussian(double E) { return exp(T1p->EconserveExpFac * E * E); }
+	
+	double BoseEinstein(const double omegaPh)
+	{
 		double omegaPhByT = omegaPh / T1p->T;
 		if (omegaPhByT < 1e-3) return 0.; //avoid 0./0. below
 		return omegaPhByT>36 ? 0. : 1. / (exp(omegaPhByT) - 1.); //avoid overflow
 	}
-	double FD(double E){ return 1. / (exp((E - T1p->dmu) / T1p->T) + 1.); }
-	void write_debug(complex *a, string s){
-		fprintf(fdebug, s.c_str());
-		for (int b1 = std::max(0, T1p->nocc - 6); b1 < std::min(T1p->nocc + 2, nBands); b1++){
-			for (int b2 = std::max(0, T1p->nocc - 6); b2 < std::min(T1p->nocc + 2, nBands); b2++)
-				fprintf(fdebug, "(%g,%g)", a[b1*nBands + b2]);
-			fprintf(fdebug, "\n");
-		}
-	}
-	void write_debug(const std::vector<matrix>& m, string s){
-		fprintf(fdebug, s.c_str());
-		for (unsigned alpha = 0; alpha < m.size(); alpha++){
-			fprintf(fdebug, "alpha = %u\n", alpha);
-			for (int b1 = std::max(0, T1p->nocc - 6); b1 < std::min(T1p->nocc + 2, nBands); b1++){
-				for (int b2 = std::max(0, T1p->nocc - 6); b2 < std::min(T1p->nocc + 2, nBands); b2++)
-					fprintf(fdebug, "(%g,%g)", m[alpha](b1,b2).real(), m[alpha](b1,b2).imag());
-				fprintf(fdebug, "\n");
-			}
-		}
-	}
+	
+	double FD(double E) { return 1. / (exp((E - T1p->dmu) / T1p->T) + 1.); }
 	
 	static void ePhProcess(const FeynWann::MatrixEph& mEph, void* params){
 		((CollectEph*)params)->process(mEph);
@@ -490,8 +401,6 @@ int main(int argc, char** argv){
 			mpiGroup->allReduce(root, MPIUtil::ReduceMin); //lowest process number which has E[i] available
 			cEph.E[cEph.o2][i].resize(fw.nBands);
 			mpiGroup->bcast(cEph.E[cEph.o2][i].data(), fw.nBands, root);
-			if (cEph.o2 == 0 && T1p->debug)
-				mpiGroup->bcast(&cEph.Sz_debug[i][0], fw.nBands*fw.nBands, root);
 		}
 	}
 	mpiGroup->allReduce(&cEph.kmesh[0][0], 3 * cEph.kmesh.size(), MPIUtil::ReduceSum);
@@ -501,12 +410,6 @@ int main(int argc, char** argv){
 	cEph.get_skip();
 	std::vector<int> equiv_k(cEph.kmesh.size()), kReduced;
 	find_equiv_k(cEph.kmesh, fw, invertList, equiv_k, kReduced);
-	if (T1p->debug && mpiWorld->isHead()){
-		write_equiv_k(cEph.kmesh, equiv_k, kReduced);
-		cEph.write_Sz(kReduced);
-		cEph.write_NS(kReduced);
-		cEph.write_skip(kReduced);
-	}
 
 	logPrintf("\n");
 	if (ip.dryRun){
@@ -543,7 +446,6 @@ int main(int argc, char** argv){
                 mpiWorld->allReduceData(d, MPIUtil::ReduceSum);
 
 	logPrintf("done.\n"); logFlush();
-	if (T1p->debug) fclose(cEph.fdebug);
 	cEph.get_T1();
 
 	//Output T1, T1kn and energies in text file:
