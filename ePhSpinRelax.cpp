@@ -30,13 +30,14 @@ struct SpinRelaxCollect
 	const double omegaPhMinByT; //lower cutoff in phonon frequency / T
 	const int nModes; //number of phonon modes to include in calculation (override if any, applied below already)
 	
+	const double EconserveWidth; //energy conservation width for Gaussian delta
 	const double EconserveExpFac; //exponential factor in Gaussian delta for energy conservation
 	const double prefacGamma, prefacChi; //prefactors for numerator and denominator of T1
 	
 	std::vector<matrix3<>> Gamma, chi; //numerator and denominator in T1^-1, for each dmu
 	
 	SpinRelaxCollect(const std::vector<double>& dmu, double T, double omegaPhMin, int nModes, double EconserveWidth, size_t nKpairs)
-	: dmu(dmu), T(T), omegaPhMinByT(std::max(1e-3,omegaPhMin/T)), nModes(nModes),
+	: dmu(dmu), T(T), omegaPhMinByT(std::max(1e-3,omegaPhMin/T)), nModes(nModes), EconserveWidth(EconserveWidth),
 		EconserveExpFac(-0.5/std::pow(EconserveWidth, 2)),
 		prefacGamma(2*M_PI/ (nKpairs * sqrt(2.*M_PI)*EconserveWidth)), //include prefactor of Gaussian energy conservation
 		prefacChi(0.5/nKpairs), //collected over both k in each k-pair for consistency
@@ -44,21 +45,21 @@ struct SpinRelaxCollect
 	{
 	}
 	
-	inline SparseMatrix degenerateProject(const matrix& M, const diagMatrix& E)
+	inline SparseMatrix degenerateProject(const matrix& M, const diagMatrix& E, int bStart, int bStop)
 	{	static const double degeneracyThreshold = 1e-6;
-		const int nBands = E.nRows();
-		SparseMatrix result; result.reserve(nBands); //typically diagonal (Rashba) or block diagonal with size 2 (Kramer-degenerate)
-		const complex* Mdata = M.data();
-		for(int b2=0; b2<nBands; b2++)
-		for(int b1=0; b1<nBands; b1++)
-		{	if(fabs(E[b1] - E[b2]) < degeneracyThreshold)
-			{	SparseEntry sr;
-				sr.i = b1;
-				sr.j = b2;
-				sr.val = *(Mdata);
-				result.push_back(sr);
+		SparseMatrix result; result.reserve(bStop-bStart); //typically diagonal (Rashba) or block diagonal with size 2 (Kramer-degenerate)
+		for(int b2=bStart; b2<bStop; b2++)
+		{	const complex* Mdata = M.data() + (b2*M.nRows() + bStart);
+			for(int b1=bStart; b1<bStop; b1++)
+			{	if(fabs(E[b1] - E[b2]) < degeneracyThreshold)
+				{	SparseEntry sr;
+					sr.i = b1 - bStart; //relative to submatrix
+					sr.j = b2 - bStart;
+					sr.val = *(Mdata);
+					result.push_back(sr);
+				}
+				Mdata++;
 			}
-			Mdata++;
 		}
 		return result;
 	}
@@ -70,11 +71,42 @@ struct SpinRelaxCollect
 		const int nBands = e1.E.nRows();
 		const double invT = 1./T;
 		
+		//Select relevant band range:
+		//--- determine max energy below and min energy above any mu
+		const double &dmuMin = dmu.front(), &dmuMax = dmu.back();
+		double EvMax = -DBL_MAX, EcMin = +DBL_MAX;
+		#define GET_EvEc(s) \
+			for(int b=0; b<nBands; b++) \
+			{	const double& E = e##s.E[b]; \
+				if(E<dmuMin and E>EvMax) EvMax = E; \
+				if(E>dmuMax and E<EcMin) EcMin = E; \
+			}
+		GET_EvEc(1)
+		GET_EvEc(2)
+		#undef GET_EvEc
+		//--- add margins of max phonon energy, energy conservation width and fermiPrime width
+		double Emargin = ph.omega.back() + 6.*EconserveWidth + 15.*T;
+		double Estart = EvMax - Emargin;
+		double Estop = EcMin + Emargin;
+		//--- select band range that covers this energy range
+		int bStart = nBands, bStop = 0;
+		#define SET_bRange(s) \
+			for(int b=0; b<nBands; b++) \
+			{	const double& E = e##s.E[b]; \
+				if(E>=Estart and b<bStart) bStart=b; \
+				if(E<=Estop and b>=bStop) bStop=b+1; \
+			}
+		SET_bRange(1)
+		SET_bRange(2)
+		#undef SET_bRange
+		int nBandsSel = bStop - bStart; //reduced number of selected bands at this k-pair
+		int nBandsSelSq = nBandsSel * nBandsSel;
+		
 		//Degenerate spin projections:
 		std::vector<SparseMatrix> Sdeg1(3), Sdeg2(3);
 		for(int iDir=0; iDir<3; iDir++)
-		{	Sdeg1[iDir] = degenerateProject(e1.S[iDir], e1.E);
-			Sdeg2[iDir] = degenerateProject(e2.S[iDir], e2.E);
+		{	Sdeg1[iDir] = degenerateProject(e1.S[iDir], e1.E, bStart, bStop);
+			Sdeg2[iDir] = degenerateProject(e2.S[iDir], e2.E, bStart, bStop);
 		}
 		
 		//Compute chi contributions by band except for electron occupation factors:
@@ -82,16 +114,16 @@ struct SpinRelaxCollect
 			std::vector<matrix3<>> contribChi##s(nBands); \
 			for(int iDir=0; iDir<3; iDir++) \
 			for(int jDir=0; jDir<3; jDir++) \
-			{	diagMatrix SiSj = diagSS(Sdeg##s[iDir], Sdeg##s[jDir], nBands); \
-				for(int b=0; b<nBands; b++) \
-					contribChi##s[b](iDir,jDir) = prefacChi * SiSj[b]; \
+			{	diagMatrix SiSj = diagSS(Sdeg##s[iDir], Sdeg##s[jDir], nBandsSel); \
+				for(int b=bStart; b<bStop; b++) \
+					contribChi##s[b](iDir,jDir) = prefacChi * SiSj[b-bStart]; \
 			}
 		CONTRIB_chi(1)
 		CONTRIB_chi(2)
 		#undef CONTRIB_chi
 		
 		//Compute Gamma contributions by band pair except for electron occupation factors:
-		std::vector<matrix3<>> contribGamma(nBands*nBands);
+		std::vector<matrix3<>> contribGamma(nBandsSelSq);
 		for(int alpha=0; alpha<nModes; alpha++)
 		{	//Phonon occupation:
 			const double& omegaPh = ph.omega[alpha];
@@ -99,11 +131,11 @@ struct SpinRelaxCollect
 			if(omegaPhByT < omegaPhMinByT) continue; //avoid 0./0. below
 			const double prefac_nPhByT =  prefacGamma * invT * bose(omegaPhByT);
 			//Energy conservation factor and prefactor (including nPh/T):
-			std::vector<double> prefacEconserve(nBands*nBands);
+			std::vector<double> prefacEconserve(nBandsSelSq);
 			int bIndex = 0;
 			bool contrib = false;
-			for(int b2=0; b2<nBands; b2++)
-			for(int b1=0; b1<nBands; b1++)
+			for(int b2=bStart; b2<bStop; b2++)
+			for(int b1=bStart; b1<bStop; b1++)
 			{	double expTerm = EconserveExpFac * std::pow(e1.E[b1] - e2.E[b2] - omegaPh, 2);
 				if(expTerm > -15.)
 				{	prefacEconserve[bIndex] = prefac_nPhByT * exp(expTerm); //compute exponential only when needed
@@ -113,7 +145,7 @@ struct SpinRelaxCollect
 			}
 			if(not contrib) continue; //no energy conserving combination for this phonon mode at present k-pair
 			//Commutator contributions:
-			const matrix& G = mEph.M[alpha];
+			const matrix G = mEph.M[alpha](bStart,bStop, bStart,bStop); //work only with sub-matrix of relevant bands
 			matrix GSdeg2[3];
 			for(int jDir=0; jDir<3; jDir++)
 				GSdeg2[jDir] = G * Sdeg2[jDir];
@@ -122,7 +154,7 @@ struct SpinRelaxCollect
 				for(int jDir=0; jDir<3; jDir++)
 				{	const matrix SGcomm = Sdeg1Gi - GSdeg2[jDir];
 					const complex* SGcommData = SGcomm.data();
-					for(int bIndex=0; bIndex<nBands*nBands; bIndex++) //loop over b2 and b1
+					for(int bIndex=0; bIndex<nBandsSelSq; bIndex++) //loop over b2 and b1
 						contribGamma[bIndex](iDir,jDir) += prefacEconserve[bIndex] * SGcommData[bIndex].norm();
 				}
 			}
@@ -133,7 +165,7 @@ struct SpinRelaxCollect
 		{	//Compute Fermi occupations and accumulate chi contributions:
 			#define CALC_F_ACCUM_CHI(s) \
 				diagMatrix F##s(nBands); \
-				for(int b=0; b<nBands; b++) \
+				for(int b=bStart; b<bStop; b++) \
 				{	double f = fermi(invT*(e##s.E[b] - dmu[iMu])); \
 					F##s[b] = f; \
 					chi[iMu] += (invT * f*(1.-f)) * contribChi##s[b]; \
@@ -144,8 +176,8 @@ struct SpinRelaxCollect
 			
 			//Accumulate Gamma contributions:
 			int bIndex = 0;
-			for(int b2=0; b2<nBands; b2++)
-			for(int b1=0; b1<nBands; b1++)
+			for(int b2=bStart; b2<bStop; b2++)
+			for(int b1=bStart; b1<bStop; b1++)
 			{	Gamma[iMu] += contribGamma[bIndex] * (F2[b2] * (1 - F1[b1]));
 				bIndex++;
 			}
