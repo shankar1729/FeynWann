@@ -19,6 +19,7 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 
 #include "FeynWann.h"
 #include "InputMap.h"
+#include "SparseMatrix.h"
 #include <core/Units.h>
 #include <core/Random.h>
 #include <algorithm>
@@ -43,18 +44,23 @@ struct SpinRelaxCollect
 	{
 	}
 	
-	inline matrix degenerateProject(const matrix& in, const diagMatrix& E)
+	inline SparseMatrix degenerateProject(const matrix& M, const diagMatrix& E)
 	{	static const double degeneracyThreshold = 1e-6;
 		const int nBands = E.nRows();
-		matrix out = in;
-		complex* outData = out.data();
+		SparseMatrix result; result.reserve(nBands); //typically diagonal (Rashba) or block diagonal with size 2 (Kramer-degenerate)
+		const complex* Mdata = M.data();
 		for(int b2=0; b2<nBands; b2++)
 		for(int b1=0; b1<nBands; b1++)
-		{	if(fabs(E[b1] - E[b2]) > degeneracyThreshold)
-				*(outData) = 0.; //outside degenerate subspace
-			outData++;
+		{	if(fabs(E[b1] - E[b2]) < degeneracyThreshold)
+			{	SparseEntry sr;
+				sr.i = b1;
+				sr.j = b2;
+				sr.val = *(Mdata);
+				result.push_back(sr);
+			}
+			Mdata++;
 		}
-		return out;
+		return result;
 	}
 	
 	void process(const FeynWann::MatrixEph& mEph)
@@ -65,7 +71,7 @@ struct SpinRelaxCollect
 		const double invT = 1./T;
 		
 		//Degenerate spin projections:
-		std::vector<matrix> Sdeg1(3), Sdeg2(3);
+		std::vector<SparseMatrix> Sdeg1(3), Sdeg2(3);
 		for(int iDir=0; iDir<3; iDir++)
 		{	Sdeg1[iDir] = degenerateProject(e1.S[iDir], e1.E);
 			Sdeg2[iDir] = degenerateProject(e2.S[iDir], e2.E);
@@ -76,7 +82,7 @@ struct SpinRelaxCollect
 			std::vector<matrix3<>> contribChi##s(nBands); \
 			for(int iDir=0; iDir<3; iDir++) \
 			for(int jDir=0; jDir<3; jDir++) \
-			{	diagMatrix SiSj = diag(Sdeg##s[iDir] * Sdeg##s[jDir]); \
+			{	diagMatrix SiSj = diagSS(Sdeg##s[iDir], Sdeg##s[jDir], nBands); \
 				for(int b=0; b<nBands; b++) \
 					contribChi##s[b](iDir,jDir) = prefacChi * SiSj[b]; \
 			}
