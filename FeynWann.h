@@ -48,7 +48,7 @@ public:
 	static InitParams initialize(int argc, char** argv, const char* description); //!< wrap initSystemCmdLine from JDFTx
 	static void finalize(); //!< wrap finalizeSystem from JDFTx
 	static vector3<> randomVector(MPIUtil* mpiUtil=0); //!< uniformly random vector in [0,1)^3, constant across mpi instance, if any
-	
+
 	const FeynWannParams& fwp;
 	FeynWann(FeynWannParams& fwp);
 	void free(); //!< free matrices
@@ -151,5 +151,9 @@ public:
 	//Electron-phonon interaction:
 	std::shared_ptr<DistributedMatrix> HePhW; //electron-phonon matrix elements in Wannier basis
 };
+
+//Utility functions for printing with error estimates:
+void reportResult(const std::vector<matrix3<>>& result, string resultName, double unit, string unitName); //!< report a tensor result with error bars
+void reportResult(const std::vector<double>& result, string resultName, double unit, string unitName); //!< report a scalar result with error bars
 
 #endif //FEYNWANN_FEYNWANN_H

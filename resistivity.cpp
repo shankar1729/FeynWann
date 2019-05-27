@@ -62,10 +62,6 @@ struct ResistivityCollect
 	}
 };
 
-//Functions for printing with error estimates (implemented at bottom of file)
-void reportResult(const std::vector<matrix3<>>& result, string resultName, double unit, string unitName);
-void reportResult(const std::vector<double>& result, string resultName, double unit, string unitName);
-
 //Eliminate direction slabDir from tensor (for 2D case normal to slabDir):
 inline void slabConstrain(matrix3<>& M, int slabDir)
 {	if(slabDir >= 0)
@@ -273,41 +269,4 @@ int main(int argc, char** argv)
 	
 	fw = 0;
 	FeynWann::finalize();
-}
-
-//Report a tensor with error estimates
-void reportResult(const std::vector<matrix3<>>& result, string resultName, double unit, string unitName)
-{	matrix3<> resultMean, resultStd;
-	for(int i=0; i<3; i++)
-	{	for(int j=0; j<3; j++)
-		{	double sum = 0., sumSq = 0.; int N = 0;
-			for(size_t block=0; block<result.size(); block++)
-			{	N++;
-				sum += result[block](i,j);
-				sumSq += std::pow(result[block](i,j), 2);
-			}
-			resultMean(i,j) = sum/N;
-			resultStd(i,j) = sqrt(sumSq/N - std::pow(sum/N,2));
-		}
-		char mOpen[] = "/|\\", mClose[] = "\\|/";
-		logPrintf("%20s%c", i==1 ? (resultName + " = ").c_str() : "", mOpen[i]);
-		for(int j=0; j<3; j++) logPrintf(" %12lg", resultMean(i,j)/unit);
-		logPrintf(" %c%5s%c", mClose[i], i==1 ? " +/- " : "", mOpen[i]);
-		for(int j=0; j<3; j++) logPrintf(" %12lg", resultStd(i,j)/unit);
-		logPrintf(" %c %s\n", mClose[i], i==1 ? unitName.c_str() : "");
-	}
-	logPrintf("\n");
-}
-
-//Report a scalar with error estimates:
-void reportResult(const std::vector<double>& result, string resultName, double unit, string unitName)
-{	double sum = 0., sumSq = 0.; int N = 0;
-	for(size_t block=0; block<result.size(); block++)
-	{	N++;
-		sum += result[block];
-		sumSq += std::pow(result[block], 2);
-	}
-	double resultMean = sum/N;
-	double resultStd = sqrt(sumSq/N - std::pow(sum/N,2));
-	logPrintf("%17s = %12lg +/- %12lg %s\n", resultName.c_str(), resultMean/unit, resultStd/unit, unitName.c_str());
 }
