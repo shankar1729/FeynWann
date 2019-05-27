@@ -101,20 +101,30 @@ struct SpinRelaxCollect
 			//Energy conservation factor and prefactor (including nPh/T):
 			std::vector<double> prefacEconserve(nBands*nBands);
 			int bIndex = 0;
+			bool contrib = false;
 			for(int b2=0; b2<nBands; b2++)
 			for(int b1=0; b1<nBands; b1++)
 			{	double expTerm = EconserveExpFac * std::pow(e1.E[b1] - e2.E[b2] - omegaPh, 2);
-				if(expTerm > -15.) prefacEconserve[bIndex] = prefac_nPhByT * exp(expTerm); //compute exponential only when needed
+				if(expTerm > -15.)
+				{	prefacEconserve[bIndex] = prefac_nPhByT * exp(expTerm); //compute exponential only when needed
+					contrib = true;
+				}
 				bIndex++;
 			}
+			if(not contrib) continue; //no energy conserving combination for this phonon mode at present k-pair
 			//Commutator contributions:
 			const matrix& G = mEph.M[alpha];
-			for(int iDir=0; iDir<3; iDir++)
+			matrix GSdeg2[3];
 			for(int jDir=0; jDir<3; jDir++)
-			{	const matrix SGcomm = Sdeg1[iDir]*G - G*Sdeg2[jDir];
-				const complex* SGcommData = SGcomm.data();
-				for(int bIndex=0; bIndex<nBands*nBands; bIndex++) //loop over b2 and b1
-					contribGamma[bIndex](iDir,jDir) += prefacEconserve[bIndex] * SGcommData[bIndex].norm();
+				GSdeg2[jDir] = G * Sdeg2[jDir];
+			for(int iDir=0; iDir<3; iDir++)
+			{	matrix Sdeg1Gi = Sdeg1[iDir] * G; 
+				for(int jDir=0; jDir<3; jDir++)
+				{	const matrix SGcomm = Sdeg1Gi - GSdeg2[jDir];
+					const complex* SGcommData = SGcomm.data();
+					for(int bIndex=0; bIndex<nBands*nBands; bIndex++) //loop over b2 and b1
+						contribGamma[bIndex](iDir,jDir) += prefacEconserve[bIndex] * SGcommData[bIndex].norm();
+				}
 			}
 		}
 		
