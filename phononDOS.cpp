@@ -135,9 +135,8 @@ int main(int argc, char** argv)
 		double& ClDebyeCur = ClDebye[iT]; ClDebyeCur = 0.;
 		for(size_t ie=1; ie<dos.out.size(); ie++) //omit zero energy phonons to avoid 0/0 error
 		{	double omegaPh = ie*domega;
-			double x = invT * omegaPh;
-			double g = 1./(exp(x)-1.);
-			double g_T = g*(g+1)*x/T; //dg/dT
+			double g = bose(invT*omegaPh);
+			double g_T = g*(g+1)*omegaPh*invT*invT; //dg/dT
 			ClCur += domega * omegaPh * g_T  * dos.out[ie];
 			//Debye approximation:
 			double dosDebyeL = dosPrefacDebyeL * (omegaPh<TdebyeL ? omegaPh*omegaPh : 0.);

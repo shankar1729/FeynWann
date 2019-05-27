@@ -41,15 +41,10 @@ struct ResistivityCollect
 			const vector3<>& v = state.vVec[b];
 			matrix3<> vdotv = outer(v, v);
 			for(unsigned iMu=0; iMu<dmu.size(); iMu++)
-			{	double expArg = (E-dmu[iMu])*invT;
-				if(fabs(expArg)>30.) //avoid over/underflow
-				{	if(expArg<0.) n[iMu] += 1.; //still need to count towards n if occupied
-					continue; //negligible contribution to rest
-				}
-				double expTerm = exp(expArg);
-				double f = 1./(1.+expTerm);
-				double dfdE = -f*f*expTerm*invT;
+			{	double f = fermi((E-dmu[iMu])*invT);
+				double dfdE = -f*(1.-f)*invT;
 				n[iMu] += f;
+				if(!dfdE) continue;
 				g[iMu] += (-dfdE);
 				vSq[iMu] += (-dfdE) * v.length_squared();
 				tau[iMu] += (-dfdE) / (2*state.ImSigma_ePh(b,f));

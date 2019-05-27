@@ -228,11 +228,7 @@ struct Lindblad : public Integrator<DM1>
 		//Set rho to initial occupations:
 		s.rho0.resize(fw.nBands);
 		for(int b=0; b<fw.nBands; b++)
-		{	double expArg = (s.E[b]-dmu)*invT;
-			s.rho0[b] = (expArg < -30.) ? 1.
-				: ((expArg > +30.) ? 0.
-				: 1./(1.+exp(expArg)) );
-		}
+			s.rho0[b] = fermi((s.E[b]-dmu)*invT);
 		rho[index] = s.rho0;
 	}
 	struct InitEparams { Lindblad* lb; size_t o; };
@@ -528,7 +524,7 @@ struct Lindblad : public Integrator<DM1>
 						{	//Phonon occupation factor:
 							/* Old dense implementation with temperature 
 							double omegaPhByT = g.omegaPh/T;
-							double nPh = omegaPhByT>36 ? 0. : 1./(exp(std::max(1e-3, omegaPhByT)) - 1.); //avoid overflow
+							double nPh = bose(std::max(1e-3, omegaPhByT));
 							matrix A = dagger(g.G) * rho1 * (prefac*(nPh+1));
 							matrix B = g.G * rho2bar;
 							matrix C = rho1bar * g.G;

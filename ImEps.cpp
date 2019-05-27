@@ -81,10 +81,7 @@ struct CollectImEps
 		ImE.assign(dmu.size(), state.ImSigma_ee); //e-e part
 		for(unsigned iMu=0; iMu<dmu.size(); iMu++)
 		{	for(int b=0; b<nBands; b++)
-			{	double expArg = (state.E[b]-dmu[iMu])*invT;
-				F[iMu][b] = (expArg < -30.) ? 1.
-					: ((expArg > +30.) ? 0.
-					: 1./(1.+exp(expArg)) );
+			{	F[iMu][b] = fermi((state.E[b]-dmu[iMu])*invT);
 				ImE[iMu][b] += state.ImSigma_ePh(b, F[iMu][b]);
 			}
 		}
@@ -147,9 +144,7 @@ struct CollectImEps
 		diagMatrix nPh(nModes);
 		for(int iMode=0; iMode<nModes; iMode++)
 		{	double omegaPhByT = omegaPh[iMode]/T;
-			nPh[iMode] = omegaPhByT>36
-				? 0. //avoid overflow
-				: 1./(exp(std::max(1e-3, omegaPhByT)) - 1.); //avoid 0/0 for zero phonon frequencies
+			nPh[iMode] = bose(std::max(1e-3, omegaPhByT)); //avoid 0/0 for zero phonon frequencies
 		}
 		//Collect
 		for(int v=0; v<nBands; v++) if(E1[v]<EvMax)

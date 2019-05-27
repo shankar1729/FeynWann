@@ -156,4 +156,19 @@ public:
 void reportResult(const std::vector<matrix3<>>& result, string resultName, double unit, string unitName); //!< report a tensor result with error bars
 void reportResult(const std::vector<double>& result, string resultName, double unit, string unitName); //!< report a scalar result with error bars
 
+//Fermi and Bose functions with overflow/underflow handling:
+inline double fermi(double EminusMuByT) //!< Fermi function with overflow/underflow handling
+{	if(EminusMuByT < -36.) return 1.;
+	else if(EminusMuByT > 36.) return 0.;
+	else return 1./(1. + exp(EminusMuByT));
+}
+inline double fermiPrime(double EminusMuByT) //!< Fermi function derivative w.r.t E/T (multiply by 1/T for df/dE)
+{	if(fabs(EminusMuByT) > 36.) return 0.;
+	else return 0.25*(std::pow(tanh(0.5*EminusMuByT), 2) - 1.);
+}
+inline double bose(double omegaByT) //!< Bose function with overflow/underflow handling
+{	if(omegaByT > 36.) return 0.;
+	else return 1./(exp(omegaByT) - 1.);
+}
+
 #endif //FEYNWANN_FEYNWANN_H

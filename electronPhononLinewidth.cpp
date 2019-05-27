@@ -83,9 +83,7 @@ struct CollectEph
 				{	const double& omegaPh = ph.omega[alpha];
 					double omegaPhByT = omegaPh/T;
 					if(omegaPhByT < 1e-3) continue; //avoid 0./0. below
-					double nPh = omegaPhByT>36
-						? 0. //avoid overflow
-						: 1./(exp(omegaPhByT) - 1.);
+					double nPh = bose(omegaPhByT);
 					if(!nPh) continue; //no contribution below
 					//Loop over absorption and emission:
 					for(int ae=-1; ae<=+1; ae+=2)

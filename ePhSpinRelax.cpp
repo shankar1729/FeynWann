@@ -91,7 +91,7 @@ struct SpinRelaxCollect
 			const double& omegaPh = ph.omega[alpha];
 			const double omegaPhByT = invT*omegaPh;
 			if(omegaPhByT < omegaPhMinByT) continue; //avoid 0./0. below
-			const double prefac_nPhByT =  prefacGamma * invT * (omegaPhByT>36 ? 0. : 1./(exp(omegaPhByT) - 1.)); //avoid overflow
+			const double prefac_nPhByT =  prefacGamma * invT * bose(omegaPhByT);
 			//Energy conservation factor and prefactor (including nPh/T):
 			std::vector<double> prefacEconserve(nBands*nBands);
 			int bIndex = 0;
@@ -118,15 +118,8 @@ struct SpinRelaxCollect
 			#define CALC_F_ACCUM_CHI(s) \
 				diagMatrix F##s(nBands); \
 				for(int b=0; b<nBands; b++) \
-				{	/* Compute f avoiding under/overflow */ \
-					double expArg = invT*(e##s.E[b] - dmu[iMu]); \
-					double f = 0.; \
-					if(expArg < 30.) \
-					{	if(expArg < -30.) f = 1.; \
-						else f = 1./(1.+exp(expArg)); \
-					} \
+				{	double f = fermi(invT*(e##s.E[b] - dmu[iMu])); \
 					F##s[b] = f; \
-					/* Accumulate contribution to chi */ \
 					chi[iMu] += (invT * f*(1.-f)) * contribChi##s[b]; \
 				}
 			CALC_F_ACCUM_CHI(1)

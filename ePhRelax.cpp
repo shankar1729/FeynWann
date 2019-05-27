@@ -237,9 +237,8 @@ struct ePhRelax
 		double result = 0.;
 		for(size_t ie=1; ie<dosPh.xGrid.size(); ie++) //omit zero energy phonons to avoid 0/0 error
 		{	double omegaPh = ie*domegaPh;
-			double x = omegaPh/Tl;
-			double g = 1./(exp(x)-1.);
-			double g_Tl = g*(g+1)*x/Tl; //dg/dTl
+			double g = bose(omegaPh/Tl);
+			double g_Tl = g*(g+1)*omegaPh/(Tl*Tl); //dg/dTl
 			result += domegaPh * omegaPh * g_Tl  * dosPh.yGrid[0][ie];
 		}
 		return result;
@@ -252,8 +251,7 @@ struct ePhRelax
 		double result = 0.;
 		for(size_t ie=1; ie<dosPh.xGrid.size(); ie++) //omit zero energy phonons to avoid 0/0 error
 		{	double omegaPh = ie*domegaPh;
-			double x = omegaPh/Tl;
-			double g = 1./(exp(x)-1.);
+			double g = bose(omegaPh/Tl);
 			result += domegaPh * omegaPh * g  * dosPh.yGrid[0][ie];
 		}
 		return result;
@@ -266,9 +264,6 @@ struct ePhRelax
 			result += dE * Egrid(ie) * f[ie]  * dos.yGrid[0][ie];
 		return result;
 	}
-	
-	inline double fermi(double x) { return x>30. ? exp(-x) : 1./(1.+exp(x)); } //avoid overflow issues
-	inline double fermiPrime(double x) { return 0.25*(std::pow(tanh(0.5*x), 2) - 1.); } //avoid overflow issues
 };
 
 //Wrapper function for GSL integrator:

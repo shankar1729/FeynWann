@@ -140,9 +140,7 @@ struct CollectImEps
 		for(int iMode=0; iMode<nModes; iMode++)
 			for(int iT=0; iT<numTimes; iT++)
 			{	double omegaPhByT = omegaPh[iMode]/Tl[iT];
-				nPh[iMode][iT] = omegaPhByT>36
-					? 0. //avoid overflow
-					: 1./(exp(std::max(1e-3, omegaPhByT)) - 1.); //avoid 0/0 for zero phonon frequencies
+				nPh[iMode][iT] = bose(std::max(1e-3, omegaPhByT)); //avoid 0/0 for zero phonon frequencies
 			}
 		
 		//Collect
