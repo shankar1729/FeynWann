@@ -156,11 +156,10 @@ struct SpinRelaxCollect
 			{	size_t iMuT = iT*dmu.size() + iMu; //combined index
 				//Compute Fermi occupations and accumulate chi contributions:
 				#define CALC_F_ACCUM_CHI(s) \
-					diagMatrix F##s(nBands); \
+					diagMatrix F##s(nBands), Fbar##s(nBands); \
 					for(int b=bStart; b<bStop; b++) \
-					{	double f = fermi(invT*(e##s.E[b] - dmu[iMu])); \
-						F##s[b] = f; \
-						chi[iMuT] += (invT * f*(1.-f)) * contribChi##s[b]; \
+					{	fermi(invT*(e##s.E[b] - dmu[iMu]), F##s[b], Fbar##s[b]); \
+						chi[iMuT] += (invT * F##s[b]*Fbar##s[b]) * contribChi##s[b]; \
 					}
 				CALC_F_ACCUM_CHI(1)
 				CALC_F_ACCUM_CHI(2)
@@ -170,7 +169,7 @@ struct SpinRelaxCollect
 				int bIndex = 0;
 				for(int b2=bStart; b2<bStop; b2++)
 				for(int b1=bStart; b1<bStop; b1++)
-				{	Gamma[iMuT] += contribGamma[iT][bIndex] * (F2[b2] * (1 - F1[b1]));
+				{	Gamma[iMuT] += contribGamma[iT][bIndex] * (F2[b2] * Fbar1[b1]);
 					bIndex++;
 				}
 			}

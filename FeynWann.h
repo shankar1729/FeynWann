@@ -162,6 +162,18 @@ inline double fermi(double EminusMuByT) //!< Fermi function with overflow/underf
 	else if(EminusMuByT > 36.) return 0.;
 	else return 1./(1. + exp(EminusMuByT));
 }
+inline void fermi(double EminusMuByT, double& f, double& fbar) //!< version that computes both f and fbar=1-f without loss of precision
+{	if(EminusMuByT < 0.)
+	{	double boltz = exp(EminusMuByT);
+		fbar = boltz / (1. + boltz);
+		f = 1.-fbar;
+	}
+	else
+	{	double boltz = exp(-EminusMuByT);
+		f = boltz / (1. + boltz);
+		fbar = 1.-f;
+	}
+}
 inline double fermiPrime(double EminusMuByT) //!< Fermi function derivative w.r.t E/T (multiply by 1/T for df/dE)
 {	if(fabs(EminusMuByT) > 36.) return 0.;
 	else return 0.25*(std::pow(tanh(0.5*EminusMuByT), 2) - 1.);
