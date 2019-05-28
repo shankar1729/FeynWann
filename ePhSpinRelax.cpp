@@ -130,19 +130,17 @@ struct SpinRelaxCollect
 				bIndex++;
 			}
 			if(not contrib) continue; //no energy conserving combination for this phonon mode at present k-pair
-			//Commutator contributions:
+			//Calculate commutators:
 			const matrix G = mEph.M[alpha](bStart,bStop, bStart,bStop); //work only with sub-matrix of relevant bands
-			matrix GSdeg2[3];
-			for(int jDir=0; jDir<3; jDir++)
-				GSdeg2[jDir] = G * Sdeg2[jDir];
+			matrix SGcomm[3]; vector3<const complex*> SGcommData;
 			for(int iDir=0; iDir<3; iDir++)
-			{	matrix Sdeg1Gi = Sdeg1[iDir] * G; 
-				for(int jDir=0; jDir<3; jDir++)
-				{	const matrix SGcomm = Sdeg1Gi - GSdeg2[jDir];
-					const complex* SGcommData = SGcomm.data();
-					for(int bIndex=0; bIndex<nBandsSelSq; bIndex++) //loop over b2 and b1
-						contribGamma[bIndex](iDir,jDir) += prefacEconserve[bIndex] * SGcommData[bIndex].norm();
-				}
+			{	SGcomm[iDir] = Sdeg1[iDir] * G - G * Sdeg2[iDir];
+				SGcommData[iDir] = SGcomm[iDir].data();
+			}
+			//Collect commutator contributions:
+			for(int bIndex=0; bIndex<nBandsSelSq; bIndex++) //loop over b2 and b1
+			{	vector3<complex> SGcommCur = loadVector(SGcommData, bIndex);
+				contribGamma[bIndex] += prefacEconserve[bIndex] * realOuter(SGcommCur, SGcommCur);
 			}
 		}
 		
@@ -171,6 +169,15 @@ struct SpinRelaxCollect
 	}
 	static void ePhProcess(const FeynWann::MatrixEph& mEph, void* params)
 	{	((SpinRelaxCollect*)params)->process(mEph);
+	}
+	
+	//! Real part of outer product of complex vectors, Re(a \otimes b*):
+	inline matrix3<> realOuter(const vector3<complex> &a, const vector3<complex> &b)
+	{	matrix3<> m;
+		for(int i=0; i<3; i++)
+			for(int j=0; j<3; j++)
+				m(i,j) = (a[i] * b[j].conj()).real();
+		return m;
 	}
 };
 
