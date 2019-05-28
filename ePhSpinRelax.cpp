@@ -26,24 +26,24 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 
 struct SpinRelaxCollect
 {	const std::vector<double>& dmu; //doping levels
-	const double T; //temperature
-	const double omegaPhMinByT; //lower cutoff in phonon frequency / T
+	const std::vector<double>& T; //temperatures
+	const double omegaPhByTmin; //lower cutoff in phonon frequency (relative to T)
 	const int nModes; //number of phonon modes to include in calculation (override if any, applied below already)
 	
 	const double EconserveExpFac; //exponential factor in Gaussian delta for energy conservation
 	const double prefacGamma, prefacChi; //prefactors for numerator and denominator of T1
 	const double Estart, Estop; //energy range close enough to band edges or mu's to be relevant
 	
-	std::vector<matrix3<>> Gamma, chi; //numerator and denominator in T1^-1, for each dmu
+	std::vector<matrix3<>> Gamma, chi; //numerator and denominator in T1^-1, for each T and dmu
 	
-	SpinRelaxCollect(const std::vector<double>& dmu, double T, double omegaPhMin, int nModes,
+	SpinRelaxCollect(const std::vector<double>& dmu, const std::vector<double>& T, double omegaPhByTmin, int nModes,
 		double EconserveWidth, size_t nKpairs, double Estart, double Estop)
-	: dmu(dmu), T(T), omegaPhMinByT(std::max(1e-3,omegaPhMin/T)), nModes(nModes),
+	: dmu(dmu), T(T), omegaPhByTmin(std::max(1e-3,omegaPhByTmin)), nModes(nModes),
 		EconserveExpFac(-0.5/std::pow(EconserveWidth, 2)),
 		prefacGamma(2*M_PI/ (nKpairs * sqrt(2.*M_PI)*EconserveWidth)), //include prefactor of Gaussian energy conservation
 		prefacChi(0.5/nKpairs), //collected over both k in each k-pair for consistency
 		Estart(Estart), Estop(Estop),
-		Gamma(dmu.size()), chi(dmu.size())
+		Gamma(T.size()*dmu.size()), chi(T.size()*dmu.size())
 	{
 	}
 	
@@ -71,7 +71,6 @@ struct SpinRelaxCollect
 		const FeynWann::StateE& e2 = *(mEph.e2);
 		const FeynWann::StatePh& ph = *(mEph.ph);
 		const int nBands = e1.E.nRows();
-		const double invT = 1./T;
 		
 		//Select relevant band range:
 		int bStart = nBands, bStop = 0;
@@ -108,23 +107,27 @@ struct SpinRelaxCollect
 		CONTRIB_chi(2)
 		#undef CONTRIB_chi
 		
-		//Compute Gamma contributions by band pair except for electron occupation factors:
-		std::vector<matrix3<>> contribGamma(nBandsSelSq);
+		//Compute Gamma contributions by band pair and T, except for electron occupation factors:
+		std::vector<std::vector<matrix3<>>> contribGamma(T.size(), std::vector<matrix3<>>(nBandsSelSq));
 		for(int alpha=0; alpha<nModes; alpha++)
-		{	//Phonon occupation:
+		{	//Phonon occupation (nPh/T and prefactors) for each T:
 			const double& omegaPh = ph.omega[alpha];
-			const double omegaPhByT = invT*omegaPh;
-			if(omegaPhByT < omegaPhMinByT) continue; //avoid 0./0. below
-			const double prefac_nPhByT =  prefacGamma * invT * bose(omegaPhByT);
-			//Energy conservation factor and prefactor (including nPh/T):
-			std::vector<double> prefacEconserve(nBandsSelSq);
+			std::vector<double> prefac_nPhByT(T.size());
+			for(size_t iT=0; iT<T.size(); iT++)
+			{	double invT = 1./T[iT];
+				const double omegaPhByT = invT*omegaPh;
+				if(omegaPhByT < omegaPhByTmin) continue; //avoid 0./0. below
+				prefac_nPhByT[iT] =  prefacGamma * invT * bose(omegaPhByT);
+			}
+			//Energy conservation factor by band pairs:
+			std::vector<double> Econserve(nBandsSelSq);
 			int bIndex = 0;
 			bool contrib = false;
 			for(int b2=bStart; b2<bStop; b2++)
 			for(int b1=bStart; b1<bStop; b1++)
 			{	double expTerm = EconserveExpFac * std::pow(e1.E[b1] - e2.E[b2] - omegaPh, 2);
 				if(expTerm > -15.)
-				{	prefacEconserve[bIndex] = prefac_nPhByT * exp(expTerm); //compute exponential only when needed
+				{	Econserve[bIndex] = exp(expTerm); //compute exponential only when needed
 					contrib = true;
 				}
 				bIndex++;
@@ -140,30 +143,36 @@ struct SpinRelaxCollect
 			//Collect commutator contributions:
 			for(int bIndex=0; bIndex<nBandsSelSq; bIndex++) //loop over b2 and b1
 			{	vector3<complex> SGcommCur = loadVector(SGcommData, bIndex);
-				contribGamma[bIndex] += prefacEconserve[bIndex] * realOuter(SGcommCur, SGcommCur);
+				matrix3<> SGcommOuter = realOuter(SGcommCur, SGcommCur);
+				for(size_t iT=0; iT<T.size(); iT++)
+					contribGamma[iT][bIndex] += (prefac_nPhByT[iT] * Econserve[bIndex]) * SGcommOuter;
 			}
 		}
 		
 		//Collect results for various dmu values:
-		for(unsigned iMu=0; iMu<dmu.size(); iMu++)
-		{	//Compute Fermi occupations and accumulate chi contributions:
-			#define CALC_F_ACCUM_CHI(s) \
-				diagMatrix F##s(nBands); \
-				for(int b=bStart; b<bStop; b++) \
-				{	double f = fermi(invT*(e##s.E[b] - dmu[iMu])); \
-					F##s[b] = f; \
-					chi[iMu] += (invT * f*(1.-f)) * contribChi##s[b]; \
+		for(size_t iT=0; iT<T.size(); iT++)
+		{	double invT = 1./T[iT];
+			for(size_t iMu=0; iMu<dmu.size(); iMu++)
+			{	size_t iMuT = iT*dmu.size() + iMu; //combined index
+				//Compute Fermi occupations and accumulate chi contributions:
+				#define CALC_F_ACCUM_CHI(s) \
+					diagMatrix F##s(nBands); \
+					for(int b=bStart; b<bStop; b++) \
+					{	double f = fermi(invT*(e##s.E[b] - dmu[iMu])); \
+						F##s[b] = f; \
+						chi[iMuT] += (invT * f*(1.-f)) * contribChi##s[b]; \
+					}
+				CALC_F_ACCUM_CHI(1)
+				CALC_F_ACCUM_CHI(2)
+				#undef CALC_F_ACCUM_CHI
+				
+				//Accumulate Gamma contributions:
+				int bIndex = 0;
+				for(int b2=bStart; b2<bStop; b2++)
+				for(int b1=bStart; b1<bStop; b1++)
+				{	Gamma[iMuT] += contribGamma[iT][bIndex] * (F2[b2] * (1 - F1[b1]));
+					bIndex++;
 				}
-			CALC_F_ACCUM_CHI(1)
-			CALC_F_ACCUM_CHI(2)
-			#undef CALC_F_ACCUM_CHI
-			
-			//Accumulate Gamma contributions:
-			int bIndex = 0;
-			for(int b2=bStart; b2<bStop; b2++)
-			for(int b1=bStart; b1<bStop; b1++)
-			{	Gamma[iMu] += contribGamma[bIndex] * (F2[b2] * (1 - F1[b1]));
-				bIndex++;
 			}
 		}
 	}
@@ -218,23 +227,27 @@ int main(int argc, char** argv)
 	InputMap inputMap(ip.inputFilename);
 	const int nOffsets = inputMap.get("nOffsets"); assert(nOffsets>0);
 	const int nBlocks = inputMap.get("nBlocks"); assert(nBlocks>0);
-	const double T = inputMap.get("T") * Kelvin;
 	const double EconserveWidth = inputMap.get("EconserveWidth") * eV;
+	const double Tmin = inputMap.get("Tmin") * Kelvin; //temperature; start of range
+	const double Tmax = inputMap.get("Tmax", Tmin/Kelvin) * Kelvin; assert(Tmax>=Tmin); //temperature; end of range (defaults to Tmin)
+	const size_t Tcount = inputMap.get("Tcount", 1); assert(Tcount>0); //number of temperatures
 	const double dmuMin = inputMap.get("dmuMin", 0.) * eV; //optional shift in chemical potential from neutral value; start of range (default to 0)
-	const double dmuMax = inputMap.get("dmuMax", 0.) * eV; //optional shift in chemical potential from neutral value; end of range (default to 0)
-	const int dmuCount = inputMap.get("dmuCount", 1); assert(dmuCount>0); //number of chemical potential shifts
-	const double omegaPhMin = inputMap.get("omegaPhMin", 0.0) * eV; //lower cutoff in phonon frequency
+	const double dmuMax = inputMap.get("dmuMax", dmuMin/eV) * eV; assert(dmuMax>=dmuMin); //optional shift in chemical potential from neutral value; end of range (defaults to dmuMin)
+	const size_t dmuCount = inputMap.get("dmuCount", 1); assert(dmuCount>0); //number of chemical potential shifts (default 1)
+	const double omegaPhByTmin = inputMap.get("omegaPhByTmin", 1e-3); //lower cutoff in phonon frequency (relative to temperature)
 	const int nModesOverride = inputMap.get("nModesOverride", 0); //if non-zero, use only these many lowest phonon modes (eg. set to 3 for acoustic only in 3D)
 	
 	logPrintf("\nInputs after conversion to atomic units:\n");
 	logPrintf("nOffsets = %d\n", nOffsets);
 	logPrintf("nBlocks = %d\n", nBlocks);
-	logPrintf("T = %lg\n", T);
+	logPrintf("Tmin = %lg\n", Tmin);
+	logPrintf("Tmax = %lg\n", Tmax);
+	logPrintf("Tcount = %lu\n", Tcount);
 	logPrintf("EconserveWidth = %lg\n", EconserveWidth);
 	logPrintf("dmuMin = %lg\n", dmuMin);
 	logPrintf("dmuMax = %lg\n", dmuMax);
-	logPrintf("dmuCount = %d\n", dmuCount);
-	logPrintf("omegaPhMin = %lg\n", omegaPhMin);
+	logPrintf("dmuCount = %lu\n", dmuCount);
+	logPrintf("omegaPhByTmin = %lg\n", omegaPhByTmin);
 	logPrintf("nModesOverride = %d\n", nModesOverride);
 	
 	//Initialize FeynWann:
@@ -244,9 +257,14 @@ int main(int argc, char** argv)
 	fwp.needSpin = true;
 	FeynWann fw(fwp);
 
+	//T array:
+	std::vector<double> T(Tcount, Tmin); //set first value here
+	for(size_t iT=1; iT<Tcount; iT++) //set remaining values (if any)
+		T[iT] = Tmin + iT*(Tmax-Tmin)/(Tcount-1);
+	
 	//dmu array:
 	std::vector<double> dmu(dmuCount, dmuMin); //set first value here
-	for(int iMu=1; iMu<dmuCount; iMu++) //set remaining values (if any)
+	for(size_t iMu=1; iMu<dmuCount; iMu++) //set remaining values (if any)
 		dmu[iMu] = dmuMin + iMu*(dmuMax-dmuMin)/(dmuCount-1);
 	int nModes = nModesOverride ? std::min(nModesOverride, fw.nModes) : fw.nModes;
 	
@@ -277,7 +295,7 @@ int main(int argc, char** argv)
 	mpiWorld->allReduce(erc.EvMax, MPIUtil::ReduceMax);
 	mpiWorld->allReduce(erc.EcMin, MPIUtil::ReduceMin);
 	//--- add margins of max phonon energy, energy conservation width and fermiPrime width
-	double Emargin = erc.omegaPhMax + 6.*EconserveWidth + 20.*T;
+	double Emargin = erc.omegaPhMax + 6.*EconserveWidth + 20.*T.back();
 	double Estart = erc.EvMax - Emargin;
 	double Estop = erc.EcMin + Emargin;
 
@@ -285,7 +303,7 @@ int main(int argc, char** argv)
 	std::vector<std::shared_ptr<SpinRelaxCollect>> srcArr(nBlocks);
 	for(int block=0; block<nBlocks; block++)
 	{	logPrintf("Working on block %d of %d: ", block+1, nBlocks); logFlush();
-		srcArr[block] = std::make_shared<SpinRelaxCollect>(dmu, T, omegaPhMin, nModes, EconserveWidth, nKpairsPerBlock, Estart, Estop);
+		srcArr[block] = std::make_shared<SpinRelaxCollect>(dmu, T, omegaPhByTmin, nModes, EconserveWidth, nKpairsPerBlock, Estart, Estop);
 		SpinRelaxCollect& src = *(srcArr[block]);
 		for(int o=0; o<noMine; o++)
 		{	Random::seed(block*nOffsetsPerBlock+o+oStart); //to make results independent of MPI division
@@ -304,16 +322,18 @@ int main(int argc, char** argv)
 	
 	//Report results with statistics:
 	const double ps = 1e3*fs; //picosecond
-	for(int iMu=0; iMu<dmuCount; iMu++)
-	{	logPrintf("\nResults for dmu = %lg eV:\n", dmu[iMu]/eV);
+	for(size_t iT=0; iT<Tcount; iT++)
+	for(size_t iMu=0; iMu<dmuCount; iMu++)
+	{	size_t iMuT = iT*dmuCount + iMu; //combined index
+		logPrintf("\nResults for T = %lg K and dmu = %lg eV:\n", T[iT]/Kelvin, dmu[iMu]/eV);
 		std::vector<matrix3<>> Gamma(nBlocks), chi(nBlocks), T1bar(nBlocks);
 		std::vector<double> T1(nBlocks);
 		for(int block=0; block<nBlocks; block++)
 		{	SpinRelaxCollect& src = *(srcArr[block]);
-			fw.symmetrize(src.Gamma[iMu]);
-			fw.symmetrize(src.chi[iMu]);
-			Gamma[block] = src.Gamma[iMu];
-			chi[block] = src.chi[iMu];
+			fw.symmetrize(src.Gamma[iMuT]);
+			fw.symmetrize(src.chi[iMuT]);
+			Gamma[block] = src.Gamma[iMuT];
+			chi[block] = src.chi[iMuT];
 			T1bar[block] = chi[block] * inv(Gamma[block]);
 			T1[block] = (1./3)*trace(T1bar[block]);
 		}
