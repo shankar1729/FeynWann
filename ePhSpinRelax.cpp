@@ -30,17 +30,19 @@ struct SpinRelaxCollect
 	const double omegaPhMinByT; //lower cutoff in phonon frequency / T
 	const int nModes; //number of phonon modes to include in calculation (override if any, applied below already)
 	
-	const double EconserveWidth; //energy conservation width for Gaussian delta
 	const double EconserveExpFac; //exponential factor in Gaussian delta for energy conservation
 	const double prefacGamma, prefacChi; //prefactors for numerator and denominator of T1
+	const double Estart, Estop; //energy range close enough to band edges or mu's to be relevant
 	
 	std::vector<matrix3<>> Gamma, chi; //numerator and denominator in T1^-1, for each dmu
 	
-	SpinRelaxCollect(const std::vector<double>& dmu, double T, double omegaPhMin, int nModes, double EconserveWidth, size_t nKpairs)
-	: dmu(dmu), T(T), omegaPhMinByT(std::max(1e-3,omegaPhMin/T)), nModes(nModes), EconserveWidth(EconserveWidth),
+	SpinRelaxCollect(const std::vector<double>& dmu, double T, double omegaPhMin, int nModes,
+		double EconserveWidth, size_t nKpairs, double Estart, double Estop)
+	: dmu(dmu), T(T), omegaPhMinByT(std::max(1e-3,omegaPhMin/T)), nModes(nModes),
 		EconserveExpFac(-0.5/std::pow(EconserveWidth, 2)),
 		prefacGamma(2*M_PI/ (nKpairs * sqrt(2.*M_PI)*EconserveWidth)), //include prefactor of Gaussian energy conservation
 		prefacChi(0.5/nKpairs), //collected over both k in each k-pair for consistency
+		Estart(Estart), Estop(Estop),
 		Gamma(dmu.size()), chi(dmu.size())
 	{
 	}
@@ -72,23 +74,6 @@ struct SpinRelaxCollect
 		const double invT = 1./T;
 		
 		//Select relevant band range:
-		//--- determine max energy below and min energy above any mu
-		const double &dmuMin = dmu.front(), &dmuMax = dmu.back();
-		double EvMax = -DBL_MAX, EcMin = +DBL_MAX;
-		#define GET_EvEc(s) \
-			for(int b=0; b<nBands; b++) \
-			{	const double& E = e##s.E[b]; \
-				if(E<dmuMin and E>EvMax) EvMax = E; \
-				if(E>dmuMax and E<EcMin) EcMin = E; \
-			}
-		GET_EvEc(1)
-		GET_EvEc(2)
-		#undef GET_EvEc
-		//--- add margins of max phonon energy, energy conservation width and fermiPrime width
-		double Emargin = ph.omega.back() + 6.*EconserveWidth + 15.*T;
-		double Estart = EvMax - Emargin;
-		double Estop = EcMin + Emargin;
-		//--- select band range that covers this energy range
 		int bStart = nBands, bStop = 0;
 		#define SET_bRange(s) \
 			for(int b=0; b<nBands; b++) \
@@ -101,6 +86,7 @@ struct SpinRelaxCollect
 		#undef SET_bRange
 		int nBandsSel = bStop - bStart; //reduced number of selected bands at this k-pair
 		int nBandsSelSq = nBandsSel * nBandsSel;
+		if(nBandsSel <= 0) return;
 		
 		//Degenerate spin projections:
 		std::vector<SparseMatrix> Sdeg1(3), Sdeg2(3);
@@ -189,6 +175,35 @@ struct SpinRelaxCollect
 };
 
 
+//Helper class for collecting relevant energy range:
+struct EnergyRangeCollect
+{	const double &dmuMin, &dmuMax; //minimum and maximum chemical potentials considered
+	double EvMax, EcMin; //VBM and CBM estimates
+	double omegaPhMax; //max phonon energy
+	
+	EnergyRangeCollect(const std::vector<double>& dmu)
+	: dmuMin(dmu.front()), dmuMax(dmu.back()),
+		EvMax(-DBL_MAX), EcMin(+DBL_MAX), omegaPhMax(0.)
+	{
+	}
+	
+	void process(const FeynWann::StateE& state)
+	{	for(const double& E: state.E)
+		{	if(E<dmuMin and E>EvMax) EvMax = E;
+			if(E>dmuMax and E<EcMin) EcMin = E;
+		}
+	}
+	static void eProcess(const FeynWann::StateE& state, void* params)
+	{	((EnergyRangeCollect*)params)->process(state);
+	}
+	
+	static void phProcess(const FeynWann::StatePh& state, void* params)
+	{	double& omegaPhMax = ((EnergyRangeCollect*)params)->omegaPhMax;
+		omegaPhMax = std::max(omegaPhMax, state.omega.back());
+	}
+};
+
+
 int main(int argc, char** argv)
 {	InitParams ip = FeynWann::initialize(argc, argv, "Electron-phonon scattering contribution to spin relaxation.");
 
@@ -248,11 +263,22 @@ int main(int argc, char** argv)
 	}
 	logPrintf("\n");
 
+	//Determine relevant energy range (states close enough to mu or band edges to matter):
+	EnergyRangeCollect erc(dmu);
+	fw.eLoop(vector3<>(), EnergyRangeCollect::eProcess, &erc);
+	fw.phLoop(vector3<>(), EnergyRangeCollect::phProcess, &erc);
+	mpiWorld->allReduce(erc.EvMax, MPIUtil::ReduceMax);
+	mpiWorld->allReduce(erc.EcMin, MPIUtil::ReduceMin);
+	//--- add margins of max phonon energy, energy conservation width and fermiPrime width
+	double Emargin = erc.omegaPhMax + 6.*EconserveWidth + 20.*T;
+	double Estart = erc.EvMax - Emargin;
+	double Estop = erc.EcMin + Emargin;
+
 	//Collect integrals involved in T1 calculation:
 	std::vector<std::shared_ptr<SpinRelaxCollect>> srcArr(nBlocks);
 	for(int block=0; block<nBlocks; block++)
 	{	logPrintf("Working on block %d of %d: ", block+1, nBlocks); logFlush();
-		srcArr[block] = std::make_shared<SpinRelaxCollect>(dmu, T, omegaPhMin, nModes, EconserveWidth, nKpairsPerBlock);
+		srcArr[block] = std::make_shared<SpinRelaxCollect>(dmu, T, omegaPhMin, nModes, EconserveWidth, nKpairsPerBlock, Estart, Estop);
 		SpinRelaxCollect& src = *(srcArr[block]);
 		for(int o=0; o<noMine; o++)
 		{	Random::seed(block*nOffsetsPerBlock+o+oStart); //to make results independent of MPI division
