@@ -77,14 +77,8 @@ struct CollectImEps
 	{	int nBands = state.E.nRows();
 		F.assign(nChannels, diagMatrix(nBands));
 		for(unsigned iMu=0; iMu<dmu.size(); iMu++)
-		{	for(int b=0; b<nBands; b++)
-			{	//Fermi distribution
-				double expArg = (state.E[b]-dmu[iMu])*invT;
-				F[iMu][b] = (expArg < -30.) ? 1.
-					: ((expArg > +30.) ? 0.
-					: 1./(1.+exp(expArg)) );
-			}
-		}
+			for(int b=0; b<nBands; b++)
+				F[iMu][b] = fermi((state.E[b]-dmu[iMu])*invT);
 		//Compute perturbed versions if needed:
 		diagMatrix dF;
 		if(dfInterp)
@@ -155,9 +149,7 @@ struct CollectImEps
 		diagMatrix nPh(nModes);
 		for(int iMode=0; iMode<nModes; iMode++)
 		{	double omegaPhByT = omegaPh[iMode]/T;
-			nPh[iMode] = omegaPhByT>36
-				? 0. //avoid overflow
-				: 1./(exp(std::max(1e-3, omegaPhByT)) - 1.); //avoid 0/0 for zero phonon frequencies
+			nPh[iMode] = bose(std::max(1e-3, omegaPhByT)); //avoid 0/0 for zero phonon frequencies
 		}
 		//Collect
 		for(int v=0; v<nBands; v++) if(E1[v]<EvMax)
@@ -218,7 +210,7 @@ inline void print(FILE* fp, const vector3<complex>& v, const char* format="%lg "
 	std::fprintf(fp, "[ "); for(int k=0; k<3; k++) fprintf(fp, format, v[k].imag()); std::fprintf(fp, "]\n");
 }
 inline vector3<complex> normalize(const vector3<complex>& v) { return v * (1./sqrt(v[0].norm() + v[1].norm() + v[2].norm())); }
-inline double fermiPrime(double x) { return 0.25*(std::pow(tanh(0.5*x), 2) - 1.); } //avoid overflow issues
+
 int main(int argc, char** argv)
 {	
 	InitParams ip = FeynWann::initialize(argc, argv, "Wannier calculation of imaginary dielectric tensor (ImEps)");

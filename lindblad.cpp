@@ -26,6 +26,7 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 #include "Histogram.h"
 #include "InputMap.h"
 #include "Integrator.h"
+#include "SparseMatrix.h"
 #include <core/Units.h>
 
 inline matrix dot(const matrix* P, vector3<complex> pol)
@@ -52,59 +53,6 @@ DM1& operator*=(DM1& x, double a)
 	return x;
 }
 DM1 clone(const DM1& x) { return x; }
-
-//----- Triplet format square sparse matrix with restricted operations ----
-struct SparseEntry
-{	int i, j;
-	complex val;
-};
-typedef std::vector<SparseEntry> SparseMatrix;
-
-//Multiply dagger(S)*M*S for sparse matrix S and dense matrix M
-SparseMatrix SdagMS(const SparseMatrix& S, const matrix& M)
-{	SparseMatrix result; result.reserve(S.size()*S.size());
-	const complex* m = M.data();
-	for(const SparseEntry& s1: S)
-		for(const SparseEntry& s2: S)
-		{	SparseEntry sr;
-			sr.i = s1.j;
-			sr.j = s2.j;
-			sr.val = s1.val.conj() * m[M.index(s1.i,s2.i)] * s2.val;
-			result.push_back(sr);
-		}
-	return result;
-}
-
-//Multiply S*M*dagger(S) for sparse matrix S and dense matrix M
-SparseMatrix SMSdag(const SparseMatrix& S, const matrix& M)
-{	SparseMatrix result; result.reserve(S.size()*S.size());
-	const complex* m = M.data();
-	for(const SparseEntry& s1: S)
-		for(const SparseEntry& s2: S)
-		{	SparseEntry sr;
-			sr.i = s1.i;
-			sr.j = s2.i;
-			sr.val = s1.val * m[M.index(s1.j,s2.j)] * s2.val.conj();
-			result.push_back(sr);
-		}
-	return result;
-}
-
-//Multiply sparse matrix with dense matrix:
-matrix operator*(const matrix& M, const SparseMatrix& S)
-{	int N = M.nRows(); //assumed square
-	matrix R = zeroes(N, N);
-	complex* r = R.data();
-	const complex* m = M.data();
-	for(const SparseEntry& s: S)
-	{	complex* rCur = r + N*s.j;
-		const complex* mCur = m + N*s.i;
-		for(int k=0; k<N; k++)
-			*(rCur++) += *(mCur++) * s.val;
-	}
-	return R;
-}
-
 
 //Lindblad initialization, time evolution and measurement operators using FeynWann callback
 struct Lindblad : public Integrator<DM1>
@@ -228,11 +176,7 @@ struct Lindblad : public Integrator<DM1>
 		//Set rho to initial occupations:
 		s.rho0.resize(fw.nBands);
 		for(int b=0; b<fw.nBands; b++)
-		{	double expArg = (s.E[b]-dmu)*invT;
-			s.rho0[b] = (expArg < -30.) ? 1.
-				: ((expArg > +30.) ? 0.
-				: 1./(1.+exp(expArg)) );
-		}
+			s.rho0[b] = fermi((s.E[b]-dmu)*invT);
 		rho[index] = s.rho0;
 	}
 	struct InitEparams { Lindblad* lb; size_t o; };
@@ -528,7 +472,7 @@ struct Lindblad : public Integrator<DM1>
 						{	//Phonon occupation factor:
 							/* Old dense implementation with temperature 
 							double omegaPhByT = g.omegaPh/T;
-							double nPh = omegaPhByT>36 ? 0. : 1./(exp(std::max(1e-3, omegaPhByT)) - 1.); //avoid overflow
+							double nPh = bose(std::max(1e-3, omegaPhByT));
 							matrix A = dagger(g.G) * rho1 * (prefac*(nPh+1));
 							matrix B = g.G * rho2bar;
 							matrix C = rho1bar * g.G;

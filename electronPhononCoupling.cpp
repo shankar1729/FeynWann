@@ -68,9 +68,6 @@ struct CollectHePh
 	}
 };
 
-inline double fermi(double x) { return x>30. ? exp(-x) : 1./(1.+exp(x)); } //avoid overflow issues
-inline double fermiPrime(double x) { return 0.25*(std::pow(tanh(0.5*x), 2) - 1.); } //avoid overflow issues
-
 int main(int argc, char** argv)
 {	
 	InitParams ip = FeynWann::initialize(argc, argv, "Energy-resolved electron-phonon coupling strength");
