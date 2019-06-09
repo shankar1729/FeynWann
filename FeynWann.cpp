@@ -591,7 +591,8 @@ void FeynWann::ePhLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::ePh
 	for(iqSup[0]=0; iqSup[0]<kfoldSup[0]; iqSup[0]++)
 	for(iqSup[1]=0; iqSup[1]<kfoldSup[1]; iqSup[1]++)
 	for(iqSup[2]=0; iqSup[2]<kfoldSup[2]; iqSup[2]++)
-	{	//Prepare phonon states:
+	{	if(fwp.ePhHeadOnly and iqSup.length_squared()) continue; //k-path debug mode
+		//Prepare phonon states:
 		vector3<> q0 = k01 - k02 + elemwiseProd(iqSup, kfoldInv);
 		OsqW->transform(q0);
 		std::vector<StatePh> ph(prodSup);
@@ -619,6 +620,7 @@ void FeynWann::ePhLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::ePh
 		{	vector3<> k02cur = k02 + elemwiseProd(ik2sup, kfoldInv);
 			vector3<int> ik1sup = iqSup + ik2sup; //momentum conservation
 			vector3<> k01cur = q0 + k02cur; //momentum conservation
+			if(fwp.ePhHeadOnly and ik2sup.length_squared()) continue; //k-path debug mode
 			//Calculate electron-phonon matrix elements:
 			HePhW->transform(k01cur, k02cur);
 			int ikPair = 0;
@@ -628,7 +630,8 @@ void FeynWann::ePhLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::ePh
 			PartialLoop3D(phononSup, ik1, prodSup, k1, k01cur,
 				int ik2 = 0; vector3<> k2;
 				PartialLoop3D(phononSup, ik2, prodSup, k2, k02cur,
-					if(ikPair>=ikPairStart && ikPair<ikPairStop)
+					if(ikPair>=ikPairStart and ikPair<ikPairStop //subset to be evaluated on this process
+						and (not (fwp.ePhHeadOnly and ikPair)) ) //overridden in k-path debug mode to be ikPair==0 alone
 					{	watchRotations.start();
 						//Get the matrix elements for all modes together:
 						MatrixEph m;
