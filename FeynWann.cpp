@@ -25,7 +25,7 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 
 FeynWannParams::FeynWannParams()
 : iSpin(0), totalEprefix("Wannier/totalE"), phononPrefix("Wannier/phonon"), wannierPrefix("Wannier/wannier"),
-needSymmetries(false), needCellWeights(false), needPhonons(false), polar(false), needVelocity(false), needSpin(false),
+needSymmetries(false), needCellWeights(false), needPhonons(false), needVelocity(false), needSpin(false),
 needLinewidth_ee(false), needLinewidth_ePh(false), needLinewidthP_ePh(false)
 {
 }
@@ -113,7 +113,7 @@ std::vector<vector3<>> readArrayVec3(string fname)
 
 
 FeynWann::FeynWann(FeynWannParams& fwp)
-: fwp(fwp), nSpins(0), nSpinor(0), spinWeight(0), mu(NAN), nElectrons(0)
+: fwp(fwp), nAtoms(0), nSpins(0), nSpinor(0), spinWeight(0), mu(NAN), nElectrons(0), polar(false)
 {	
 	//Create inter-group communicator if requested:
 	std::shared_ptr<MPIUtil> mpiInterGroup;
@@ -261,6 +261,7 @@ FeynWann::FeynWann(FeynWannParams& fwp)
 	for(unsigned i=0; i<atpos.size(); i++)
 		logPrintf("\t%2s %19.15lf %19.15lf %19.15lf\n",
 			atNames[i].c_str(), atpos[i][0], atpos[i][1], atpos[i][2]);
+	nAtoms = int(atpos.size());
 	logPrintf("\n");
 	
 	//Read symmetries if required
@@ -339,6 +340,7 @@ FeynWann::FeynWann(FeynWannParams& fwp)
 		}
 		ifs.close();
 		if(!phononSup.length_squared()) die("Failed to read phonon supercell dimensions.\n");
+		if(nModes != 3*nAtoms) die("Number of modes = %d in phonon.out is inconsistent with nAtoms = %d in totalE.out\n", nModes, nAtoms);
 		logPrintf("done.\n"); logFlush();
 		logPrintf("nModes = %d\n", nModes);
 		logPrintf("phononSup = "); phononSup.print(globalLog, " %d ");
@@ -369,12 +371,43 @@ FeynWann::FeynWann(FeynWannParams& fwp)
 		HePhW = std::make_shared<DistributedMatrix>(fname, realPartOnly,
 			mpiGroup, nModes*nBands*nBands, phononCellMap, phononSup, true, mpiInterGroup);
 		
-		if(fwp.polar)
-		{	invsqrtM = readPhononBasis(fwp.totalEprefix + ".phononBasis");
+		//Check for polarity:
+		fname = fwp.wannierPrefix + ".out";
+		logPrintf("\nReading '%s' ... ", fname.c_str()); logFlush();
+		ifs.open(fname); if(!ifs.is_open()) die("could not open file.\n");
+		while(!ifs.eof())
+		{	string line; getline(ifs, line);
+			if(line.find("wannier  \\") != string::npos)
+			{	//at start of wannier command print
+				string key, val;
+				while(key!="polar" and (!ifs.eof()))
+					ifs >> key; //search for polar keyword
+				ifs >> val;
+				if(ifs.good() and val=="yes")
+				{	polar = true;
+					break;
+				}
+			}
+		}
+		ifs.close();
+		logPrintf("done.\n");
+		logPrintf("polar = %s\n\n", polar ? "yes" : "no");
+		
+		if(polar)
+		{	//Read phonon basis:
+			invsqrtM = readPhononBasis(fwp.totalEprefix + ".phononBasis");
 			invsqrtM.resize(nModes);
+			//Read Born effective charges:
 			Zeff = readArrayVec3(fwp.totalEprefix + ".Zeff");
+			//Read optical dielectric tensor:
 			std::vector<vector3<>> eps = readArrayVec3(fwp.totalEprefix + ".epsInf");
 			epsInf.set_rows(eps[0], eps[1], eps[2]);
+			//Read cell weights:
+			fname = fwp.wannierPrefix + ".mlwfCellWeightsPh" + spinSuffix;
+			logPrintf("Reading '%s' ... ", fname.c_str()); logFlush();
+			phononCellWeights.init(nAtoms*nAtoms, phononCellMap.size());
+			phononCellWeights.read_real(fname.c_str());
+			logPrintf("done.\n");
 		}
 	}
 	
@@ -610,12 +643,12 @@ void FeynWann::ePhLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::ePh
 						m.e1 = &e1[ik1net];
 						m.e2 = &e2[ik2net];
 						//Prepare quantities for polar correction (if needed):
-						//TODO complete and check
+						//TODO  check
 						vector3<> qgLCart;
-						if(fwp.polar)
-						{	vector3<> qgL ; //= m.ph->q  k2-k1;
+						if(polar)
+						{	vector3<> qgL = m.ph->q; //= m.ph->q  k2-k1;
 							for(int iDir=0; iDir<3; iDir++)
-								qgL[iDir] -= floor(m.ph->q[iDir] + 0.5); //wrap to fundamental BZ
+								qgL[iDir] -= floor(qgL[iDir] + 0.5); //wrap to fundamental BZ
 							matrix3<> G = (2.*M_PI)*inv(R);
 							matrix3<> GT = ~G;
 							qgLCart =  GT * qgL;
@@ -625,13 +658,13 @@ void FeynWann::ePhLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::ePh
 						m.M.resize(nModes);
 						for(int iMode=0; iMode<nModes; iMode++)
 						{	matrix HePhS = getMatrix(Mall.data(), nBands, nBands, iMode); //short term wannier interpolated HePh
-							if(fwp.polar)
+							if(polar)
 							{	//TODO check
 								complex gLij = complex(0,1)
-									* (4*M_PI*invsqrtM[iMode] / (det(R) * sqrt(prodSup)))
+									* (invsqrtM[iMode] / (det(R) * sqrt(2*prodSup)))
 									* dot(qgLCart, Zeff[iMode])/ dot(epsInf*qgLCart, qgLCart);
-								for (int ib = 0; ib < nBands; ib++)
-									HePhS.data()[HePhS.index(ib, ib)] += gLij;
+								for (int b = 0; b < nBands; b++)	
+									HePhS.data()[HePhS.index(b, b)] += gLij;
 							}
 							m.M[iMode] = sqrt(m.ph->omega[iMode]<omegaPhCut ? 0. : 0.5/m.ph->omega[iMode]) //frequency-dependent phonon amplitude
 								* (dagger(m.e1->U) * HePhS * m.e2->U); //to E1 and E2 eigenbasis
@@ -744,8 +777,51 @@ void FeynWann::bcastState(FeynWann::StateE& state, MPIUtil* mpiUtil, int root)
 
 void FeynWann::setState(FeynWann::StatePh& state)
 {	assert(fwp.needPhonons);
-	//Get and diagonalize force matrix:
+	//Get force matrix:
 	matrix Osqq = getMatrix(OsqW->getResult(state.iq), nModes, nModes);
+
+	//Add polar corrections (LO-TO  splits) if any:
+	if(polar)
+	{	//Prefactor including denominator:
+		int prodSup = OsqW->nkTot;
+		matrix3<> G = (2.*M_PI)*inv(R);
+		matrix3<> GT = ~G;
+		//wrap q to BZ before qCart
+		vector3<> qBZ = state.q;
+		for(int iDir=0; iDir<3; iDir++)
+			qBZ[iDir] -= floor(qBZ[iDir] + 0.5);
+		vector3<> qCart = GT * qBZ;
+		double prefac = (4.*M_PI) / (prodSup * Omega * epsInf.metric_length_squared(qCart));
+		//Construct q.Z for each mode:
+		diagMatrix qdotZbySqrtM(nModes);
+		for(int iMode=0; iMode<nModes; iMode++)
+			qdotZbySqrtM[iMode] = dot(Zeff[iMode], qCart) * invsqrtM[iMode];
+		//Fourier transform cell weights to present q:
+		matrix phase = zeroes(phononCellMap.size(), 1);
+		complex* phaseData = phase.data();
+		for(size_t iCell=0; iCell<phononCellMap.size(); iCell++)
+			phaseData[iCell] = cis(2*M_PI*dot(state.q, phononCellMap[iCell]));
+		matrix wTilde = phononCellWeights * phase; //nAtoms*nAtoms x 1 matrix
+		wTilde.reshape(nAtoms, nAtoms);
+		//Add corrections:
+		complex* OsqqData = Osqq.data(); //iterating over nModes x nModes matrix
+		int iMode2 = 0;
+		for(int atom2=0; atom2<nAtoms; atom2++)
+		for(int iDir2=0; iDir2<3; iDir2++)
+		{	int iMode1 = 0;
+			for(int atom1=0; atom1<nAtoms; atom1++)
+			for(int iDir1=0; iDir1<3; iDir1++)
+			{	*(OsqqData++) += prefac
+					* wTilde(atom1,atom2) //cell weights
+					* qdotZbySqrtM[iMode1] //charge and mass factor for mode 1
+					* qdotZbySqrtM[iMode2]; //charge and mass factor for mode 2
+				iMode1++;
+			}
+			iMode2++;
+		}
+	}
+	
+	//Diagonalize force matrix:
 	Osqq.diagonalize(state.U, state.omega);
 	for(double& omega: state.omega) omega = sqrt(std::max(0.,omega)); //convert to phonon frequency; discard imaginary
 }
