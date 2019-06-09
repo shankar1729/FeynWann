@@ -1,3 +1,0 @@
-Please add following two lines in CMakeLists.txt
-"add_FeynWann_executable(eph_T1)"
-"target_link_libraries(eph_T1 ${GSL_BLAS_LIBRARY})"
