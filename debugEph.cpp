@@ -61,13 +61,17 @@ struct DebugEph
 		const diagMatrix& omegaPh = mEph.ph->omega;
 		int nBands = E1.nRows();
 		int nModes= omegaPh.nRows();
+		
 		/*
+		//---- Phonon frequency debug ----
 		logPrintf("OMEGAPH(%lf,%lf,%lf):", mEph.ph->q[0], mEph.ph->q[1], mEph.ph->q[2]);
 		for(const double omega: omegaPh)
 			logPrintf(" %11.8lf", omega);
 		logPrintf("\n");
 		logFlush();
 		*/
+		
+		//---- e-ph matrix element debug ----
 		logPrintf("|g|(%lf,%lf,%lf):", mEph.ph->q[0], mEph.ph->q[1], mEph.ph->q[2]);
 		double gNormCur = 0.0;
 		for(int b1=0; b1<nBands; b1++) 
@@ -80,6 +84,9 @@ struct DebugEph
 		logPrintf(" %11.8lf", sqrt(gNormCur)); 
 		logPrintf("\n");
 		logFlush();
+		
+		//---- Spin commutator debug ---
+		//TODO
 	}
 	static void ePhProcess(const FeynWann::MatrixEph& mEph, void* params)
 	{	((DebugEph*)params)->process(mEph);
