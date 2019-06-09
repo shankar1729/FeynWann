@@ -37,6 +37,7 @@ struct FeynWannParams
 	bool needLinewidth_ee; //!< whether to provide e-e line-width (default: false)
 	bool needLinewidth_ePh; //!< whether to provide e-ph line-width (default: false)
 	bool needLinewidthP_ePh; //!< whether to provide momentum-relaxation e-ph line-width (default: false)
+	bool ePhHeadOnly; //!< if true, only evaluate ePh callback function at head of each offset for debugging (default: false)
 	static const std::vector<double> fGrid_ePh; //!< fillings grid used for e-ph linewidths
 	FeynWannParams();
 };

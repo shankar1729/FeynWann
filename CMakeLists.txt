@@ -116,6 +116,7 @@ add_FeynWann_executable(lindblad)
 add_FeynWann_executable(ePhRelax)
 add_FeynWann_executable(ePhRelax_Gaussian)
 add_FeynWann_executable(ePhSpinRelax)
+add_FeynWann_executable(debugEph)
 
 target_link_libraries(lindblad ${GSL_BLAS_LIBRARY})
 target_link_libraries(ePhRelax ${GSL_LIBRARY})
