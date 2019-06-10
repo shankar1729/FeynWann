@@ -71,6 +71,7 @@ struct DebugEph
 		logFlush();
 		*/
 		
+		/*
 		//---- e-ph matrix element debug ----
 		logPrintf("|g|(%lf,%lf,%lf):", mEph.ph->q[0], mEph.ph->q[1], mEph.ph->q[2]);
 		double gNormCur = 0.0;
@@ -84,12 +85,44 @@ struct DebugEph
 		logPrintf(" %11.8lf", sqrt(gNormCur)); 
 		logPrintf("\n");
 		logFlush();
+		*/
 		
 		//---- Spin commutator debug ---
-		//TODO
+		const double degeneracyThreshold = 1e-6;
+		matrix S1z = degenerateProject(mEph.e1->S[2], E1);
+		matrix S2z = degenerateProject(mEph.e2->S[2], E2);
+		double Gsq = 0., SGsq = 0.; //traced over degenerate subspaces to specified band range
+		const matrix& G = mEph.M[modeStart];
+		matrix SGcomm = S1z * G - G * S2z;
+		double E1min = E1[bandStart] - degeneracyThreshold;
+		double E1max = E1[bandStop-1] + degeneracyThreshold;
+		double E2min = E2[bandStart] - degeneracyThreshold;
+		double E2max = E2[bandStop-1] + degeneracyThreshold;
+		for(int mode=modeStart; mode<modeStop; mode++)
+		{	const matrix& G = mEph.M[mode];
+			matrix SGcomm = S1z * G - G * S2z;
+			for(int b1=0; b1<nBands; b1++) if(E1[b1]>E1min and E1[b1]<E1max)
+			for(int b2=0; b2<nBands; b2++) if(E2[b2]>E2min and E2[b2]<E2max)
+			{	Gsq += G(b1,b2).norm();
+				SGsq += SGcomm(b1,b2).norm();
+			}
+		}
+		logPrintf("SGcommDEBUG: %le %le\n", sqrt(Gsq), sqrt(SGsq));
 	}
 	static void ePhProcess(const FeynWann::MatrixEph& mEph, void* params)
 	{	((DebugEph*)params)->process(mEph);
+	}
+	
+	inline matrix degenerateProject(const matrix& M, const diagMatrix& E)
+	{	static const double degeneracyThreshold = 1e-6;
+		matrix out = M;
+		complex* outData = out.data();
+		for(int b2=0; b2<out.nCols(); b2++)
+			for(int b1=0; b1<out.nRows(); b1++)
+			{	if(fabs(E[b1] - E[b2]) > degeneracyThreshold) (*outData) = 0;
+				outData++;
+			}
+		return out;
 	}
 };
 
@@ -122,6 +155,7 @@ int main(int argc, char** argv)
 	FeynWannParams fwp;
 	fwp.needPhonons = true;
 	fwp.ePhHeadOnly = true; //so as to debug k-path alone
+	fwp.needSpin = true;
 	FeynWann fw(fwp);
 	if(!bandStop) bandStop = fw.nBands;
 	if(!modeStop) modeStop = fw.nModes;
