@@ -26,7 +26,7 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 FeynWannParams::FeynWannParams()
 : iSpin(0), totalEprefix("Wannier/totalE"), phononPrefix("Wannier/phonon"), wannierPrefix("Wannier/wannier"),
 needSymmetries(false), needCellWeights(false), needPhonons(false), needVelocity(false), needSpin(false),
-needLinewidth_ee(false), needLinewidth_ePh(false), needLinewidthP_ePh(false)
+needLinewidth_ee(false), needLinewidth_ePh(false), needLinewidthP_ePh(false), ePhHeadOnly(false)
 {
 }
 
