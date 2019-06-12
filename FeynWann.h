@@ -33,6 +33,7 @@ struct FeynWannParams
 	bool needPhonons; //!< whether to initialize phonon-related quantities (default: false)
 	bool needVelocity; //!< whether to initialize velocity (momentum) matrix elements
 	bool needSpin; //!< whether to initialize spin matrix elements (will be reset to false if not relativstic)
+	bool needSpinPhonon; //!< whether to initialize spin-phonon commutator (default: false)
 	bool needLinewidth_ee; //!< whether to provide e-e line-width (default: false)
 	bool needLinewidth_ePh; //!< whether to provide e-ph line-width (default: false)
 	bool needLinewidthP_ePh; //!< whether to provide momentum-relaxation e-ph line-width (default: false)
@@ -87,7 +88,8 @@ public:
 	{	const StateE* e1; //!< corresponding first electronic state
 		const StateE* e2; //!< corresponding second electronic state
 		const StatePh* ph; //!< corresponding phonon state
-		std::vector<matrix> M; //!< nModes matrices of nBands x nBands matrix elements
+		std::vector<matrix> M; //!< nModes matrices of nBands x nBands electron-phonon matrix elements
+		std::vector<vector3<matrix>> MS; //!< nModes x 3 matrices of nBands x nBands spin-phonon matrix elements
 	};
 	
 	typedef void (*eProcessFunc)(const StateE& state, void* params); //!< Callback function pointer for eLoop()
@@ -153,6 +155,7 @@ public:
 	
 	//Electron-phonon interaction:
 	std::shared_ptr<DistributedMatrix> HePhW; //electron-phonon matrix elements in Wannier basis
+	std::shared_ptr<DistributedMatrix> HePhSW; //spin-phonon matrix elements in Wannier basis
 };
 
 //Utility functions for printing with error estimates:

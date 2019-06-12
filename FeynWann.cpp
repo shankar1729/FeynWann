@@ -25,7 +25,7 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 
 FeynWannParams::FeynWannParams()
 : iSpin(0), totalEprefix("Wannier/totalE"), phononPrefix("Wannier/phonon"), wannierPrefix("Wannier/wannier"),
-needSymmetries(false), needCellWeights(false), needPhonons(false), needVelocity(false), needSpin(false),
+needSymmetries(false), needCellWeights(false), needPhonons(false), needVelocity(false), needSpin(false), needSpinPhonon(false),
 needLinewidth_ee(false), needLinewidth_ePh(false), needLinewidthP_ePh(false)
 {
 }
@@ -371,6 +371,13 @@ FeynWann::FeynWann(FeynWannParams& fwp)
 		HePhW = std::make_shared<DistributedMatrix>(fname, realPartOnly,
 			mpiGroup, nModes*nBands*nBands, phononCellMap, phononSup, true, mpiInterGroup);
 		
+		//Read spin-phonon matrix elements:
+		if(fwp.needSpinPhonon)
+		{	fname = fwp.wannierPrefix + ".mlwfHePhS" + spinSuffix;
+			HePhSW = std::make_shared<DistributedMatrix>(fname, realPartOnly,
+				mpiGroup, nModes*3*nBands*nBands, phononCellMap, phononSup, true, mpiInterGroup);
+		}
+		
 		//Check for polarity:
 		fname = fwp.wannierPrefix + ".out";
 		logPrintf("\nReading '%s' ... ", fname.c_str()); logFlush();
@@ -456,6 +463,7 @@ void FeynWann::free()
 	ImSigmaP_ePhW = 0;
 	OsqW = 0;
 	HePhW = 0;
+	HePhSW = 0;
 }
 
 //Get iMatrix'th matrix of specified dimensions from pointer src, assuming they are stored contiguously there in column-major order)
@@ -623,6 +631,8 @@ void FeynWann::ePhLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::ePh
 			if(fwp.ePhHeadOnly and ik2sup.length_squared()) continue; //k-path debug mode
 			//Calculate electron-phonon matrix elements:
 			HePhW->transform(k01cur, k02cur);
+			if(fwp.needSpinPhonon)
+				HePhSW->transform(k01cur, k02cur);
 			int ikPair = 0;
 			int ikPairStart = HePhW->ikStart;
 			int ikPairStop = ikPairStart + HePhW->nk;
@@ -660,17 +670,28 @@ void FeynWann::ePhLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::ePh
 						const double omegaPhCut = 1e-6;
 						m.M.resize(nModes);
 						for(int iMode=0; iMode<nModes; iMode++)
-						{	matrix HePhS = getMatrix(Mall.data(), nBands, nBands, iMode); //short term wannier interpolated HePh
+						{	matrix HePh = getMatrix(Mall.data(), nBands, nBands, iMode); //short-ranged wannier interpolated HePh
 							if(polar)
 							{	//TODO check
 								complex gLij = complex(0,1)
 									* (invsqrtM[iMode] / (det(R) * sqrt(2*prodSup)))
 									* dot(qgLCart, Zeff[iMode])/ dot(epsInf*qgLCart, qgLCart);
 								for (int b = 0; b < nBands; b++)	
-									HePhS.data()[HePhS.index(b, b)] += gLij;
+									HePh.data()[HePh.index(b, b)] += gLij;
 							}
 							m.M[iMode] = sqrt(m.ph->omega[iMode]<omegaPhCut ? 0. : 0.5/m.ph->omega[iMode]) //frequency-dependent phonon amplitude
-								* (dagger(m.e1->U) * HePhS * m.e2->U); //to E1 and E2 eigenbasis
+								* (dagger(m.e1->U) * HePh * m.e2->U); //to E1 and E2 eigenbasis
+						}
+						//Corresponding spin matrix elements if needed:
+						if(fwp.needSpinPhonon)
+						{	matrix MSall = getMatrix(HePhSW->getResult(ikPair), nBands*nBands*3, nModes) * m.ph->U; //phonon transformation
+							m.MS.resize(nModes);
+							for(int iMode=0; iMode<nModes; iMode++) //phonon mode
+								for(int iDir=0; iDir<3; iDir++) //spin direction
+								{	matrix MS = getMatrix(MSall.data(), nBands, nBands, iDir+3*iMode);
+									m.MS[iMode][iDir] = sqrt(m.ph->omega[iMode]<omegaPhCut ? 0. : 0.5/m.ph->omega[iMode]) //phonon amplitude
+										* (dagger(m.e1->U) * MS * m.e2->U); //to E1 and E2 eigenbasis
+								}
 						}
 						watchRotations.stop();
 						//Invoke call-back function:
