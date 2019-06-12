@@ -91,7 +91,7 @@ struct DebugEph
 		const double degeneracyThreshold = 1e-6;
 		matrix S1z = degenerateProject(mEph.e1->S[2], E1);
 		matrix S2z = degenerateProject(mEph.e2->S[2], E2);
-		double Gsq = 0., SGsq = 0., SGsqNew = 0.; //traced over degenerate subspaces to specified band range
+		double Gsq = 0., SGsq = 0.; //traced over degenerate subspaces to specified band range
 		const matrix& G = mEph.M[modeStart];
 		matrix SGcomm = S1z * G - G * S2z;
 		double E1min = E1[bandStart] - degeneracyThreshold;
@@ -101,15 +101,13 @@ struct DebugEph
 		for(int mode=modeStart; mode<modeStop; mode++)
 		{	const matrix& G = mEph.M[mode];
 			matrix SGcomm = S1z * G - G * S2z;
-			const matrix& SGcommNew = mEph.MS[mode][2];
 			for(int b1=0; b1<nBands; b1++) if(E1[b1]>E1min and E1[b1]<E1max)
 			for(int b2=0; b2<nBands; b2++) if(E2[b2]>E2min and E2[b2]<E2max)
 			{	Gsq += G(b1,b2).norm();
 				SGsq += SGcomm(b1,b2).norm();
-				SGsqNew += SGcommNew(b1,b2).norm();
 			}
 		}
-		logPrintf("SGcommDEBUG: %le %le %le\n", sqrt(Gsq), sqrt(SGsq), sqrt(SGsqNew));
+		logPrintf("SGcommDEBUG: %le %le\n", sqrt(Gsq), sqrt(SGsq));
 	}
 	static void ePhProcess(const FeynWann::MatrixEph& mEph, void* params)
 	{	((DebugEph*)params)->process(mEph);
@@ -158,7 +156,6 @@ int main(int argc, char** argv)
 	fwp.needPhonons = true;
 	fwp.ePhHeadOnly = true; //so as to debug k-path alone
 	fwp.needSpin = true;
-	fwp.needSpinPhonon = true;
 	FeynWann fw(fwp);
 	if(!bandStop) bandStop = fw.nBands;
 	if(!modeStop) modeStop = fw.nModes;
