@@ -26,7 +26,7 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 FeynWannParams::FeynWannParams()
 : iSpin(0), totalEprefix("Wannier/totalE"), phononPrefix("Wannier/phonon"), wannierPrefix("Wannier/wannier"),
 needSymmetries(false), needCellWeights(false), needPhonons(false), needVelocity(false), needSpin(false),
-needLinewidth_ee(false), needLinewidth_ePh(false), needLinewidthP_ePh(false)
+needLinewidth_ee(false), needLinewidth_ePh(false), needLinewidthP_ePh(false), ePhHeadOnly(false)
 {
 }
 
@@ -660,17 +660,17 @@ void FeynWann::ePhLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::ePh
 						const double omegaPhCut = 1e-6;
 						m.M.resize(nModes);
 						for(int iMode=0; iMode<nModes; iMode++)
-						{	matrix HePhS = getMatrix(Mall.data(), nBands, nBands, iMode); //short term wannier interpolated HePh
+						{	matrix HePh = getMatrix(Mall.data(), nBands, nBands, iMode); //short-ranged wannier interpolated HePh
 							if(polar)
 							{	//TODO check
 								complex gLij = complex(0,1)
 									* (invsqrtM[iMode] / (det(R) * sqrt(2*prodSup)))
 									* dot(qgLCart, Zeff[iMode])/ dot(epsInf*qgLCart, qgLCart);
 								for (int b = 0; b < nBands; b++)	
-									HePhS.data()[HePhS.index(b, b)] += gLij;
+									HePh.data()[HePh.index(b, b)] += gLij;
 							}
 							m.M[iMode] = sqrt(m.ph->omega[iMode]<omegaPhCut ? 0. : 0.5/m.ph->omega[iMode]) //frequency-dependent phonon amplitude
-								* (dagger(m.e1->U) * HePhS * m.e2->U); //to E1 and E2 eigenbasis
+								* (dagger(m.e1->U) * HePh * m.e2->U); //to E1 and E2 eigenbasis
 						}
 						watchRotations.stop();
 						//Invoke call-back function:
