@@ -88,21 +88,16 @@ struct DebugEph
 		*/
 		
 		//---- Spin commutator debug ---
-		const double degeneracyThreshold = 1e-6;
 		matrix S1z = degenerateProject(mEph.e1->S[2], E1);
 		matrix S2z = degenerateProject(mEph.e2->S[2], E2);
-		double Gsq = 0., SGsq = 0.; //traced over degenerate subspaces to specified band range
+		double Gsq = 0., SGsq = 0.; //traced over specified band and mode range
 		const matrix& G = mEph.M[modeStart];
 		matrix SGcomm = S1z * G - G * S2z;
-		double E1min = E1[bandStart] - degeneracyThreshold;
-		double E1max = E1[bandStop-1] + degeneracyThreshold;
-		double E2min = E2[bandStart] - degeneracyThreshold;
-		double E2max = E2[bandStop-1] + degeneracyThreshold;
 		for(int mode=modeStart; mode<modeStop; mode++)
 		{	const matrix& G = mEph.M[mode];
 			matrix SGcomm = S1z * G - G * S2z;
-			for(int b1=0; b1<nBands; b1++) if(E1[b1]>E1min and E1[b1]<E1max)
-			for(int b2=0; b2<nBands; b2++) if(E2[b2]>E2min and E2[b2]<E2max)
+			for(int b1=bandStart; b1<bandStop; b1++)
+			for(int b2=bandStart; b2<bandStop; b2++)
 			{	Gsq += G(b1,b2).norm();
 				SGsq += SGcomm(b1,b2).norm();
 			}
