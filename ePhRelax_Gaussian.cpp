@@ -194,7 +194,7 @@ struct ePhRelax
 		
 		const double Tl = f.back();
 		const double* g = dos.yGrid[0].data(); //DOS data pointer
-		/*
+		
 		//e-e collisions:
 		for(int i=ieStart; i<ieStop; i++)
 		{	double rateSum = 0.;
@@ -213,11 +213,11 @@ struct ePhRelax
 			}
 			results[i] = (2*scaledDe) * (dE*dE) * rateSum;
 		}
-		*/
+		
 		mpiWorld->allReduceData(results, MPIUtil::ReduceSum, true);
 		//e-ph collisions:
 		double ElDot = 0.; //rate of energy transfer to lattice
-		/*
+		
 		for(int i=0; i<nE-1; i++)
 		{	if(std::min(g[i],g[i+1]) < 1e-3*dos0) continue; //ignore intervals with no electrons to avoid division by zero below
 			double fPrime = (f[i+1]-f[i])/dE;
@@ -227,7 +227,7 @@ struct ePhRelax
 			results[i] += ElDot_i / (dE*dE*g[i]);
 			results[i+1] -= ElDot_i / (dE*dE*g[i+1]);
 		}
-		*/
+		
 		double sigma = pumpFWHM/2.355;
 		double gaussian = exp((-1.*t*t)/(2*sigma*sigma))/(sigma*sqrt(2*M_PI));
 		for(int i=0; i<nE; i++)
@@ -312,6 +312,7 @@ int main(int argc, char** argv)
 	//--- t = -dt: just before absorption
 	double t = -e.pumpFWHM/2.5*5.; // 5 times sigma
 	double tStart = t; //Store starting  value of time for ouputting data
+	logPrintf("\ntStart = %5g fs\n",tStart/fs);
 	diagMatrix f = e.f0; f.push_back(e.T);
 	fArr.push_back(f);
 	//--- t = 0: just after absorption
@@ -356,33 +357,22 @@ int main(int argc, char** argv)
 		ofs.open((e.runName+".Tl").c_str());
 		ofs.precision(10);
 		ofs << "#t[fs] Tl[K]\n";
-		double tIndex = tStart + e.dt;
-		int it=0;
-		while(tIndex< e.tMax-1e-3*e.dt)
+		double tIndex = tStart;// + e.dt;
+		for(int it=0; it<int(fArr.size()); it++)
 		{
 			ofs << '\t' << tIndex/fs << '\t' << fArr[it].back()/Kelvin << '\n';
-			tIndex = tIndex +e.dt;
-			it++;
+			tIndex = tIndex + e.dt;		
 		}
 		ofs << '\n';
-		/*
-		for(int it=0; it<int(fArr.size()); it++)
-			ofs << ((it-1)*e.dt)/fs << '\t' << fArr[it].back()/Kelvin << '\n';
-		*/
 		ofs.close();
 		
 		//Distributions [dimensionless]
 		ofs.open((e.runName+".f").c_str());
 		ofs.precision(10);
-		tIndex = tStart + e.dt;
+		tIndex = tStart;// + e.dt;
 		//--- Header
 		ofs << "#E[ev]\\t[fs]";
-		/*for(int it=0; it<int(fArr.size()); it++)
-			ofs << '\t' << ((it-1)*e.dt)/fs;
-		ofs << '\n';
-		*/
-		
-		while(tIndex< e.tMax-1e-3*e.dt)
+		for(int it=0; it<int(fArr.size()); it++)
 		{
 			ofs << '\t' << tIndex/fs;
 			tIndex = tIndex +e.dt;
@@ -402,8 +392,12 @@ int main(int argc, char** argv)
 		ofs.precision(10);
 		//--- Header
 		ofs << "#E[ev]\\t[fs]";
+		tIndex = tStart;
 		for(int it=0; it<int(fArr.size()); it++)
-			ofs << '\t' << ((it-1)*e.dt)/fs;
+		{
+			ofs << '\t' << tIndex/fs;
+			tIndex = tIndex +e.dt;
+		}
 		ofs << '\n';
 		//--- Data
 		for(int ie=0; ie<e.nE; ie++)
