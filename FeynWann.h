@@ -70,6 +70,7 @@ public:
 	private:
 		std::vector<diagMatrix> logImSigma_ePhArr; //!< e-ph linewidth for each f in fGrid_ePh
 		std::vector<diagMatrix> logImSigmaP_ePhArr; //!< e-ph momentum-relaxation linewidth for each f in fGrid_ePh
+		matrix HePhSum; //!< nBands*nBands x 3 matrix used internally to enforce e-ph matrix element sum rule at all k's
 		friend class FeynWann;
 	};
 	
@@ -141,7 +142,9 @@ public:
 	void bcastState(StateE& state, MPIUtil* mpiUtil, int root); //!< broadcast specified state on specified MPI instance
 	
 	//Phonons:
-	std::vector< vector3<int> > phononCellMap, phononCellMapCorr; //cell map for phonon force matrix (and a possibly different corrected version for omegaSq alone)
+	std::vector<vector3<int>> phononCellMap; //cell map for phonon force matrix (and a possibly different corrected version for omegaSq alone)
+	std::vector<vector3<int>> phononCellMapCorr; //cell map for optional corrected phonon force matrix
+	std::vector<vector3<int>> phononCellMapSum; //cell map for e-ph matrix element sum rule
 	diagMatrix invsqrtM; //!< 1/sqrt(M) per nuclear displacement mode
 	bool polar; //!< whether the system is polar (i.e. needs LO-TO correction)
 	std::vector<vector3<>> Zeff; //Born effective charge for polar materials
@@ -153,6 +156,7 @@ public:
 	
 	//Electron-phonon interaction:
 	std::shared_ptr<DistributedMatrix> HePhW; //electron-phonon matrix elements in Wannier basis
+	std::shared_ptr<DistributedMatrix> HePhSumW; //electron-phonon matrix element sum rule in Wannier basis
 };
 
 //Utility functions for printing with error estimates:
