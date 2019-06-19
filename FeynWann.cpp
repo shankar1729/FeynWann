@@ -20,6 +20,7 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 #include "FeynWann.h"
 #include <core/BlasExtra.h>
 #include <core/Random.h>
+#include <wannier/WannierMinimizer.h>
 #include <fftw3-mpi.h>
 #include "config.h"
 
@@ -97,19 +98,7 @@ diagMatrix readPhononBasis(string fname)
 	return invsqrtM;		
 }
 
-//Read an array of vector3<> from a plain text file
-std::vector<vector3<>> readArrayVec3(string fname)
-{	logPrintf("Reading '%s' ... ", fname.c_str()); logFlush();
-	ifstream ifs(fname); if(!ifs.is_open()) die("could not open file.\n");
-	string headerLine; getline(ifs, headerLine); //read and ignore header line
-	std::vector<vector3<double>> fileData;
-	vector3<double> ij; //lattice coords version (store)
-	while(ifs >> ij[0] >> ij[1] >> ij[2])
-		fileData.push_back(ij);
-	ifs.close();
-	logPrintf("done.\n");
-	return fileData;
-}
+std::vector<vector3<>> readArrayVec3(string fname); //Read an array of vector3<> from a plain text file (implemented in wannier/WannierMinimizer_phonon.cpp)
 
 
 FeynWann::FeynWann(FeynWannParams& fwp)
@@ -402,6 +391,7 @@ FeynWann::FeynWann(FeynWannParams& fwp)
 			//Read optical dielectric tensor:
 			std::vector<vector3<>> eps = readArrayVec3(fwp.totalEprefix + ".epsInf");
 			epsInf.set_rows(eps[0], eps[1], eps[2]);
+			lrs = std::make_shared<LongRangeSum>(R, epsInf);
 			//Read cell weights:
 			fname = fwp.wannierPrefix + ".mlwfCellWeightsPh" + spinSuffix;
 			logPrintf("Reading '%s' ... ", fname.c_str()); logFlush();
@@ -636,6 +626,17 @@ void FeynWann::ePhLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::ePh
 						//Get the matrix elements for all modes together:
 						MatrixEph m;
 						matrix Mall = getMatrix(HePhW->getResult(ikPair), nBands*nBands, nModes);
+						//Add long range polar corrections if required:
+						if(polar)
+						{	vector3<> q = k1 - k2;
+							for(int iMode=0; iMode<nModes; iMode++) //in Cartesian atom displacement basis
+							{	complex gLij =  complex(0,1)
+									* ((4*M_PI) * invsqrtM[iMode] / (Omega))
+									*  (*lrs)(q, Zeff[iMode]);
+								for(int b=0;  b<nBands; b++)
+									Mall.data()[Mall.index(b*(nBands+1), iMode)] += gLij; //diagonal only
+							}
+						}
 						//Apply associated phonon transformation:
 						int iqIndex = calculateIndex(ik1v - ik2v, phononSup);
 						m.ph = &ph[iqIndex];
@@ -645,33 +646,12 @@ void FeynWann::ePhLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::ePh
 						int ik2net = calculateIndex(ik2sup + elemwiseProd(kfoldSup, ik2v), kfold);
 						m.e1 = &e1[ik1net];
 						m.e2 = &e2[ik2net];
-						//Prepare quantities for polar correction (if needed):
-						//TODO  check
-						vector3<> qgLCart;
-						if(polar)
-						{	vector3<> qgL = m.ph->q; //= m.ph->q  k2-k1;
-							for(int iDir=0; iDir<3; iDir++)
-								qgL[iDir] -= floor(qgL[iDir] + 0.5); //wrap to fundamental BZ
-							matrix3<> G = (2.*M_PI)*inv(R);
-							matrix3<> GT = ~G;
-							qgLCart =  GT * qgL;
-						}
 						//Extract matrices for each phonon mode:
 						const double omegaPhCut = 1e-6;
 						m.M.resize(nModes);
 						for(int iMode=0; iMode<nModes; iMode++)
-						{	matrix HePhS = getMatrix(Mall.data(), nBands, nBands, iMode); //short term wannier interpolated HePh
-							if(polar)
-							{	//TODO check
-								complex gLij = complex(0,1)
-									* (invsqrtM[iMode] / (det(R) * sqrt(2*prodSup)))
-									* dot(qgLCart, Zeff[iMode])/ dot(epsInf*qgLCart, qgLCart);
-								for (int b = 0; b < nBands; b++)	
-									HePhS.data()[HePhS.index(b, b)] += gLij;
-							}
 							m.M[iMode] = sqrt(m.ph->omega[iMode]<omegaPhCut ? 0. : 0.5/m.ph->omega[iMode]) //frequency-dependent phonon amplitude
-								* (dagger(m.e1->U) * HePhS * m.e2->U); //to E1 and E2 eigenbasis
-						}
+								* (dagger(m.e1->U) * getMatrix(Mall.data(), nBands, nBands, iMode) * m.e2->U); //to E1 and E2 eigenbasis
 						watchRotations.stop();
 						//Invoke call-back function:
 						watchCallback.start();

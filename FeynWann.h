@@ -146,6 +146,7 @@ public:
 	bool polar; //!< whether the system is polar (i.e. needs LO-TO correction)
 	std::vector<vector3<>> Zeff; //Born effective charge for polar materials
 	matrix3<> epsInf; // epsilon at infinity for polar material
+	std::shared_ptr<class LongRangeSum> lrs; //long range sum corrector for e-ph matrix elements
 	matrix phononCellWeights; //corresponding weights (nAtoms*nAtoms x nCells), available if polar
 	std::shared_ptr<DistributedMatrix> OsqW; //phonon omega-squared matrix
 	void setState(StatePh& state); //!< set requested properties for iq in state
