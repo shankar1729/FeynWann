@@ -71,22 +71,19 @@ struct DebugEph
 		logFlush();
 		*/
 		
-		/*
 		//---- e-ph matrix element debug ----
 		logPrintf("|g|(%lf,%lf,%lf):", mEph.ph->q[0], mEph.ph->q[1], mEph.ph->q[2]);
 		double gNormCur = 0.0;
-		for(int b1=0; b1<nBands; b1++) 
-		{	for(int b2=0; b2<nBands; b2++)
-			{	if ( (fabs(E1[b1] - E1[bandStart]) < 1e-5) 
-						&&	 (fabs(E2[b2] - E2[bandStart]) < 1e-5) )
-							gNormCur += mEph.M[modeStart](b1,b2).norm();	
-			}
+		for(int b1=0; b1<nBands; b1++)
+		for(int b2=0; b2<nBands; b2++)
+		{	if ( (fabs(E1[b1] - E1[bandStart]) < 1e-5) and (fabs(E2[b2] - E2[bandStart]) < 1e-5) )
+				gNormCur += mEph.M[modeStart](b1,b2).norm();	
 		}
 		logPrintf(" %11.8lf", sqrt(gNormCur)); 
 		logPrintf("\n");
 		logFlush();
-		*/
 		
+		/*
 		//---- Spin commutator debug ---
 		const double degeneracyThreshold = 1e-6;
 		matrix S1z = degenerateProject(mEph.e1->S[2], E1);
@@ -108,6 +105,7 @@ struct DebugEph
 			}
 		}
 		logPrintf("SGcommDEBUG: %le %le\n", sqrt(Gsq), sqrt(SGsq));
+		*/
 	}
 	static void ePhProcess(const FeynWann::MatrixEph& mEph, void* params)
 	{	((DebugEph*)params)->process(mEph);
@@ -155,7 +153,7 @@ int main(int argc, char** argv)
 	FeynWannParams fwp;
 	fwp.needPhonons = true;
 	fwp.ePhHeadOnly = true; //so as to debug k-path alone
-	fwp.needSpin = true;
+	//fwp.needSpin = true;
 	FeynWann fw(fwp);
 	if(!bandStop) bandStop = fw.nBands;
 	if(!modeStop) modeStop = fw.nModes;
