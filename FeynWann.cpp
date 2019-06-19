@@ -27,7 +27,7 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 FeynWannParams::FeynWannParams()
 : iSpin(0), totalEprefix("Wannier/totalE"), phononPrefix("Wannier/phonon"), wannierPrefix("Wannier/wannier"),
 needSymmetries(false), needCellWeights(false), needPhonons(false), needVelocity(false), needSpin(false),
-needLinewidth_ee(false), needLinewidth_ePh(false), needLinewidthP_ePh(false)
+needLinewidth_ee(false), needLinewidth_ePh(false), needLinewidthP_ePh(false), ePhHeadOnly(false)
 {
 }
 
@@ -75,7 +75,7 @@ std::vector<vector3<int>> readCellMap(string fname)
 	while(ifs >> cm[0] >> cm[1] >> cm[2] >> Rcm[0] >> Rcm[1] >> Rcm[2])
 		cellMap.push_back(cm);
 	ifs.close();
-	logPrintf("done.\n");
+	logPrintf("done.\n"); logFlush();
 	return cellMap;
 }
 
@@ -95,6 +95,7 @@ diagMatrix readPhononBasis(string fname)
 		{	invsqrtM.push_back(disp.length());
 		}
 	}
+	logPrintf("done.\n"); logFlush();
 	return invsqrtM;		
 }
 
@@ -341,7 +342,9 @@ FeynWann::FeynWann(FeynWannParams& fwp)
 		logPrintf("\n");
 		
 		//Read phonon cell map and basis:
+		invsqrtM = readPhononBasis(fwp.totalEprefix + ".phononBasis");
 		phononCellMap = readCellMap(fwp.wannierPrefix + ".mlwfCellMapPh" + spinSuffix);
+		phononCellMapSum = readCellMap(fwp.wannierPrefix + ".mlwfCellMapPhSum" + spinSuffix);
 		
 		//Read phonon force matrix
 		phononCellMapCorr = phononCellMap;
@@ -360,6 +363,11 @@ FeynWann::FeynWann(FeynWannParams& fwp)
 		HePhW = std::make_shared<DistributedMatrix>(fname, realPartOnly,
 			mpiGroup, nModes*nBands*nBands, phononCellMap, phononSup, true, mpiInterGroup);
 		
+		//Read electron-phonon matrix element sum rule
+		fname = fwp.wannierPrefix + ".mlwfHePhSum" + spinSuffix;
+		HePhSumW = std::make_shared<DistributedMatrix>(fname, realPartOnly,
+			mpiGroup, 3*nBands*nBands, phononCellMapSum, kfold, false, mpiInterGroup);
+
 		//Check for polarity:
 		fname = fwp.wannierPrefix + ".out";
 		logPrintf("\nReading '%s' ... ", fname.c_str()); logFlush();
@@ -383,10 +391,7 @@ FeynWann::FeynWann(FeynWannParams& fwp)
 		logPrintf("polar = %s\n\n", polar ? "yes" : "no");
 		
 		if(polar)
-		{	//Read phonon basis:
-			invsqrtM = readPhononBasis(fwp.totalEprefix + ".phononBasis");
-			invsqrtM.resize(nModes);
-			//Read Born effective charges:
+		{	//Read Born effective charges:
 			Zeff = readArrayVec3(fwp.totalEprefix + ".Zeff");
 			//Read optical dielectric tensor:
 			std::vector<vector3<>> eps = readArrayVec3(fwp.totalEprefix + ".epsInf");
@@ -446,6 +451,7 @@ void FeynWann::free()
 	ImSigmaP_ePhW = 0;
 	OsqW = 0;
 	HePhW = 0;
+	HePhSumW = 0;
 }
 
 //Get iMatrix'th matrix of specified dimensions from pointer src, assuming they are stored contiguously there in column-major order)
@@ -557,6 +563,7 @@ void FeynWann::ePhLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::ePh
 			if(fwp.needLinewidth_ee) ImSigma_eeW->transform(k0##i); \
 			if(fwp.needLinewidth_ePh) ImSigma_ePhW->transform(k0##i); \
 			if(fwp.needLinewidthP_ePh) ImSigmaP_ePhW->transform(k0##i); \
+			HePhSumW->transform(k0##i); \
 			int ik = Hw->ikStart; \
 			int ikStop = ik + Hw->nk; \
 			PartialLoop3D(kfold, ik, ikStop, e##i[ik].k, k0##i, \
@@ -637,15 +644,24 @@ void FeynWann::ePhLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::ePh
 									Mall.data()[Mall.index(b*(nBands+1), iMode)] += gLij; //diagonal only
 							}
 						}
-						//Apply associated phonon transformation:
-						int iqIndex = calculateIndex(ik1v - ik2v, phononSup);
-						m.ph = &ph[iqIndex];
-						Mall = Mall * m.ph->U; //to phonon eigenbasis
 						//Identify associated electronic states:
 						int ik1net = calculateIndex(ik1sup + elemwiseProd(kfoldSup, ik1v), kfold);
 						int ik2net = calculateIndex(ik2sup + elemwiseProd(kfoldSup, ik2v), kfold);
 						m.e1 = &e1[ik1net];
 						m.e2 = &e2[ik2net];
+						//Apply sum rule correction:
+						complex* Mdata = Mall.dataPref();
+						for(int iAtom=0; iAtom<nAtoms; iAtom++)
+						{	int nData = m.e1->HePhSum.nData();
+							double alpha = (-0.5/nAtoms)*invsqrtM[3*iAtom];
+							eblas_zaxpy(nData, alpha, m.e1->HePhSum.dataPref(),1, Mdata,1);
+							eblas_zaxpy(nData, alpha, m.e2->HePhSum.dataPref(),1, Mdata,1);
+							Mdata += nData;
+						}
+						//Apply phonon transformation:
+						int iqIndex = calculateIndex(ik1v - ik2v, phononSup);
+						m.ph = &ph[iqIndex];
+						Mall = Mall * m.ph->U; //to phonon eigenbasis
 						//Extract matrices for each phonon mode:
 						const double omegaPhCut = 1e-6;
 						m.M.resize(nModes);
@@ -708,7 +724,7 @@ void FeynWann::setState(FeynWann::StateE& state)
 				state.Svec[b][iDir] = state.S[iDir](b,b).real();
 		}
 	}
-	//Linewidths, ad needed:
+	//Linewidths, as needed:
 	if(fwp.needLinewidth_ee)
 		state.ImSigma_ee = diag(dagger(state.U) * getMatrix(ImSigma_eeW->getResult(state.ik), nBands, nBands) * state.U);
 	if(fwp.needLinewidth_ePh)
@@ -720,6 +736,27 @@ void FeynWann::setState(FeynWann::StateE& state)
 	{	state.logImSigmaP_ePhArr.resize(FeynWannParams::fGrid_ePh.size());
 		for(unsigned iMat=0; iMat<state.logImSigmaP_ePhArr.size(); iMat++)
 			state.logImSigmaP_ePhArr[iMat] = diag(dagger(state.U) * getMatrix(ImSigmaP_ePhW->getResult(state.ik), nBands, nBands, iMat) * state.U);
+	}
+	//e-ph sum rule if needed:
+	if(fwp.needPhonons)
+	{	const double degeneracyThreshold = 1e-5;
+		state.HePhSum.init(nBands*nBands, 3);
+		complex* HsumData = state.HePhSum.dataPref();
+		for(int iDir=0; iDir<3; iDir++)
+		{	matrix H = dagger(state.U) * getMatrix(HePhSumW->getResult(state.ik), nBands, nBands, iDir) * state.U;
+			//Project to degenerate subspaces:
+			complex* Hdata = H.data();
+			for(int b2=0; b2<nBands; b2++)
+				for(int b1=0; b1<nBands; b1++)
+				{	if(fabs(state.E[b1] - state.E[b2]) > degeneracyThreshold)
+						*Hdata = 0.;
+					Hdata++;
+				}
+			//Rotate back to Wannier basis and store to HePhSum
+			H = state.U * H * dagger(state.U);
+			callPref(eblas_copy)(HsumData, H.data(), H.nData());
+			HsumData += H.nData();
+		}
 	}
 	watchRotations.stop();
 }
@@ -755,6 +792,9 @@ void FeynWann::bcastState(FeynWann::StateE& state, MPIUtil* mpiUtil, int root)
 	{	state.logImSigmaP_ePhArr.resize(FeynWannParams::fGrid_ePh.size());
 		for(diagMatrix& d: state.logImSigmaP_ePhArr) bcast(d, nBands, mpiUtil, root);
 	}
+	//e-ph sum rule if needed
+	if(fwp.needPhonons)
+		bcast(state.HePhSum, nBands*nBands, 3, mpiUtil, root);
 }
 
 
