@@ -341,32 +341,35 @@ FeynWann::FeynWann(FeynWannParams& fwp)
 		}
 		logPrintf("\n");
 		
-		//Read phonon cell map and basis:
+		//Read phonon basis:
 		invsqrtM = readPhononBasis(fwp.totalEprefix + ".phononBasis");
-		phononCellMap = readCellMap(fwp.wannierPrefix + ".mlwfCellMapPh" + spinSuffix);
-		phononCellMapSum = readCellMap(fwp.wannierPrefix + ".mlwfCellMapPhSum" + spinSuffix);
+		
+		//Read phonon cell map:
+		fname = fwp.totalEprefix + ".phononCellMap";
+		if(fileSize((fname + "Corr").c_str()) > 0) //corrected force matrix cell map exists
+			fname += "Corr";
+		phononCellMap = readCellMap(fname);
 		
 		//Read phonon force matrix
-		phononCellMapCorr = phononCellMap;
-		fname = fwp.wannierPrefix + ".mlwfOmegaSqPh" + spinSuffix;
-		//--- check if a corrected force matrix file exists:
-		string fnameCorr = fwp.wannierPrefix + ".mlwfOmegaSqPhCorr" + spinSuffix;
-		if(fileSize(fnameCorr.c_str()) > 0) //corrected force matrix exists
-		{	fname = fnameCorr; //read it instead, and read corresponding cell map (used only for omegaSq, not HePh)
-			phononCellMapCorr = readCellMap(fwp.wannierPrefix + ".mlwfCellMapPhCorr" + spinSuffix);
-		}
+		fname = fwp.totalEprefix + ".phononOmegaSq";
+		if(fileSize((fname + "Corr").c_str()) > 0) //corrected force matrix exists
+			fname += "Corr";
 		OsqW = std::make_shared<DistributedMatrix>(fname, true, //phonon omegaSq is always real
-			mpiGroup, nModes*nModes, phononCellMapCorr, phononSup, false, mpiInterGroup);
+			mpiGroup, nModes*nModes, phononCellMap, phononSup, false, mpiInterGroup);
 		
+		//Read cell maps for electron-phonon matrix elements and sum rule:
+		ePhCellMap = readCellMap(fwp.wannierPrefix + ".mlwfCellMapPh" + spinSuffix);
+		ePhCellMapSum = readCellMap(fwp.wannierPrefix + ".mlwfCellMapPhSum" + spinSuffix);
+
 		//Read electron-phonon matrix elements
 		fname = fwp.wannierPrefix + ".mlwfHePh" + spinSuffix;
 		HePhW = std::make_shared<DistributedMatrix>(fname, realPartOnly,
-			mpiGroup, nModes*nBands*nBands, phononCellMap, phononSup, true, mpiInterGroup);
+			mpiGroup, nModes*nBands*nBands, ePhCellMap, phononSup, true, mpiInterGroup);
 		
 		//Read electron-phonon matrix element sum rule
 		fname = fwp.wannierPrefix + ".mlwfHePhSum" + spinSuffix;
 		HePhSumW = std::make_shared<DistributedMatrix>(fname, realPartOnly,
-			mpiGroup, 3*nBands*nBands, phononCellMapSum, kfold, false, mpiInterGroup);
+			mpiGroup, 3*nBands*nBands, ePhCellMapSum, kfold, false, mpiInterGroup);
 
 		//Check for polarity:
 		fname = fwp.wannierPrefix + ".out";
@@ -398,7 +401,7 @@ FeynWann::FeynWann(FeynWannParams& fwp)
 			epsInf.set_rows(eps[0], eps[1], eps[2]);
 			lrs = std::make_shared<LongRangeSum>(R, epsInf);
 			//Read cell weights:
-			fname = fwp.wannierPrefix + ".mlwfCellWeightsPh" + spinSuffix;
+			fname = fwp.totalEprefix + ".phononCellWeights";
 			logPrintf("Reading '%s' ... ", fname.c_str()); logFlush();
 			phononCellWeights.init(nAtoms*nAtoms, phononCellMap.size());
 			phononCellWeights.read_real(fname.c_str());
