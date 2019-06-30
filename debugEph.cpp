@@ -50,6 +50,7 @@ std::vector<vector3<>> readKpointsFile(string fname)
 struct DebugEph
 {	int bandStart, bandStop; //optional band range read in from input
 	int modeStart, modeStop; //optional mode range read in from input
+	double Mtot;
 	
 	DebugEph(int bandStart, int bandStop, int modeStart, int modeStop)
 	: bandStart(bandStart), bandStop(bandStop), modeStart(modeStart), modeStop(modeStop)
@@ -73,13 +74,17 @@ struct DebugEph
 		
 		//---- e-ph matrix element debug ----
 		logPrintf("|g|(%lf,%lf,%lf):", mEph.ph->q[0], mEph.ph->q[1], mEph.ph->q[2]);
-		double gNormCur = 0.0;
-		for(int b1=0; b1<nBands; b1++)
-		for(int b2=0; b2<nBands; b2++)
-		{	if ( (fabs(E1[b1] - E1[bandStart]) < 1e-5) and (fabs(E2[b2] - E2[bandStart]) < 1e-5) )
-				gNormCur += mEph.M[modeStart](b1,b2).norm();	
+		
+		for(int iMode=modeStart; iMode<modeStop; iMode++){
+			double gNormCur = 0.0;
+			for(int b1=bandStart; b1<bandStop; b1++)
+			{	for(int b2=bandStart; b2<bandStop; b2++)
+				{	//if ( (fabs(E1[b1] - E1[bandStart]) < 1e-5) and (fabs(E2[b2] - E2[bandStart]) < 1e-5) )
+					gNormCur += (sqrt(2.*Mtot*omegaPh[iMode])*mEph.M[iMode](b1,b2)).norm();	
+				}
+			}
+			logPrintf(" %11.8lf", sqrt(gNormCur)); 
 		}
-		logPrintf(" %11.8lf", sqrt(gNormCur)); 
 		logPrintf("\n");
 		logFlush();
 		
@@ -160,8 +165,14 @@ int main(int argc, char** argv)
 		return 0;
 	}
 	logPrintf("\n");
+	diagMatrix invsqrtM = fw.invsqrtM;
+	double Mtot = 0.0;
+	for(int iMode=0; iMode< fw.nModes; iMode++)
+	{	Mtot += 1./std::pow(invsqrtM[iMode],2);
+	}
+	Mtot *= 1./3;
 	DebugEph src(bandStart, bandStop, modeStart, modeStop);
-	
+	src.Mtot = Mtot;
 	for(vector3<> k2: k2arr)
 		fw.ePhLoop(k1, k2, DebugEph::ePhProcess, &src);
 	

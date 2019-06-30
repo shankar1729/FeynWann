@@ -89,10 +89,10 @@ diagMatrix readPhononBasis(string fname)
 		trim(line);
 		if(!line.length()) continue;
 		istringstream iss(line);
-		string spName; int atom; vector3<> disp;
-		iss >> spName >> atom >> disp[0] >> disp[1] >> disp[2];
+		string spName; int atom; vector3<> disp; double M;
+		iss >> spName >> atom >> disp[0] >> disp[1] >> disp[2] >> M;
 		if(!iss.fail())
-		{	invsqrtM.push_back(disp.length());
+		{	invsqrtM.push_back(1./sqrt(M*amu));
 		}
 	}
 	logPrintf("done.\n"); logFlush();
