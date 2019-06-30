@@ -103,7 +103,7 @@ std::vector<vector3<>> readArrayVec3(string fname); //Read an array of vector3<>
 
 
 FeynWann::FeynWann(FeynWannParams& fwp)
-: fwp(fwp), nAtoms(0), nSpins(0), nSpinor(0), spinWeight(0), mu(NAN), nElectrons(0), polar(false)
+: fwp(fwp), nAtoms(0), nSpins(0), nSpinor(0), spinWeight(0), mu(NAN), nElectrons(0), polar(false), inEphLoop(false)
 {	
 	//Create inter-group communicator if requested:
 	std::shared_ptr<MPIUtil> mpiInterGroup;
@@ -370,7 +370,12 @@ FeynWann::FeynWann(FeynWannParams& fwp)
 		fname = fwp.wannierPrefix + ".mlwfHePhSum" + spinSuffix;
 		HePhSumW = std::make_shared<DistributedMatrix>(fname, realPartOnly,
 			mpiGroup, 3*nBands*nBands, ePhCellMapSum, kfold, false, mpiInterGroup);
-
+		
+		//Read gradient matrix element for e-ph sum rule
+		fname = fwp.wannierPrefix + ".mlwfD" + spinSuffix;
+		Dw = std::make_shared<DistributedMatrix>(fname, realPartOnly,
+			mpiGroup, 3*nBands*nBands, cellMap, kfold, false, mpiInterGroup);
+		
 		//Check for polarity:
 		fname = fwp.wannierPrefix + ".out";
 		logPrintf("\nReading '%s' ... ", fname.c_str()); logFlush();
@@ -455,6 +460,7 @@ void FeynWann::free()
 	OsqW = 0;
 	HePhW = 0;
 	HePhSumW = 0;
+	Dw = 0;
 }
 
 //Get iMatrix'th matrix of specified dimensions from pointer src, assuming they are stored contiguously there in column-major order)
@@ -567,6 +573,7 @@ void FeynWann::ePhLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::ePh
 			if(fwp.needLinewidth_ePh) ImSigma_ePhW->transform(k0##i); \
 			if(fwp.needLinewidthP_ePh) ImSigmaP_ePhW->transform(k0##i); \
 			HePhSumW->transform(k0##i); \
+			Dw->transform(k0##i); \
 			int ik = Hw->ikStart; \
 			int ikStop = ik + Hw->nk; \
 			PartialLoop3D(kfold, ik, ikStop, e##i[ik].k, k0##i, \
@@ -582,8 +589,10 @@ void FeynWann::ePhLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::ePh
 				watchBcast.stop(); \
 			} \
 		}
+	inEphLoop = true; //turns on sum rule handling in setState and bcastState
 	PrepareElecStates(1) //prepares e1 and V1
 	PrepareElecStates(2) //prepares e2 and V2
+	inEphLoop = false;
 	#undef PrepareElecStates
 	//Loop over phonon q offsets:
 	vector3<> kfoldInv(1./kfold[0], 1./kfold[1], 1./kfold[2]);
@@ -655,10 +664,10 @@ void FeynWann::ePhLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::ePh
 						//Apply sum rule correction:
 						complex* Mdata = Mall.dataPref();
 						for(int iAtom=0; iAtom<nAtoms; iAtom++)
-						{	int nData = m.e1->HePhSum.nData();
+						{	int nData = m.e1->dHePhSum.nData();
 							double alpha = (-0.5/nAtoms)*invsqrtM[3*iAtom];
-							eblas_zaxpy(nData, alpha, m.e1->HePhSum.dataPref(),1, Mdata,1);
-							eblas_zaxpy(nData, alpha, m.e2->HePhSum.dataPref(),1, Mdata,1);
+							eblas_zaxpy(nData, alpha, m.e1->dHePhSum.dataPref(),1, Mdata,1);
+							eblas_zaxpy(nData, alpha, m.e2->dHePhSum.dataPref(),1, Mdata,1);
 							Mdata += nData;
 						}
 						//Apply phonon transformation:
@@ -741,24 +750,26 @@ void FeynWann::setState(FeynWann::StateE& state)
 			state.logImSigmaP_ePhArr[iMat] = diag(dagger(state.U) * getMatrix(ImSigmaP_ePhW->getResult(state.ik), nBands, nBands, iMat) * state.U);
 	}
 	//e-ph sum rule if needed:
-	if(fwp.needPhonons)
-	{	const double degeneracyThreshold = 1e-5;
-		state.HePhSum.init(nBands*nBands, 3);
-		complex* HsumData = state.HePhSum.dataPref();
+	if(inEphLoop)
+	{	state.dHePhSum.init(nBands*nBands, 3);
+		complex* dHsumData = state.dHePhSum.dataPref();
 		for(int iDir=0; iDir<3; iDir++)
-		{	matrix H = dagger(state.U) * getMatrix(HePhSumW->getResult(state.ik), nBands, nBands, iDir) * state.U;
-			//Project to degenerate subspaces:
+		{	matrix D = dagger(state.U) * getMatrix(Dw->getResult(state.ik), nBands, nBands, iDir) * state.U;
+			matrix H = dagger(state.U) * getMatrix(HePhSumW->getResult(state.ik), nBands, nBands, iDir) * state.U;
+			//Compute error in the sum rule:
 			complex* Hdata = H.data();
+			const complex* Ddata = D.data();
 			for(int b2=0; b2<nBands; b2++)
 				for(int b1=0; b1<nBands; b1++)
-				{	if(fabs(state.E[b1] - state.E[b2]) > degeneracyThreshold)
-						*Hdata = 0.;
+				{	double E12 = state.E[b1] - state.E[b2];
+					*Hdata -= (*(Ddata++)) * E12;
+					*Hdata *= exp(-100.*E12*E12); //damp correction for large energy differences (to handle fringes of Wannier window)
 					Hdata++;
 				}
 			//Rotate back to Wannier basis and store to HePhSum
 			H = state.U * H * dagger(state.U);
-			callPref(eblas_copy)(HsumData, H.data(), H.nData());
-			HsumData += H.nData();
+			callPref(eblas_copy)(dHsumData, H.data(), H.nData());
+			dHsumData += H.nData();
 		}
 	}
 	watchRotations.stop();
@@ -796,8 +807,8 @@ void FeynWann::bcastState(FeynWann::StateE& state, MPIUtil* mpiUtil, int root)
 		for(diagMatrix& d: state.logImSigmaP_ePhArr) bcast(d, nBands, mpiUtil, root);
 	}
 	//e-ph sum rule if needed
-	if(fwp.needPhonons)
-		bcast(state.HePhSum, nBands*nBands, 3, mpiUtil, root);
+	if(inEphLoop)
+		bcast(state.dHePhSum, nBands*nBands, 3, mpiUtil, root);
 }
 
 

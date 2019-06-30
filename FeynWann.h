@@ -70,7 +70,7 @@ public:
 	private:
 		std::vector<diagMatrix> logImSigma_ePhArr; //!< e-ph linewidth for each f in fGrid_ePh
 		std::vector<diagMatrix> logImSigmaP_ePhArr; //!< e-ph momentum-relaxation linewidth for each f in fGrid_ePh
-		matrix HePhSum; //!< nBands*nBands x 3 matrix used internally to enforce e-ph matrix element sum rule at all k's
+		matrix dHePhSum; //!< nBands*nBands x 3 matrix used internally to enforce e-ph matrix element sum rule at all k's
 		friend class FeynWann;
 	};
 	
@@ -158,6 +158,10 @@ public:
 	std::vector<vector3<int>> ePhCellMapSum; //cell map for e-ph matrix element sum rule
 	std::shared_ptr<DistributedMatrix> HePhW; //electron-phonon matrix elements in Wannier basis
 	std::shared_ptr<DistributedMatrix> HePhSumW; //electron-phonon matrix element sum rule in Wannier basis
+	std::shared_ptr<DistributedMatrix> Dw; //gradient matrix elements for sum rule enforcement
+
+private:
+	bool inEphLoop; //flag used internally by setState etc. for special handling of sum rule quantities within an ePhLoop
 };
 
 //Utility functions for printing with error estimates:
