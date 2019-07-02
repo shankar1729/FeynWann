@@ -650,9 +650,8 @@ void FeynWann::ePhLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::ePh
 						{	vector3<> q = k1 - k2;
 							for(int iMode=0; iMode<nModes; iMode++) //in Cartesian atom displacement basis
 							{	complex gLij =  complex(0,1)
-									* cis((-2*M_PI)*dot(q,atpos[iMode/3])) //atom translation phase
 									* ((4*M_PI) * invsqrtM[iMode] / (Omega))
-									*  (*lrs)(q, Zeff[iMode]);
+									*  (*lrs)(q, Zeff[iMode], atpos[iMode/3]);
 								for(int b=0;  b<nBands; b++)
 									Mall.data()[Mall.index(b*(nBands+1), iMode)] += gLij; //diagonal only
 							}
