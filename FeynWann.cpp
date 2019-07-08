@@ -757,13 +757,15 @@ void FeynWann::setState(FeynWann::StateE& state)
 		{	matrix D = dagger(state.U) * getMatrix(Dw->getResult(state.ik), nBands, nBands, iDir) * state.U;
 			matrix H = dagger(state.U) * getMatrix(HePhSumW->getResult(state.ik), nBands, nBands, iDir) * state.U;
 			//Compute error in the sum rule:
+			const double Emag = 1e-3; //damp correction for energy differences >> Emag (to handle fringes of Wannier window)
+			const double expFac = -1./(Emag*Emag);
 			complex* Hdata = H.data();
 			const complex* Ddata = D.data();
 			for(int b2=0; b2<nBands; b2++)
 				for(int b1=0; b1<nBands; b1++)
 				{	double E12 = state.E[b1] - state.E[b2];
 					*Hdata -= (*(Ddata++)) * E12;
-					*Hdata *= exp(-100.*E12*E12); //damp correction for large energy differences (to handle fringes of Wannier window)
+					*Hdata *= exp(expFac*E12*E12); //damp correction based on energy difference
 					Hdata++;
 				}
 			//Rotate back to Wannier basis and store to HePhSum
