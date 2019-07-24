@@ -5,6 +5,7 @@
 #include <core/string.h>
 #include <core/WignerSeitz.h>
 #include <core/Units.h>
+#include <commands/command.h>
 #include "InputMap.h"
 #include "Histogram.h"
 #include "FeynWann.h"
@@ -24,16 +25,19 @@ struct EnergyRange
 
 //Collect ImEps contibutions using FeynWann callbacks:
 struct CollectHePh
-{	Histogram hEph, dos;
+{	double dE;
+	Histogram hEph, dos;
 	double prefac, prefacDOS;
+	bool useLinewidths;
 	
-	CollectHePh(double Emin, double dE, double Emax)
-	: hEph(Emin, dE, Emax), dos(Emin, dE, Emax)
+	CollectHePh(double Emin, double dE, double Emax, bool useLinewidths)
+	: dE(dE), hEph(Emin, dE, Emax), dos(Emin, dE, Emax), useLinewidths(useLinewidths)
 	{	logPrintf("Initialized energy grid: %lg to %lg eV with %d points.\n", hEph.Emin/eV, hEph.Emax()/eV, hEph.nE);
 	}
 	
 	void calcLinewidth(const FeynWann::StateE& state, diagMatrix& ImE)
-	{	int nBands = state.E.nRows();
+	{	assert(useLinewidths);
+		int nBands = state.E.nRows();
 		ImE = state.ImSigma_ee; //e-e part
 		for(int b=0; b<nBands; b++)
 			ImE[b] += state.ImSigma_ePh(b, state.E[b]<0. ? 1. : 0.); //e-ph part
@@ -45,8 +49,10 @@ struct CollectHePh
 		const diagMatrix& E1 = mat.e1->E;
 		const diagMatrix& E2 = mat.e2->E;
 		diagMatrix ImE1, ImE2;
-		calcLinewidth(*mat.e1, ImE1);
-		calcLinewidth(*mat.e2, ImE2);
+		if(useLinewidths)
+		{	calcLinewidth(*mat.e1, ImE1);
+			calcLinewidth(*mat.e2, ImE2);
+		}
 		const diagMatrix& omegaPh = mat.ph->omega;
 		int nModes = omegaPh.nRows();
 		//Collect
@@ -54,7 +60,7 @@ struct CollectHePh
 		{	for(int c=0; c<nBands; c++)
 			{	for(int alpha=0; alpha<nModes; alpha++)
 				{	double gePhSq = mat.M[alpha](c,v).norm();
-					double breadth = ImE1[v] + ImE2[c];
+					double breadth = useLinewidths ? (ImE1[v] + ImE2[c]) : dE;
 					double delta = 1./(M_PI*breadth*(1. + std::pow((E1[v]-E2[c] + omegaPh[alpha])/breadth,2)));
 					hEph.addEvent(0.5*(E1[v]+E2[c]), prefac * delta * omegaPh[alpha] * gePhSq);
 				}
@@ -79,6 +85,8 @@ int main(int argc, char** argv)
 	const double Tmin = inputMap.get("Tmin") * Kelvin; //electron temperature grid start
 	const double Tmax = inputMap.get("Tmax") * Kelvin; //electron temperature grid stop
 	const double Tstep = inputMap.get("Tstep") * Kelvin; //electron temperature grid spacing
+	bool useLinewidths = false;
+	boolMap.getEnum(inputMap.getString("useLinewidths").c_str(), useLinewidths); //whether to use linewidths for broadening
 	
 	logPrintf("\nInputs after conversion to atomic units:\n");
 	logPrintf("nOffsets = %d\n", nOffsets);
@@ -86,12 +94,13 @@ int main(int argc, char** argv)
 	logPrintf("Tmin = %lg\n", Tmin);
 	logPrintf("Tmax = %lg\n", Tmax);
 	logPrintf("Tstep = %lg\n", Tstep);
-
+	logPrintf("useLinewidths = %s\n", boolMap.getString(useLinewidths));
+	
 	//Initialize FeynWann:
 	FeynWannParams fwp;
 	fwp.needPhonons = true;
-	fwp.needLinewidth_ee = true;
-	fwp.needLinewidth_ePh = true;
+	fwp.needLinewidth_ee = useLinewidths;
+	fwp.needLinewidth_ePh = useLinewidths;
 	std::shared_ptr<FeynWann> fw = std::make_shared<FeynWann>(fwp);
 	size_t nKeff = nOffsets * fw->ePhCountPerOffset();
 	logPrintf("Effectively sampled nKpairs: %lu\n", nKeff);
@@ -127,7 +136,7 @@ int main(int argc, char** argv)
 	er.Emax = dE * (ceil(er.Emax/dE) + 10);
 	
 	//Collect e-ph coupling resolved by energy:
-	CollectHePh ch(er.Emin, dE, er.Emax);
+	CollectHePh ch(er.Emin, dE, er.Emax, useLinewidths);
 	ch.prefac = fw->spinWeight / (nKeff*fabs(det(fw->R)));
 	ch.prefacDOS = fw->spinWeight * (1./nKeff);
 	for(int iSpin=0; iSpin<fw->nSpins; iSpin++)
