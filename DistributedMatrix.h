@@ -45,6 +45,7 @@ public:
 	
 	//! Initialize from file, containing complex or real elements as specified by realOnly
 	//! If mpiInterGroup is non-null, then read only in one group and broadcast to rest (require regular process grid)
+	//! If cellWeights is non-null, then read in only unique cells and use cellWeights in interpolation (required in squared mode)
 	//! (remaining parameters are as specified in the class)
 	DistributedMatrix(string fname, bool realOnly, const MPIUtil* mpiUtil, int nElemsTot,
 		const std::vector<vector3<int>>& cellMap, const vector3<int>& kfold, bool squared,
@@ -59,10 +60,10 @@ private:
 	ManagedArray<complex> buf; //!< buffer in which transformations happen and result is produced
 	std::shared_ptr<struct PlanSet> planSet; //!< opaque pointer to required set of FFT plans
 	std::vector<int> cellIndex; //!< index of cell in nkTot array
-	//Cells and weights by unique indices (in squared mode)
+	//Cells and weights by unique indices:
 	struct Cell
 	{	vector3<int> iR;
-		std::vector<double> weight; //nAtoms (outer) by nBands (inner)
+		std::vector<double> weight; //nBands x nBands in non-squared, and nAtoms (outer) by nBands (inner) in squared mode
 		complex phase01, phase02; //temporary variables used in transform
 	};
 	std::vector<std::vector<Cell>> uniqueCells;

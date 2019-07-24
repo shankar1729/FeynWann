@@ -38,6 +38,7 @@ struct CollectEph
 	std::vector<diagMatrix> E; //save electron energies on DFT mesh for final outputs
 	std::vector<vector3<>> kmesh; //DFT k-point mesh (full version i.e. unreduced)
 	double wOffsetCur; //weight factor of current offset (due to symmetry reduction)
+	std::vector<vector3<int>> uniqueCells; //for wannierization of results
 	
 	CollectEph(const FeynWann& fw, double T, double EconserveWidth, const vector3<int>& NkMult)
 	: fw(fw), T(T),
@@ -118,7 +119,7 @@ struct CollectEph
 	{	//Calculate for Fourier transform:
 		unsigned iCol = state.ik - fw.Hw->ikStart;
 		for(int c=cStart; c<cStop; c++)
-			phase.set(iCol, c-cStart, cis(-2*M_PI*dot(state.k, fw.cellMap[c])));
+			phase.set(iCol, c-cStart, cis(-2*M_PI*dot(state.k, uniqueCells[c])));
 		//For each matrix:
 		for(unsigned iP=0; iP<nP; iP++) //without or with P factors
 			for(unsigned if1=0; if1<f1grid.size(); if1++)
@@ -141,17 +142,9 @@ struct CollectEph
 		mpiGroup->allReduce(m.data(), m.nData(), MPIUtil::ReduceSum); //Collect results within groups
 		if(mpiGroup->isHead())
 		{	//expand to all cells version (with zeroes where unavailable currently)
-			matrix mEx = zeroes(m.nRows(), fw.cellMap.size());
+			matrix mEx = zeroes(m.nRows(), uniqueCells.size());
 			if(cStop>cStart)
-			{	mEx.set(0,m.nRows(), cStart,cStop, m);
-				//Apply cell weights:
-				int nBandsSq = fw.cellWeights.nRows();
-				int nMats = m.nRows() / nBandsSq;
-				for(int c=cStart; c<cStop; c++)
-					for(int iMat=0; iMat<nMats; iMat++)
-						eblas_zmul(nBandsSq, fw.cellWeights.data()+nBandsSq*c, 1,
-							mEx.data()+nBandsSq*(iMat+nMats*c), 1);
-			}
+				mEx.set(0,m.nRows(), cStart,cStop, m);
 			//Collect results between group heads
 			mpiGroupHead->allReduce(mEx.data(), mEx.nData(), MPIUtil::ReduceSum);
 			//Output from world head:
@@ -212,7 +205,6 @@ int main(int argc, char** argv)
 	FeynWannParams fwp;
 	fwp.iSpin = iSpin;
 	fwp.needSymmetries = true;
-	fwp.needCellWeights = true;
 	fwp.needPhonons = true;
 	fwp.needVelocity = true;
 	fwp.needSpin = true;
@@ -427,10 +419,19 @@ int main(int argc, char** argv)
 	}
 	
 	//Wannierize output:
+	//--- create unique cells:
+	cEph.uniqueCells.reserve(cEph.kmesh.size());
+	{	vector3<int> iR;
+		for(iR[0]=0; iR[0]<fw.kfold[0]; iR[0]++)
+		for(iR[1]=0; iR[1]<fw.kfold[1]; iR[1]++)
+		for(iR[2]=0; iR[2]<fw.kfold[2]; iR[2]++)
+			cEph.uniqueCells.push_back(iR);
+		assert(cEph.uniqueCells.size() == cEph.kmesh.size());
+	}
 	//--- divide output cells over MPI groups:
 	cEph.cStart = cEph.cStop = 0;
 	if(mpiGroup->isHead())
-		TaskDivision(fw.cellMap.size(), mpiGroupHead).myRange(cEph.cStart, cEph.cStop);
+		TaskDivision(cEph.kmesh.size(), mpiGroupHead).myRange(cEph.cStart, cEph.cStop);
 	mpiGroup->bcast(cEph.cStart);
 	mpiGroup->bcast(cEph.cStop);
 	int ncMine = std::max(1, cEph.cStop - cEph.cStart);

@@ -132,7 +132,6 @@ int main(int argc, char** argv)
 	FeynWannParams fwp;
 	fwp.iSpin = iSpin;
 	fwp.needSymmetries = true;
-	fwp.needCellWeights = true;
 	fwp.needPhonons = true;
 	fwp.needVelocity = true;
 	FeynWann fw(fwp);

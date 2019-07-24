@@ -29,7 +29,6 @@ struct FeynWannParams
 	string phononPrefix; //!< filename prefix for phonon outputs (default: Wannier/phonon)
 	string wannierPrefix; //!< filename prefix for wannier outputs (default: Wannier/wannier)
 	bool needSymmetries; //!< whether to read symmetries from .sym file from JDFTx (default: false)
-	bool needCellWeights; //!< whether to read mlwfCellWeights file (default: false)
 	bool needPhonons; //!< whether to initialize phonon-related quantities (default: false)
 	bool needVelocity; //!< whether to initialize velocity (momentum) matrix elements
 	bool needSpin; //!< whether to initialize spin matrix elements (will be reset to false if not relativstic)
@@ -135,7 +134,7 @@ public:
 	
 	//Electrons:
 	std::vector< vector3<int> > cellMap; //electron Wannier cell map
-	matrix cellWeights; //corresponding weights (nBands*nBands x nCells), available if needCellWeights = true
+	matrix cellWeights; //corresponding weights (nBands*nBands x nCells)
 	std::shared_ptr<DistributedMatrix> Hw, Pw, Sw; //Wannier hamiltonian, dipole matrix elements and spin matrix elements 
 	std::shared_ptr<DistributedMatrix> ImSigma_eeW, ImSigma_ePhW, ImSigmaP_ePhW; //linewidths in wannier basis
 	void setState(StateE& state); //!< set requested properties for ik in state
