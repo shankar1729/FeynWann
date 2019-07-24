@@ -361,10 +361,25 @@ FeynWann::FeynWann(FeynWannParams& fwp)
 		ePhCellMap = readCellMap(fwp.wannierPrefix + ".mlwfCellMapPh" + spinSuffix);
 		ePhCellMapSum = readCellMap(fwp.wannierPrefix + ".mlwfCellMapPhSum" + spinSuffix);
 
+		//Read e-ph cell weights:
+		std::vector<matrix> ePhCellWeights; //atom x band weights for each cell in ePhCellMap
+		{	fname = fwp.wannierPrefix + ".mlwfCellWeightsPh" + spinSuffix;
+			logPrintf("Reading '%s' ... ", fname.c_str()); logFlush();
+			matrix ePhCellWeightsAll(nAtoms*nBands, ePhCellMap.size());
+			ePhCellWeightsAll.read_real(fname.c_str());
+			//--- split to matrix per cell:
+			ePhCellWeights.resize(ePhCellMap.size());
+			for(size_t iCell=0; iCell<ePhCellWeights.size(); iCell++)
+			{	ePhCellWeights[iCell] = ePhCellWeightsAll(0,nAtoms*nBands, iCell,iCell+1);
+				ePhCellWeights[iCell].reshape(nAtoms,nBands);
+			}
+			logPrintf("done.\n");
+		}
+		
 		//Read electron-phonon matrix elements
 		fname = fwp.wannierPrefix + ".mlwfHePh" + spinSuffix;
 		HePhW = std::make_shared<DistributedMatrix>(fname, realPartOnly,
-			mpiGroup, nModes*nBands*nBands, ePhCellMap, phononSup, true, mpiInterGroup);
+			mpiGroup, nModes*nBands*nBands, ePhCellMap, phononSup, true, mpiInterGroup, &ePhCellWeights);
 		
 		//Read electron-phonon matrix element sum rule
 		fname = fwp.wannierPrefix + ".mlwfHePhSum" + spinSuffix;

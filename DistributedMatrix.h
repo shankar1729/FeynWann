@@ -48,7 +48,7 @@ public:
 	//! (remaining parameters are as specified in the class)
 	DistributedMatrix(string fname, bool realOnly, const MPIUtil* mpiUtil, int nElemsTot,
 		const std::vector<vector3<int>>& cellMap, const vector3<int>& kfold, bool squared,
-		const std::shared_ptr<MPIUtil> mpiInterGroup=0);
+		const std::shared_ptr<MPIUtil> mpiInterGroup=0, const std::vector<matrix>* cellWeights=0);
 	~DistributedMatrix();
 	
 	void transform(vector3<> k0); //!< prepare results for k-point mesh offset by k0 (squared=false only)
@@ -58,7 +58,15 @@ private:
 	ManagedArray<complex> mat; //!< input matrix elements
 	ManagedArray<complex> buf; //!< buffer in which transformations happen and result is produced
 	std::shared_ptr<struct PlanSet> planSet; //!< opaque pointer to required set of FFT plans
-	std::vector<int> cellIndex; //!< index of cell or cell-pair in nkTot array
+	std::vector<int> cellIndex; //!< index of cell in nkTot array
+	//Cells and weights by unique indices (in squared mode)
+	struct Cell
+	{	vector3<int> iR;
+		std::vector<double> weight; //nAtoms (outer) by nBands (inner)
+		complex phase01, phase02; //temporary variables used in transform
+	};
+	std::vector<std::vector<Cell>> uniqueCells;
+	int nAtoms, nBands;
 };
 
 //Calculate flat index given 3D coordinates and sample counts

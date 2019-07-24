@@ -51,11 +51,11 @@ struct PlanSet
 
 DistributedMatrix::DistributedMatrix(string fname, bool realOnly, const MPIUtil* mpiUtil, int nElemsTot,
 	const std::vector<vector3<int>>& cellMap, const vector3<int>& kfold, bool squared,
-	const std::shared_ptr<MPIUtil>  mpiInterGroup)
+	const std::shared_ptr<MPIUtil>  mpiInterGroup, const std::vector<matrix>* cellWeights)
 : mpiUtil(mpiUtil), nElemsTot(nElemsTot), cellMap(cellMap), kfold(kfold), squared(squared)
 {
-	nCellsTot = cellMap.size();
 	kfoldProd = kfold[0]*kfold[1]*kfold[2];
+	nCellsTot = squared ? kfoldProd : cellMap.size(); //cell weights applied here to save disk / memory
 	nkTot = kfoldProd;
 	if(squared)
 	{	nCellsTot *= nCellsTot;
@@ -119,21 +119,31 @@ DistributedMatrix::DistributedMatrix(string fname, bool realOnly, const MPIUtil*
 		if(!planSet->fft) die_alone("Cell-map FFT plan creation failed.\n");
 	}
 	
-	//Initialize cell (pair) index:
-	cellIndex.resize(nCellsTot);
-	auto iter = cellIndex.begin();
+	//Initialize cell index:
 	if(squared)
-	{	for(const vector3<int>& iR1: cellMap)
-		{	int i1offset = kfoldProd * calculateIndex(iR1, kfold);
-			for(const vector3<int>& iR2: cellMap)
-				*(iter++) = i1offset + calculateIndex(iR2, kfold);
+	{	assert(cellWeights != 0);
+		uniqueCells.resize(kfoldProd);
+		for(size_t iCell=0; iCell<cellMap.size(); iCell++)
+		{	Cell cell;
+			cell.iR = cellMap[iCell];
+			//Get real part of matrix:
+			const matrix& w = cellWeights->at(iCell);
+			cell.weight.reserve(w.nData());
+			nAtoms = w.nRows();
+			nBands = w.nCols();
+			for(int iAtom=0; iAtom<nAtoms; iAtom++)
+				for(int iBand=0; iBand<nBands; iBand++)
+					cell.weight.push_back(w(iAtom, iBand).real());
+			uniqueCells[calculateIndex(cell.iR, kfold)].push_back(cell);
 		}
 	}
 	else
-	{	for(const vector3<int>& iR: cellMap)
+	{	cellIndex.resize(nCellsTot);
+		auto iter = cellIndex.begin();
+		for(const vector3<int>& iR: cellMap)
 			*(iter++) = calculateIndex(iR, kfold);
+		assert(iter == cellIndex.end());
 	}
-	assert(iter == cellIndex.end());
 }
 
 DistributedMatrix::~DistributedMatrix()
@@ -173,24 +183,51 @@ void DistributedMatrix::transform(vector3<> k01, vector3<> k02)
 {	static StopWatch watch("DistributedMatrix::transform2"); watch.start();
 	assert(squared);
 	//Initialize offset phases:
-	std::vector<complex> phase01(cellMap.size()), phase02(cellMap.size());
-	auto phaseIter1 = phase01.begin();
-	auto phaseIter2 = phase02.begin();
-	for(const vector3<int>& iR: cellMap)
-	{	*(phaseIter1++) = cis(-2*M_PI*dot(iR, k01));
-		*(phaseIter2++) = cis(+2*M_PI*dot(iR, k02));
-	}
-	//Reduce from mat to buf (apply offset phases and combine equivalent cells):
-	buf.zero();
-	complex* bufData = buf.data();
-	const complex* matData = mat.data();
-	for(int iElem=0; iElem<nElems; iElem++)
-	{	auto cellIndexPtr = cellIndex.begin();
-		for(const complex& phase01cur: phase01)
-		for(const complex& phase02cur: phase02)
-			bufData[iElem*nkTot+*(cellIndexPtr++)] += *(matData++) * phase01cur * phase02cur;
-	}
+	for(std::vector<Cell>& cells: uniqueCells)
+		for(Cell& cell: cells)
+		{	cell.phase01 = cis(-2*M_PI*dot(cell.iR, k01));
+			cell.phase02 = cis(+2*M_PI*dot(cell.iR, k02));
+		}
+	//Copy mat to buf:
+	callPref(eblas_copy)(buf.data(), mat.data(), mat.nData());
+	//Apply cell weights and offset phases:
+	int atomStride = 3*nBands*nBands; //number of elements per atom
+	int iAtomStart = iElemStart / atomStride;
+	int iAtomStop = ceildiv(iElemStart+nElems, atomStride);
+	int iCellPair = 0;
+	for(int iCell1=0; iCell1<kfoldProd; iCell1++)
+		for(int iCell2=0; iCell2<kfoldProd; iCell2++)
+		{	for(int iAtom=iAtomStart; iAtom<iAtomStop; iAtom++)
+			{	//Collect weights * phase for all equivalent cells:
+				matrix w = zeroes(nBands, nBands);
+				for(const Cell& c1: uniqueCells[iCell1])
+					for(const Cell& c2: uniqueCells[iCell2])
+					{	const double* w1i = c1.weight.data() + iAtom*nBands;
+						const double* w2i = c2.weight.data() + iAtom*nBands;
+						complex phase = c1.phase01 * c2.phase02;
+						complex* wData = w.data();
+						for(int b2=0; b2<nBands; b2++)
+							for(int b1=0; b1<nBands; b1++)
+								*(wData++) += phase * w1i[b1] * w2i[b2];
+					}
+				//Apply weights:
+				for(int iVector=0; iVector<3; iVector++)
+				{	//Determine index range of w that contributes
+					int iElemOffset = (3*iAtom+iVector)*w.nData() - iElemStart;
+					int iwStart = std::max(-iElemOffset, 0);
+					int iwStop = std::min(nElems-iElemOffset, int(w.nData()));
+					//if(iCell1==0 and iCell2==0) logPrintf("\n%d %d", iwStart, iwStop); fflush(stdout);
+					if(iwStop <= iwStart) continue; //nothing on current process
+					//Apply weights:
+					callPref(eblas_zmul)(iwStop-iwStart,
+						w.dataPref()+iwStart, 1,
+						buf.dataPref()+(iElemOffset+iwStart)*nkTot+iCellPair, nkTot);
+				}
+			}
+			iCellPair++;
+		}
 	//Apply Fourier transform followed by MPI transpose:
+	complex* bufData = buf.data();
 	for(int iElem=0; iElem<nElems; iElem++)
 	{	fftw_execute_dft(planSet->fft1, (fftw_complex*)bufData, (fftw_complex*)bufData);
 		bufData += nkTot;
