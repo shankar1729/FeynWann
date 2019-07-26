@@ -21,6 +21,7 @@ struct ePhRelax
 	double pInject; //probability that a carrier gets injected to substrate
 	double De, scaledDe; //De, and De scaled by g(eF)**-3
 	double pumpFWHM, pumpMu;
+	double scatterFactor; //Artificially increase the electron-phonon and electron-electron scattering rate by this value
 	diagMatrix hInt; //energy resolved electron-phonon coupling
 	string runName;
 	//Energy grid:
@@ -51,8 +52,7 @@ struct ePhRelax
 		detR = fabs(det(R));
 		pumpMu = inputMap.get("pumpMu") * eV; //pump frequency in eV
 		pumpFWHM = inputMap.get("pumpFWHM") * fs; //Gaussian probe pulse width in fs
-		
-		//Input parameters for Gaussian pulse
+		scatterFactor= inputMap.get("scatterFactor"); //Increase the e-e and e-ph scattering rate by this factor 
 		
 		
 		logPrintf("\nInputs after conversion to atomic units:\n");
@@ -68,6 +68,7 @@ struct ePhRelax
 		logPrintf("runName = %s\n", runName.c_str());
 		logPrintf("R:\n"); R.print(globalLog, " %lg ");
 		logPrintf("detR = %lg\n", detR);
+		logPrintf("Artifically increase scattering rate by: %lg\n",scatterFactor);
 		
 		//Read electron and phonon DOS (and convert to atomic units and per-unit volume):
 		dos.init("eDOS.dat", eV, 1./(detR*eV));
@@ -211,7 +212,7 @@ struct ePhRelax
 					rateSum += (inUnocc*outOcc - inOcc*outUnocc) * g[i1]*g[i2]*g[i3];
 				}
 			}
-			results[i] = (2*scaledDe) * (dE*dE) * rateSum;
+			results[i] = scatterFactor* (2*scaledDe) * (dE*dE) * rateSum;
 		}
 		
 		mpiWorld->allReduceData(results, MPIUtil::ReduceSum, true);
@@ -222,7 +223,7 @@ struct ePhRelax
 		{	if(std::min(g[i],g[i+1]) < 1e-3*dos0) continue; //ignore intervals with no electrons to avoid division by zero below
 			double fPrime = (f[i+1]-f[i])/dE;
 			double fMean = 0.5*(f[i+1]+f[i]);
-			double ElDot_i = (2*M_PI*dE) * hInt[i] * (fMean*(1.-fMean) + fPrime*Tl); //rate of energy transfer to lattice from this interval
+			double ElDot_i = scatterFactor * (2*M_PI*dE) * hInt[i] * (fMean*(1.-fMean) + fPrime*Tl); //rate of energy transfer to lattice from this interval
 			ElDot += ElDot_i;
 			results[i] += ElDot_i / (dE*dE*g[i]);
 			results[i+1] -= ElDot_i / (dE*dE*g[i+1]);
@@ -267,6 +268,7 @@ struct ePhRelax
 	{	assert(dosPh.xMin==0.);
 		const double& domegaPh = dosPh.dx;
 		double result = 0.;
+		
 		for(size_t ie=1; ie<dosPh.xGrid.size(); ie++) //omit zero energy phonons to avoid 0/0 error
 		{	double omegaPh = ie*domegaPh;
 			double x = omegaPh/Tl;
