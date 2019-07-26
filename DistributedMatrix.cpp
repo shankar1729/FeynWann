@@ -56,7 +56,7 @@ DistributedMatrix::DistributedMatrix(string fname, bool realOnly, const MPIUtil*
 {
 	if(squared) assert(cellWeights); //only unique cells supported in square dmode (e-ph elements)
 	kfoldProd = kfold[0]*kfold[1]*kfold[2];
-	nCellsTot = cellWeights ? kfoldProd : cellMap.size(); //cell weights applied here to save disk / memory
+	nCellsTot = cellWeights ? kfoldProd : cellMap.size(); //cell weights optionally applied here to save disk / memory
 	nkTot = kfoldProd;
 	if(squared)
 	{	nCellsTot *= nCellsTot;
