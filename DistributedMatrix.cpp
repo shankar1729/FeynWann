@@ -240,39 +240,47 @@ void DistributedMatrix::transform(vector3<> k01, vector3<> k02)
 	int atomStride = 3*nBands*nBands; //number of elements per atom
 	int iAtomStart = iElemStart / atomStride;
 	int iAtomStop = ceildiv(iElemStart+nElems, atomStride);
-	int iCellPair = 0;
-	for(int iCell1=0; iCell1<kfoldProd; iCell1++)
-		for(int iCell2=0; iCell2<kfoldProd; iCell2++)
-		{	for(int iAtom=iAtomStart; iAtom<iAtomStop; iAtom++)
-			{	//Collect weights * phase for all equivalent cells:
-				matrix w = zeroes(nBands, nBands);
-				for(const Cell& c1: uniqueCells[iCell1])
-					for(const Cell& c2: uniqueCells[iCell2])
-					{	const double* w1i = c1.weight.data() + iAtom*nBands;
-						const double* w2i = c2.weight.data() + iAtom*nBands;
-						complex phase = c1.phase01 * c2.phase02;
-						complex* wData = w.data();
-						for(int b2=0; b2<nBands; b2++)
-							for(int b1=0; b1<nBands; b1++)
-								*(wData++) += phase * w1i[b1] * w2i[b2];
-					}
-				//Apply weights:
-				for(int iVector=0; iVector<3; iVector++)
-				{	//Determine index range of w that contributes
-					int iElemOffset = (3*iAtom+iVector)*w.nData() - iElemStart;
-					int iwStart = std::max(-iElemOffset, 0);
-					int iwStop = std::min(nElems-iElemOffset, int(w.nData()));
-					if(iwStop <= iwStart) continue; //nothing on current process
-					//Apply weights:
-					callPref(eblas_zmul)(iwStop-iwStart,
-						w.dataPref()+iwStart, 1,
-						buf.dataPref()+(iElemOffset+iwStart)*nkTot+iCellPair, nkTot);
+	int nBandsSq = nBands*nBands;
+	complex* bufData = buf.data();
+	for(int iAtom=iAtomStart; iAtom<iAtomStop; iAtom++)
+		for(int iVector=0; iVector<3; iVector++)
+		{	int iElemOffset = (3*iAtom+iVector)*nBandsSq - iElemStart;
+			int iwStart = std::max(-iElemOffset, 0);
+			int iwStop = std::min(nElems-iElemOffset, nBandsSq);
+			if(iwStop <= iwStart) continue; //nothing on current process
+			//Loop over band pairs:
+			int iw = iwStart;
+			int b2 = iw/nBands;
+			int b1 = iw - b2*nBands;
+			std::vector<complex> w1(kfoldProd), w2(kfoldProd); //precalculated weights
+			#define CALC_w(j) \
+				for(int iCell=0; iCell<kfoldProd; iCell++) \
+				{	w##j[iCell] = 0.; \
+					for(const Cell& c: uniqueCells[iCell]) \
+						w##j[iCell] += c.phase0##j * c.weight[iAtom*nBands + b##j]; \
 				}
+			CALC_w(1)
+			CALC_w(2)
+			while(iw<iwStop)
+			{
+				//Apply weights:
+				for(int iCell1=0; iCell1<kfoldProd; iCell1++)
+					for(int iCell2=0; iCell2<kfoldProd; iCell2++)
+						*(bufData++) *= (w1[iCell1] * w2[iCell2]);
+				
+				iw++; if(iw==iwStop) break;
+				b1++;
+				if(b1==nBands)
+				{	b1=0;
+					b2++;
+					CALC_w(2) //update w2
+				}
+				CALC_w(1) //update w1
 			}
-			iCellPair++;
+			#undef CALC_w
 		}
 	//Apply Fourier transform followed by MPI transpose:
-	complex* bufData = buf.data();
+	bufData = buf.data();
 	for(int iElem=0; iElem<nElems; iElem++)
 	{	fftw_execute_dft(planSet->fft1, (fftw_complex*)bufData, (fftw_complex*)bufData);
 		bufData += nkTot;
