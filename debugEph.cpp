@@ -63,31 +63,34 @@ struct DebugEph
 		int nBands = E1.nRows();
 		int nModes= omegaPh.nRows();
 		
-		/*
+		
 		//---- Phonon frequency debug ----
 		logPrintf("OMEGAPH(%lf,%lf,%lf):", mEph.ph->q[0], mEph.ph->q[1], mEph.ph->q[2]);
 		for(const double omega: omegaPh)
 			logPrintf(" %11.8lf", omega);
 		logPrintf("\n");
 		logFlush();
-		*/
+		/*
 		
 		//---- e-ph matrix element debug ----
 		logPrintf("|g|(%lf,%lf,%lf):", mEph.ph->q[0], mEph.ph->q[1], mEph.ph->q[2]);
 		
 		for(int iMode=modeStart; iMode<modeStop; iMode++){
 			double gNormCur = 0.0;
+			gNormCur += (mEph.M[iMode](bandStart,bandStart)).norm();
+			/*
 			for(int b1=bandStart; b1<bandStop; b1++)
 			{	for(int b2=bandStart; b2<bandStop; b2++)
 				{	//if ( (fabs(E1[b1] - E1[bandStart]) < 1e-5) and (fabs(E2[b2] - E2[bandStart]) < 1e-5) )
-					gNormCur += (sqrt(2.*Mtot*omegaPh[iMode])*mEph.M[iMode](b1,b2)).norm();	
+					//gNormCur += (sqrt(2.*Mtot*omegaPh[iMode])*mEph.M[iMode](b1,b2)).norm();	
+					gNormCur += (mEph.M[iMode](b1,b2)).norm();	
 				}
 			}
 			logPrintf(" %11.8lf", sqrt(gNormCur)); 
 		}
 		logPrintf("\n");
 		logFlush();
-		
+		*/
 		/*
 		//---- Spin commutator debug ---
 		matrix S1z = degenerateProject(mEph.e1->S[2], E1);

@@ -422,8 +422,13 @@ FeynWann::FeynWann(FeynWannParams& fwp)
 			Zeff = readArrayVec3(fwp.totalEprefix + ".Zeff");
 			//Read optical dielectric tensor:
 			std::vector<vector3<>> eps = readArrayVec3(fwp.totalEprefix + ".epsInf");
-			epsInf.set_rows(eps[0], eps[1], eps[2]);
-			lrs = std::make_shared<LongRangeSum>(R, epsInf);
+			if (isTruncated[0] || isTruncated[0], isTruncated[2] ) //TODO change the check
+			{	epsInf2D = eps;
+				lrs2D = std::make_shared<LongRangeSum2D>(R, epsInf2D);
+			}else
+			{	epsInf.set_rows(eps[0], eps[1], eps[2]);
+				lrs = std::make_shared<LongRangeSum>(R, epsInf);
+			}			
 			//Read cell weights:
 			fname = fwp.totalEprefix + ".phononCellWeights";
 			logPrintf("Reading '%s' ... ", fname.c_str()); logFlush();
@@ -665,6 +670,7 @@ void FeynWann::ePhLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::ePh
 						MatrixEph m;
 						matrix Mall = getMatrix(HePhW->getResult(ikPair), nBands*nBands, nModes);
 						//Add long range polar corrections if required:
+						/*
 						if(polar)
 						{	vector3<> q = k1 - k2;
 							for(int iMode=0; iMode<nModes; iMode++) //in Cartesian atom displacement basis
@@ -674,7 +680,7 @@ void FeynWann::ePhLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::ePh
 								for(int b=0;  b<nBands; b++)
 									Mall.data()[Mall.index(b*(nBands+1), iMode)] += gLij; //diagonal only
 							}
-						}
+						}*/
 						//Identify associated electronic states:
 						int ik1net = calculateIndex(ik1sup + elemwiseProd(kfoldSup, ik1v), kfold);
 						int ik2net = calculateIndex(ik2sup + elemwiseProd(kfoldSup, ik2v), kfold);
@@ -849,7 +855,19 @@ void FeynWann::setState(FeynWann::StatePh& state)
 		for(int iDir=0; iDir<3; iDir++)
 			qBZ[iDir] -= floor(qBZ[iDir] + 0.5);
 		vector3<> qCart = GT * qBZ;
-		double prefac = (4.*M_PI) / (prodSup * Omega * epsInf.metric_length_squared(qCart));
+		double prefac;
+		double omegaEff = Omega;
+		for(int iDir=0; iDir<3; iDir++)
+		{	if (isTruncated[iDir])
+				omegaEff /= fabs(R(iDir, iDir));
+		}
+		if (isTruncated[0] || isTruncated[1] || isTruncated[2])
+		{	//prefac = (2.*M_PI) / (prodSup * omegaEff * (qCart.length()*epsInf(2,2) 
+			//		+ epsInf.metric_length_squared(qCart)));
+			prefac = (2.*M_PI) / (prodSup * omegaEff * (*lrs2D)(qCart,epsInf2D));
+		}else
+		{	prefac = (4.*M_PI) / (prodSup * Omega * epsInf.metric_length_squared(qCart));}
+		//prefac = (4.*M_PI) / (prodSup * Omega * epsInf.metric_length_squared(qCart));
 		//Construct q.Z for each mode:
 		diagMatrix qdotZbySqrtM(nModes);
 		for(int iMode=0; iMode<nModes; iMode++)

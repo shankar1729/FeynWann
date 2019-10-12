@@ -39,6 +39,9 @@ struct CollectEph
 	std::vector<vector3<>> kmesh; //DFT k-point mesh (full version i.e. unreduced)
 	double wOffsetCur; //weight factor of current offset (due to symmetry reduction)
 	std::vector<vector3<int>> uniqueCells; //for wannierization of results
+	bool valley; //HACK
+	matrix3<> GGT; //HACK
+	vector3<> K, Kp; //HACK
 	
 	CollectEph(const FeynWann& fw, double T, double EconserveWidth, const vector3<int>& NkMult)
 	: fw(fw), T(T),
@@ -48,9 +51,24 @@ struct CollectEph
 		nP(fw.isRelativistic() ? 3 : 2),
 		f1grid(FeynWannParams::fGrid_ePh),
 		ImSigma(nP*f1grid.size(), std::vector<diagMatrix>(prod(fw.kfold), diagMatrix(fw.nBands))),
-		E(prod(fw.kfold)), kmesh(prod(fw.kfold))
+		E(prod(fw.kfold)), kmesh(prod(fw.kfold)),
+		K(1./3, 1./3, 0), //HACK
+		Kp(-1./3, -1./3, 0) //HACK
 	{
+		matrix3<> G = 2*M_PI * inv(fw.R); //HACK
+		GGT = G * (~G);
 	}
+	//HACK
+	static inline vector3<> wrap(const vector3<>& x)
+	{	vector3<> result = x;
+		for(int dir=0; dir<3; dir++)
+			result[dir] -= floor(0.5 + result[dir]);
+		return result;
+	}
+	inline bool isKvalley(vector3<> k) const
+	{	return GGT.metric_length_squared(wrap(K-k))
+			< GGT.metric_length_squared(wrap(Kp-k));
+	} 
 	
 	//---- Collect energies and kmesh ----
 	static void collectE(const FeynWann::StateE& state, void* params)
@@ -67,18 +85,19 @@ struct CollectEph
 		const int nBands = e1.E.nRows();
 		const int nModes = ph.omega.nRows();
 		const vector3<> S0; //null spin in non-relativistic modes
+		//HACK
+		bool isK1 = isKvalley(e1.k);
+		bool isK2 = isKvalley(e2.k);
+		double wValley = (isK1 xor isK2) ? 1. : 0.;
 		//Loop over electronic state 1:
 		for(int b1=0; b1<nBands; b1++)
 		{	const double& E1 = e1.E[b1];
 			const vector3<>& v1 = e1.vVec[b1];
-			const vector3<>& S1 = (nP>2 ? e1.Svec[b1] : S0);
 			//Loop over electronic state 2:
 			for(int b2=0; b2<nBands; b2++)
 			{	const double& E2 = e2.E[b2];
 				const vector3<>& v2 = e2.vVec[b2];
-				const vector3<>& S2 = (nP>2 ? e2.Svec[b2] : S0);
 				double cosThetaScatter = dot(v1, v2) / sqrt(std::max(1e-16, v1.length_squared() * v2.length_squared()));
-				double cosThetaScatterS = dot(S1, S2) / sqrt(std::max(1e-16, S1.length_squared() * S2.length_squared()));
 				//Loop over phonon modes:
 				for(int alpha=0; alpha<nModes; alpha++)
 				{	const double& omegaPh = ph.omega[alpha];
@@ -95,11 +114,11 @@ struct CollectEph
 							* nPh*(nPh+1); //contribution numerator before f1-dependent denominator
 						for(unsigned if1=0; if1<f1grid.size(); if1++)
 						{	unsigned if1p = if1 + f1grid.size(); //index for scattering version
-							unsigned if1s = if1 + 2*f1grid.size(); //index for spin version (if present)
+							unsigned if1v = if1p + f1grid.size(); //index for valley version (if present) //HACK
 							double contrib = contribNum / (nPh+0.5 + ae*(0.5-f1grid[if1])); //net f1-dependent contribution
 							ImSigma[if1][e1.ik][b1] += contrib;
 							ImSigma[if1p][e1.ik][b1] += contrib * (1.-cosThetaScatter); //scattering version with angle factors
-							if(nP>2) ImSigma[if1s][e1.ik][b1] += contrib * (1.-cosThetaScatterS); //spin-relaxation version
+							if(nP>2) ImSigma[if1v][e1.ik][b1] += contrib * wValley; //scattering valley contribution //HACK
 						}
 						
 					}
@@ -190,6 +209,12 @@ int main(int argc, char** argv)
 	const double EconserveWidth = inputMap.get("EconserveWidth") * eV;
 	const int iSpin = inputMap.get("iSpin", 0); //spin channel (default 0)
 	const int NkMultAll = int(round(inputMap.get("NkMult"))); //increase in number of k-points for phonon mesh
+	const string valleyMode = inputMap.getString("valley"); //must be yes or no
+	if(valleyMode!="yes" and valleyMode!="no") //HACK
+		die("\nvalleyMode must be 'yes' or 'no'\n");
+	const bool valley = (valleyMode=="no");
+	
+	
 	vector3<int> NkMult;
 	NkMult[0] = inputMap.get("NkxMult", NkMultAll); //override increase in x direction
 	NkMult[1] = inputMap.get("NkyMult", NkMultAll); //override increase in y direction
@@ -200,6 +225,7 @@ int main(int argc, char** argv)
 	logPrintf("EconserveWidth = %lg\n", EconserveWidth);
 	logPrintf("iSpin = %d\n", iSpin);
 	logPrintf("NkMult = "); NkMult.print(globalLog, " %d ");
+	logPrintf("valley = %s\n", valleyMode.c_str()); //HACK
 	
 	//Initialize FeynWann:
 	FeynWannParams fwp;
@@ -249,6 +275,7 @@ int main(int argc, char** argv)
 	
 	//Collect energies and k-point  mesh:
 	CollectEph cEph(fw, T, EconserveWidth, NkMult);
+	cEph.valley = valley; //HACK
 	fw.eLoop(vector3<>(), CollectEph::collectE, &cEph);
 	//--- make available on all processes:
 	for(unsigned i=0; i<cEph.E.size(); i++)
@@ -444,7 +471,7 @@ int main(int argc, char** argv)
 	cEph.phase *= (1./cEph.kmesh.size()); //inverse transform normalizing factor
 	cEph.dumpWannierized(cEph.mlwfImSigma[0], fwp.wannierPrefix + ".mlwfImSigma_ePh" + fw.spinSuffix);
 	cEph.dumpWannierized(cEph.mlwfImSigma[1], fwp.wannierPrefix + ".mlwfImSigmaP_ePh" + fw.spinSuffix);
-	if(cEph.nP>2) cEph.dumpWannierized(cEph.mlwfImSigma[2], fwp.wannierPrefix + ".mlwfImSigmaS_ePh" + fw.spinSuffix);
+	if(cEph.nP>2) cEph.dumpWannierized(cEph.mlwfImSigma[2], fwp.wannierPrefix + ".mlwfImSigmaV_ePh" + fw.spinSuffix); //HACK
 	
 	fw.free();
 	FeynWann::finalize();
