@@ -108,7 +108,7 @@ public:
 	//! as well as phonon properties and electron-phonon matrix elements connecting these k-points.
 	//! Calls provided callback function ePhProcess on each of them, along with provided params
 	void ePhLoop(const vector3<>& k01, const vector3<>& k02, ePhProcessFunc ePhProcess, void* params);
-	size_t ePhCountPerOffset() const { return Hw->nkTot * Hw->nkTot; } //!< number of k-pairs sampled per offset
+	size_t ePhCountPerOffset() const { return size_t(Hw->nkTot) * size_t(Hw->nkTot); } //!< number of k-pairs sampled per offset
 	
 	void symmetrize(matrix3<>& m) const; //!< symmetrize a tensor in Cartesian coordinates (available if needSymmetries = true)
 	
