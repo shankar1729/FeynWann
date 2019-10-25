@@ -33,11 +33,13 @@ struct SpinRelaxCollect
 	const double EconserveExpFac; //exponential factor in Gaussian delta for energy conservation
 	const double prefacGamma, prefacChi; //prefactors for numerator and denominator of T1
 	const double Estart, Estop; //energy range close enough to band edges or mu's to be relevant
-	const matrix3<> G; //HACK
-	std::vector<matrix3<>> Gamma, chi, GammaV; //numerator and denominator in T1^-1, for each T and dmu //HACK
-	//HACK
+	std::vector<matrix3<>> Gamma, chi; //numerator and denominator in T1^-1, for each T and dmu 
+	
+	//HACK for valley contrib
+	const matrix3<> G; 
 	matrix3<> GGT;
 	vector3<> K, Kp;
+	
 	SpinRelaxCollect(const std::vector<double>& dmu, const std::vector<double>& T, double omegaPhByTmin, int nModes,
 		double EconserveWidth, size_t nKpairs, double Estart, double Estop, matrix3<> G)
 	: dmu(dmu), T(T), omegaPhByTmin(std::max(1e-3,omegaPhByTmin)), nModes(nModes),
@@ -46,10 +48,10 @@ struct SpinRelaxCollect
 		prefacChi(0.5/nKpairs), //collected over both k in each k-pair for consistency
 		Estart(Estart), Estop(Estop), G(G),
 		Gamma(T.size()*dmu.size()), chi(T.size()*dmu.size()),
-		K(1./3, 1./3, 0), //HACK
-		Kp(-1./3, -1./3, 0)
+		K(1./3, 1./3, 0), //HACK for valley contrib
+		Kp(-1./3, -1./3, 0) //HACK for valley contrib
 	{
-		GGT = G * (~G);
+		GGT = G * (~G); //HACK for valley contrib
 	}
 	
 	inline SparseMatrix degenerateProject(const matrix& M, const diagMatrix& E, int bStart, int bStop)
@@ -70,7 +72,7 @@ struct SpinRelaxCollect
 		}
 		return result;
 	}
-	//HACK
+	//HACK block valley contrib
 	static inline vector3<> wrap(const vector3<>& x)
 	{	vector3<> result = x;
 		for(int dir=0; dir<3; dir++)
@@ -122,13 +124,14 @@ struct SpinRelaxCollect
 		CONTRIB_chi(1)
 		CONTRIB_chi(2)
 		#undef CONTRIB_chi
-		//HACK
+		
+		//HACK block for valley contrib
 		bool isK1 = isKvalley(e1.k);
 		bool isK2 = isKvalley(e2.k);
 		double wValley = (isK1 xor isK2) ? 1. : 0.;
+		
 		//Compute Gamma contributions by band pair and T, except for electron occupation factors:
 		std::vector<std::vector<matrix3<>>> contribGamma(T.size(), std::vector<matrix3<>>(nBandsSelSq));
-		//std::vector<std::vector<matrix3<>>> contribGammaV(T.size(), std::vector<matrix3<>>(nBandsSelSq)); //HACK
 		for(int alpha=0; alpha<nModes; alpha++)
 		{	//Phonon occupation (nPh/T and prefactors) for each T:
 			const double& omegaPh = ph.omega[alpha];
@@ -165,8 +168,7 @@ struct SpinRelaxCollect
 			{	vector3<complex> SGcommCur = loadVector(SGcommData, bIndex);
 				matrix3<> SGcommOuter = realOuter(SGcommCur, SGcommCur);
 				for(size_t iT=0; iT<T.size(); iT++)
-				{	contribGamma[iT][bIndex] += (prefac_nPhByT[iT] * Econserve[bIndex]) * SGcommOuter* wValley;
-					//contribGammaV[iT][bIndex] += (prefac_nPhByT[iT] * Econserve[bIndex]) * SGcommOuter * wValley; //HACK
+				{	contribGamma[iT][bIndex] += (prefac_nPhByT[iT] * Econserve[bIndex]) * SGcommOuter; //* wValley; add for wValley contrib //HACK
 				}
 			}
 		}
@@ -192,7 +194,6 @@ struct SpinRelaxCollect
 				for(int b2=bStart; b2<bStop; b2++)
 				for(int b1=bStart; b1<bStop; b1++)
 				{	Gamma[iMuT] += contribGamma[iT][bIndex] * (F2[b2] * Fbar1[b1]);
-					//GammaV[iMuT] += contribGammaV[iT][bIndex] * (F2[b2] * Fbar1[b1]); //HACK
 					bIndex++;
 				}
 			}
@@ -320,7 +321,7 @@ int main(int argc, char** argv)
 	double Emargin = erc.omegaPhMax + 6.*EconserveWidth + 20.*T.back();
 	double Estart = erc.EvMax - Emargin;
 	double Estop = erc.EcMin + Emargin;
-	matrix3<> G = 2*M_PI * inv(fw.R); //HACK
+	matrix3<> G = 2*M_PI * inv(fw.R); //HACK for valley contrib
 	//Collect integrals involved in T1 calculation:
 	std::vector<std::shared_ptr<SpinRelaxCollect>> srcArr(nBlocks);
 	for(int block=0; block<nBlocks; block++)
@@ -338,7 +339,6 @@ int main(int argc, char** argv)
 		}
 		//Accumulate over MPI:
 		mpiWorld->allReduceData(src.Gamma, MPIUtil::ReduceSum);
-		//mpiWorld->allReduceData(src.GammaV, MPIUtil::ReduceSum); //HACK
 		mpiWorld->allReduceData(src.chi, MPIUtil::ReduceSum);
 		logPrintf("done.\n"); logFlush();
 	}
@@ -349,28 +349,21 @@ int main(int argc, char** argv)
 	for(size_t iMu=0; iMu<dmuCount; iMu++)
 	{	size_t iMuT = iT*dmuCount + iMu; //combined index
 		logPrintf("\nResults for T = %lg K and dmu = %lg eV:\n", T[iT]/Kelvin, dmu[iMu]/eV);
-		std::vector<matrix3<>> Gamma(nBlocks), chi(nBlocks), T1bar(nBlocks);//, T1barV(nBlocks), GammaV(nBlocks);
-		std::vector<double> T1(nBlocks);//, T1V(nBlocks); //HACK
+		std::vector<matrix3<>> Gamma(nBlocks), chi(nBlocks), T1bar(nBlocks);
+		std::vector<double> T1(nBlocks);
 		for(int block=0; block<nBlocks; block++)
 		{	SpinRelaxCollect& src = *(srcArr[block]);
 			fw.symmetrize(src.Gamma[iMuT]);
-			//fw.symmetrize(src.GammaV[iMuT]); //HACK
 			fw.symmetrize(src.chi[iMuT]);
 			Gamma[block] = src.Gamma[iMuT];
-			//GammaV[block] = src.GammaV[iMuT]; //HACK
 			chi[block] = src.chi[iMuT];
 			T1bar[block] = chi[block] * inv(Gamma[block]);
-			//T1barV[block] = chi[block] * inv(GammaV[block]); //HACK
 			T1[block] = (1./3)*trace(T1bar[block]);
-			//T1V[block] = (1./3)*trace(T1barV[block]);  //HACK
 		}
 		reportResult(Gamma, "Gamma", 1./(eV*ps), "1/(eV.ps)");
-		//reportResult(GammaV, "GammaV", 1./(eV*ps), "1/(eV.ps)"); //HACK
 		reportResult(chi, "chi", 1./eV, "1/eV");
-		reportResult(T1bar, "T1V", ps, "ps"); //tensor version
-		//reportResult(T1barV, "T1V", ps, "ps"); //tensor version //HACK
-		reportResult(T1, "T1V", ps, "ps"); //tensor version
-		//reportResult(T1V, "T1V", ps, "ps"); //tensor version //HACK
+		reportResult(T1bar, "T1", ps, "ps"); //tensor version
+		reportResult(T1, "T1", ps, "ps"); //tensor version
 	}
 	
 	fw.free();
