@@ -147,6 +147,8 @@ public:
 	std::vector<vector3<>> Zeff; //Born effective charge for polar materials
 	matrix3<> epsInf; // epsilon at infinity for polar material
  	std::vector<vector3<>> epsInf2D; // epsilon at infinity for polar material (2D case has extra row to 3x3 epsilon inf)
+ 	int truncDir; // save truncation dir for calling lrs2D
+ 	double omegaEff; //2D area for lrs2D 
 	std::shared_ptr<class LongRangeSum> lrs; //long range sum corrector for e-ph matrix elements
 	std::shared_ptr<class LongRangeSum2D> lrs2D; //long range sum corrector for e-ph matrix elements (2D)
 	matrix phononCellWeights; //corresponding weights (nAtoms*nAtoms x nCells), available if polar
