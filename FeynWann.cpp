@@ -563,6 +563,22 @@ void FeynWann::eLoop(const vector3<>& k0, FeynWann::eProcessFunc eProcess, void*
 		watchCallback.stop();
 	)
 }
+void FeynWann::eCalc(const vector3<>& k, FeynWann::StateE& e)
+{	//Compute Fourier versions for this k-point:
+	Hw->compute(k);
+	if(fwp.needVelocity)
+		Pw->compute(k);
+	if(fwp.needSpin)
+		Sw->compute(k);
+	if(fwp.needLinewidth_ee) ImSigma_eeW->compute(k);
+	if(fwp.needLinewidth_ePh) ImSigma_ePhW->compute(k);
+	if(fwp.needLinewidthP_ePh) ImSigmaP_ePhW->compute(k);
+	//Prepare state on group head:
+	e.ik = 0;
+	e.k = k;
+	if(mpiGroup->isHead()) setState(e);
+}
+
 
 void FeynWann::phLoop(const vector3<>& q0, FeynWann::phProcessFunc phProcess, void* params)
 {	static StopWatch watchCallback("FeynWann::phLoop:callback");
@@ -582,6 +598,17 @@ void FeynWann::phLoop(const vector3<>& q0, FeynWann::phProcessFunc phProcess, vo
 		watchCallback.stop();
 	)
 }
+void FeynWann::phCalc(const vector3<>& q, FeynWann::StatePh& ph)
+{	assert(fwp.needPhonons);
+	//Compute Fourier transforms with this offset:
+	OsqW->compute(q);
+	//Prepare state on group head:
+	ph.iqFine = 0;
+	ph.iq = 0;
+	ph.q = q;
+	if(mpiGroup->isHead()) setState(ph);
+}
+
 
 void FeynWann::ePhLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::ePhProcessFunc ePhProcess, void* params)
 {	static StopWatch watchBcast("FeynWann::ePhLoop:bcast"); 
@@ -595,20 +622,7 @@ void FeynWann::ePhLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::ePh
 	//Initialize electronic states for 1 and 2:
 	#define PrepareElecStates(i) \
 		std::vector<StateE> e##i(prodKfold); /* States */ \
-		{	\
-			/* HACK */ \
-			Hw->compute(k0##i); \
-			matrix tmp1; \
-			if(mpiGroup->isHead()) tmp1 = getMatrix(Hw->getResult(0), nBands, nBands); \
-			\
-			Hw->transform(k0##i); \
-			\
-			/* HACK */ \
-			if(mpiGroup->isHead()) \
-			{	matrix tmp2 = getMatrix(Hw->getResult(0), nBands, nBands); \
-				logPrintf("Herr: %le\n", nrm2(tmp2-tmp1)/nrm2(tmp2)); logFlush(); \
-			} \
-			\
+		{	Hw->transform(k0##i); \
 			if(fwp.needVelocity) \
 				Pw->transform(k0##i); \
 			if(fwp.needSpin) \
@@ -647,18 +661,7 @@ void FeynWann::ePhLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::ePh
 	{	if(fwp.ePhHeadOnly and iqSup.length_squared()) continue; //k-path debug mode
 		//Prepare phonon states:
 		vector3<> q0 = k01 - k02 + elemwiseProd(iqSup, kfoldInv);
-		//HACK start
-		OsqW->compute(q0);
-		matrix tmp1;
-		if(mpiGroup->isHead()) tmp1 = getMatrix(OsqW->getResult(0), nModes, nModes);
-		//HACK end
 		OsqW->transform(q0);
-		//HACK start
-		if(mpiGroup->isHead())
-		{	matrix tmp2 = getMatrix(OsqW->getResult(0), nModes, nModes);
-			logPrintf("OsqErr: %le\n", nrm2(tmp2-tmp1)/nrm2(tmp2)); logFlush();
-		}
-		//HACK end
 		std::vector<StatePh> ph(prodSup);
 		{	int iq = OsqW->ikStart;
 			int iqStop = iq + OsqW->nk;
@@ -785,7 +788,7 @@ void FeynWann::symmetrize(matrix3<>& m) const
 void FeynWann::setState(FeynWann::StateE& state)
 {	static StopWatch watchRotations("FeynWann::setState:rotations");
 	//Get and diagonalize Hamiltonian:
-	matrix Hk = getMatrix(Hw->getResult(state.ik), nBands, nBands);
+	matrix Hk = getMatrix(Hw->getResult(state.ik), nBands, nBands) + 1e-4*getMatrix(Sw->getResult(state.ik), nBands, nBands, 0);
 	Hk.diagonalize(state.U, state.E);
 	for(double& E: state.E) E -= mu; //reference to Fermi level
 	watchRotations.start();

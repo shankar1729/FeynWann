@@ -52,6 +52,10 @@ struct DebugEph
 	int modeStart, modeStop; //optional mode range read in from input
 	double Mtot;
 	
+	//Previously computed quantities using single-k version to test against transformed ones:
+	FeynWann::StateE e1, e2;
+	FeynWann::StatePh ph;
+	
 	DebugEph(int bandStart, int bandStop, int modeStart, int modeStop)
 	: bandStart(bandStart), bandStop(bandStop), modeStart(modeStart), modeStop(modeStop)
 	{
@@ -62,6 +66,12 @@ struct DebugEph
 		const diagMatrix& omegaPh = mEph.ph->omega;
 		int nBands = E1.nRows();
 		int nModes= omegaPh.nRows();
+		
+		//---- Single k compute debug ----
+		logPrintf("err(E1):  %le\n", nrm2(e1.E-E1)/nrm2(E1));
+		logPrintf("err(E2):  %le\n", nrm2(e2.E-E2)/nrm2(E2));
+		logPrintf("err(ph):  %le\n", nrm2(ph.omega-omegaPh)/nrm2(omegaPh));
+		logFlush();
 		
 		/*
 		//---- Phonon frequency debug ----
@@ -156,7 +166,7 @@ int main(int argc, char** argv)
 	FeynWannParams fwp;
 	fwp.needPhonons = true;
 	fwp.ePhHeadOnly = true; //so as to debug k-path alone
-	//fwp.needSpin = true;
+	fwp.needSpin = true;
 	FeynWann fw(fwp);
 	if(!bandStop) bandStop = fw.nBands;
 	if(!modeStop) modeStop = fw.nModes;
@@ -177,7 +187,14 @@ int main(int argc, char** argv)
 	DebugEph src(bandStart, bandStop, modeStart, modeStop);
 	src.Mtot = Mtot;
 	for(vector3<> k2: k2arr)
+	{	
+		//Compute single k quantities to test against transform below:
+		fw.eCalc(k1, src.e1);
+		fw.eCalc(k2, src.e2);
+		fw.phCalc(k1-k2, src.ph);
+		
 		fw.ePhLoop(k1, k2, DebugEph::ePhProcess, &src);
+	}
 	
 	fw.free();
 	FeynWann::finalize();

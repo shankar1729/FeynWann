@@ -97,17 +97,20 @@ public:
 	//! Calculate electronic properties for each k-point in a mesh offset by k0
 	//! Calls provided callback function eProcess on each of them, along with provided params
 	void eLoop(const vector3<>& k0, eProcessFunc eProcess, void* params);
+	void eCalc(const vector3<>& k, StateE& e); //!< Calculate electronic properties for a single k and store results in e on group head
 	size_t eCountPerOffset() const { return Hw->nkTot; } //!< number of k's sampled per offset
 	
 	//! Calculate phonon properties for each q-point in a mesh offset by q0
 	//! Calls provided callback function phProcess on each of them, along with provided params
 	void phLoop(const vector3<>& q0, phProcessFunc phProcess, void* params);
+	void phCalc(const vector3<>& q, StatePh& ph); //!< Calculate phonon properties for a single q and store results in ph on group head
 	size_t phCountPerOffset() const { return OsqW->nkTot; } //!< number of q's sampled per offset
 	
 	//! Calculate electronic properties for each pair of k-points between two meshes offset by k01 and k02,
 	//! as well as phonon properties and electron-phonon matrix elements connecting these k-points.
 	//! Calls provided callback function ePhProcess on each of them, along with provided params
 	void ePhLoop(const vector3<>& k01, const vector3<>& k02, ePhProcessFunc ePhProcess, void* params);
+	void ePhCalc(const StateE& e1, const StateE& e2, const StatePh& ph, MatrixEph& m); //!< Calculate e-ph matrix elements coupling e1, e2 and ph and store it in m on group head
 	size_t ePhCountPerOffset() const { return size_t(Hw->nkTot) * size_t(Hw->nkTot); } //!< number of k-pairs sampled per offset
 	
 	void symmetrize(matrix3<>& m) const; //!< symmetrize a tensor in Cartesian coordinates (available if needSymmetries = true)
