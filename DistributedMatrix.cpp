@@ -359,6 +359,72 @@ void DistributedMatrix::compute(vector3<> k)
 			&zero, buf.data(), 1);
 	}
 	//Collect data on head:
+	collectHead();
+	watch.stop();
+}
+
+void DistributedMatrix::compute(vector3<> k1, vector3<> k2)
+{	static StopWatch watch("DistributedMatrix::compute2"); watch.start();
+	assert(squared);
+	//Initialize phases:
+	for(std::vector<Cell>& cells: uniqueCells)
+		for(Cell& cell: cells)
+		{	cell.phase01 = cis(-2*M_PI*dot(cell.iR, k1));
+			cell.phase02 = cis(+2*M_PI*dot(cell.iR, k2));
+		}
+	//Discrete Fourier transform over k1 and k2:
+	const complex* matData = mat.data();
+	complex* bufData = buf.data();
+	int atomStride = 3*nBands*nBands; //number of elements per atom
+	int iAtomStart = iElemStart / atomStride;
+	int iAtomStop = ceildiv(iElemStart+nElems, atomStride);
+	int nBandsSq = nBands*nBands;
+	for(int iAtom=iAtomStart; iAtom<iAtomStop; iAtom++)
+		for(int iVector=0; iVector<3; iVector++)
+		{	int iElemOffset = (3*iAtom+iVector)*nBandsSq - iElemStart;
+			int iwStart = std::max(-iElemOffset, 0);
+			int iwStop = std::min(nElems-iElemOffset, nBandsSq);
+			if(iwStop <= iwStart) continue; //nothing on current process
+			//Loop over band pairs:
+			int iw = iwStart;
+			int b2 = iw/nBands;
+			int b1 = iw - b2*nBands;
+			std::vector<complex> w1(kfoldProd), w2(kfoldProd); //precalculated weights
+			#define CALC_w(j) \
+				for(int iCell=0; iCell<kfoldProd; iCell++) \
+				{	w##j[iCell] = 0.; \
+					for(const Cell& c: uniqueCells[iCell]) \
+						w##j[iCell] += c.phase0##j * c.weight[iAtom*nBands + b##j]; \
+				}
+			CALC_w(1)
+			CALC_w(2)
+			while(iw<iwStop)
+			{
+				//Apply weights:
+				complex out = 0;
+				for(int iCell1=0; iCell1<kfoldProd; iCell1++)
+					for(int iCell2=0; iCell2<kfoldProd; iCell2++)
+						out += (w1[iCell1] * w2[iCell2]) * (*(matData++));
+				*(bufData++) = out;
+				
+				iw++; if(iw==iwStop) break;
+				b1++;
+				if(b1==nBands)
+				{	b1=0;
+					b2++;
+					CALC_w(2) //update w2
+				}
+				CALC_w(1) //update w1
+			}
+			#undef CALC_w
+		}
+	//Collect data on head:
+	collectHead();
+	watch.stop();
+}
+
+void DistributedMatrix::collectHead()
+{
 	if(mpiUtil->nProcesses() > 1)
 	{	if(mpiUtil->isHead())
 		{	std::vector<MPIUtil::Request> requests; requests.reserve(mpiUtil->nProcesses()-1);
@@ -376,5 +442,4 @@ void DistributedMatrix::compute(vector3<> k)
 				mpiUtil->send(buf.data(), nElems, 0, mpiUtil->iProcess());
 		}
 	}
-	watch.stop();
 }

@@ -74,6 +74,7 @@ private:
 	};
 	std::vector<std::vector<Cell>> uniqueCells;
 	int nAtoms, nBands;
+	void collectHead(); //!< collect buf results on mpiUtil head for compute (single k-point versions of transform)
 };
 
 //Calculate flat index given 3D coordinates and sample counts

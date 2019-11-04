@@ -686,7 +686,18 @@ void FeynWann::ePhLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::ePh
 			vector3<> k01cur = q0 + k02cur; //momentum conservation
 			if(fwp.ePhHeadOnly and ik2sup.length_squared()) continue; //k-path debug mode
 			//Calculate electron-phonon matrix elements:
+			//HACK start
+			HePhW->compute(k01cur, k02cur);
+			matrix tmp1;
+			if(mpiGroup->isHead()) tmp1 = getMatrix(HePhW->getResult(0), nModes*nBands, nBands);
+			//HACK end
 			HePhW->transform(k01cur, k02cur);
+			//HACK start
+			if(mpiGroup->isHead())
+			{	matrix tmp2 = getMatrix(HePhW->getResult(0), nModes*nBands, nBands);
+				logPrintf("HePhErr: %le\n", nrm2(tmp2-tmp1)/nrm2(tmp2)); logFlush();
+			}
+			//HACK end
 			int ikPair = 0;
 			int ikPairStart = HePhW->ikStart;
 			int ikPairStop = ikPairStart + HePhW->nk;
