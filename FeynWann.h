@@ -134,6 +134,7 @@ public:
 	double nElectrons; //!< number of electrons per unit cell in DFT calculation
 	double eMinMain, eMaxMain; //!< energy range for main window (within which eigenvalues should be exact compared to DFT)
 	int nModes; //!< number of phonon modes (polarizations)
+	vector3<> Bext; //!< external magentic field (added as a Zeeman perturbation to hamiltonian in setState)
 	
 	//Electrons:
 	std::vector< vector3<int> > cellMap; //electron Wannier cell map

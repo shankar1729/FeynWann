@@ -788,7 +788,12 @@ void FeynWann::symmetrize(matrix3<>& m) const
 void FeynWann::setState(FeynWann::StateE& state)
 {	static StopWatch watchRotations("FeynWann::setState:rotations");
 	//Get and diagonalize Hamiltonian:
-	matrix Hk = getMatrix(Hw->getResult(state.ik), nBands, nBands) + 1e-4*getMatrix(Sw->getResult(state.ik), nBands, nBands, 0);
+	matrix Hk = getMatrix(Hw->getResult(state.ik), nBands, nBands);
+	if(fwp.needSpin and Bext.length_squared())
+	{	//Add Zeeman perturbation:
+		for(int iDir=0; iDir<3; iDir++)
+			if(Bext[iDir]) Hk += Bext[iDir]*getMatrix(Sw->getResult(state.ik), nBands, nBands, iDir);
+	}
 	Hk.diagonalize(state.U, state.E);
 	for(double& E: state.E) E -= mu; //reference to Fermi level
 	watchRotations.start();

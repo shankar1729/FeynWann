@@ -70,6 +70,8 @@ struct DebugEph
 		//---- Single k compute debug ----
 		logPrintf("err(E1):  %le\n", nrm2(e1.E-E1)/nrm2(E1));
 		logPrintf("err(E2):  %le\n", nrm2(e2.E-E2)/nrm2(E2));
+		logPrintf("err(S1):  %le\n", nrm2(diag(e1.S[0])-diag(mEph.e1->S[0]))/nrm2(diag(e1.S[0])));
+		logPrintf("err(S2):  %le\n", nrm2(diag(e2.S[0])-diag(mEph.e2->S[0]))/nrm2(diag(e2.S[0])));
 		logPrintf("err(ph):  %le\n", nrm2(ph.omega-omegaPh)/nrm2(omegaPh));
 		logFlush();
 		
@@ -168,6 +170,7 @@ int main(int argc, char** argv)
 	fwp.ePhHeadOnly = true; //so as to debug k-path alone
 	fwp.needSpin = true;
 	FeynWann fw(fwp);
+	fw.Bext = vector3<>(1.3,-2.2,0.6)*1e-3; //random B field to break symmetry (to fix unitary rotations for S testing)
 	if(!bandStop) bandStop = fw.nBands;
 	if(!modeStop) modeStop = fw.nModes;
 	
