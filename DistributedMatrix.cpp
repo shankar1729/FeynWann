@@ -82,6 +82,18 @@ DistributedMatrix::DistributedMatrix(string fname, bool realOnly, const MPIUtil*
 	ikStartProc[mpiUtil->nProcesses()] = nkTot;
 	assert(ikStartProc[mpiUtil->iProcess()+1] == ikStart+nk);
 	
+	//Make iElemStart for all processes available:
+	iElemStartProc.resize(mpiUtil->nProcesses()+1);
+	iElemStartProc[0] = 0;
+	iElemStartProc[mpiUtil->iProcess()+1] = iElemStart + nElems;
+	for(int jProc=0; jProc<mpiUtil->nProcesses(); jProc++)
+	{	if(!nElems && mpiUtil->iProcess()==jProc)
+			iElemStart = iElemStartProc[jProc+1] = iElemStartProc[jProc]; //because FFTW doesn't set the iElemStart if nk=0
+		mpiUtil->bcast(iElemStartProc[jProc+1], jProc);
+	}
+	iElemStartProc[mpiUtil->nProcesses()] = nElemsTot;
+	assert(iElemStartProc[mpiUtil->iProcess()+1] == iElemStart+nElems);
+	
 	//Allocate matrix and buffer:
 	mat.init(nElems*nCellsTot);
 	buf.init(nTot); //nTot = max(nElems*nkTot, nElemsTot*nk)
@@ -295,4 +307,74 @@ const complex* DistributedMatrix::getResult(int ik) const
 	assert(ikLocal >= 0);
 	assert(ikLocal < nk);
 	return buf.data() + ikLocal*nElemsTot;
+}
+
+
+void DistributedMatrix::compute(vector3<> k)
+{	static StopWatch watch("DistributedMatrix::compute1"); watch.start();
+	assert(!squared);
+	if(uniqueCells.size()) //Unique cell mode
+	{
+		//Initialize phases:
+		for(std::vector<Cell>& cells: uniqueCells)
+			for(Cell& cell: cells)
+				cell.phase01 = cis(2*M_PI*dot(cell.iR, k));
+		//Discrete Fourier transform for k:
+		const complex* matData = mat.data();
+		complex* bufData = buf.data();
+		int matStride = nBands*nBands; //number of elements per matrix
+		int iMatStart = iElemStart / matStride;
+		int iMatStop = ceildiv(iElemStart+nElems, matStride);
+		for(int iMat=iMatStart; iMat<iMatStop; iMat++)
+		{	//Determine index range of weight matrix that contributes
+			int iElemOffset = iMat*matStride - iElemStart;
+			int iwStart = std::max(-iElemOffset, 0);
+			int iwStop = std::min(nElems-iElemOffset, matStride);
+			for(int iw=iwStart; iw<iwStop; iw++)
+			{	int iElem = iElemOffset+iw; //element index within process
+				complex out = 0.;
+				for(int iCell=0; iCell<kfoldProd; iCell++)
+				{	//Collect weights * phase for all equivalent cells:
+					complex w = 0.;
+					for(const Cell& c: uniqueCells[iCell])
+						w += c.phase01 * c.weight[iw];
+					out += w * matData[iElem*nkTot+iCell];
+				}
+				bufData[iElem] = out;
+			}
+		}
+	}
+	else //Full cellMap mode:
+	{
+		//Initialize phases:
+		std::vector<complex> phase(cellMap.size());
+		auto phaseIter = phase.begin();
+		for(const vector3<int>& iR: cellMap)
+			*(phaseIter++) = cis(2*M_PI*dot(iR, k));
+		//Discrete Fourier transform for k (as a matrix-vector multiply):
+		const complex one = 1., zero = 0.;
+		cblas_zgemv(CblasColMajor, CblasTrans,
+			nCellsTot, nElems, &one, mat.data(), nCellsTot,
+			phase.data(), 1,
+			&zero, buf.data(), 1);
+	}
+	//Collect data on head:
+	if(mpiUtil->nProcesses() > 1)
+	{	if(mpiUtil->isHead())
+		{	std::vector<MPIUtil::Request> requests; requests.reserve(mpiUtil->nProcesses()-1);
+			for(int jProc=1; jProc<mpiUtil->nProcesses(); jProc++)
+			{	int nElems_j = iElemStartProc[jProc+1] - iElemStartProc[jProc];
+				if(nElems_j)
+				{	requests.push_back(MPIUtil::Request());
+					mpiUtil->recv(buf.data()+iElemStartProc[jProc], nElems_j, jProc, jProc, &(requests.back()));
+				}
+			}
+			if(requests.size()) mpiUtil->waitAll(requests);
+		}
+		else
+		{	if(nElems)
+				mpiUtil->send(buf.data(), nElems, 0, mpiUtil->iProcess());
+		}
+	}
+	watch.stop();
 }

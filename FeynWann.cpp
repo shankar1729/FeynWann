@@ -595,7 +595,20 @@ void FeynWann::ePhLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::ePh
 	//Initialize electronic states for 1 and 2:
 	#define PrepareElecStates(i) \
 		std::vector<StateE> e##i(prodKfold); /* States */ \
-		{	Hw->transform(k0##i); \
+		{	\
+			/* HACK */ \
+			Hw->compute(k0##i); \
+			matrix tmp1; \
+			if(mpiGroup->isHead()) tmp1 = getMatrix(Hw->getResult(0), nBands, nBands); \
+			\
+			Hw->transform(k0##i); \
+			\
+			/* HACK */ \
+			if(mpiGroup->isHead()) \
+			{	matrix tmp2 = getMatrix(Hw->getResult(0), nBands, nBands); \
+				logPrintf("Herr: %le\n", nrm2(tmp2-tmp1)/nrm2(tmp2)); logFlush(); \
+			} \
+			\
 			if(fwp.needVelocity) \
 				Pw->transform(k0##i); \
 			if(fwp.needSpin) \
@@ -634,7 +647,18 @@ void FeynWann::ePhLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::ePh
 	{	if(fwp.ePhHeadOnly and iqSup.length_squared()) continue; //k-path debug mode
 		//Prepare phonon states:
 		vector3<> q0 = k01 - k02 + elemwiseProd(iqSup, kfoldInv);
+		//HACK start
+		OsqW->compute(q0);
+		matrix tmp1;
+		if(mpiGroup->isHead()) tmp1 = getMatrix(OsqW->getResult(0), nModes, nModes);
+		//HACK end
 		OsqW->transform(q0);
+		//HACK start
+		if(mpiGroup->isHead())
+		{	matrix tmp2 = getMatrix(OsqW->getResult(0), nModes, nModes);
+			logPrintf("OsqErr: %le\n", nrm2(tmp2-tmp1)/nrm2(tmp2)); logFlush();
+		}
+		//HACK end
 		std::vector<StatePh> ph(prodSup);
 		{	int iq = OsqW->ikStart;
 			int iqStop = iq + OsqW->nk;

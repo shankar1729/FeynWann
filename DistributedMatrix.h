@@ -42,6 +42,7 @@ public:
 	int nk; //!< number of k-points (or pairs, if squared) on current process
 	int ikStart; //!< starting k-point (or pair, if squared) on current process
 	std::vector<int> ikStartProc; //!< ikStart for each process in MPI group
+	std::vector<int> iElemStartProc; //!< iElemStart for each process in MPI group
 	
 	//! Initialize from file, containing complex or real elements as specified by realOnly
 	//! If mpiInterGroup is non-null, then read only in one group and broadcast to rest (require regular process grid)
@@ -55,6 +56,11 @@ public:
 	void transform(vector3<> k0); //!< prepare results for k-point mesh offset by k0 (squared=false only)
 	void transform(vector3<> k01, vector3<> k02); //!< prepare results for k-point mesh offsets k01 and k02 (squared=true only)
 	const complex* getResult(int ik) const; //!< get pointer to result for k-point (or pair) index ik
+	
+	//Alternatve interface for single k-points (insted of offsets):
+	void compute(vector3<> k); //!< prepare results for single point k (squared=false only)
+	void compute(vector3<> k1, vector3<> k2); //!< prepare results for single pair k1,k2 (squared=true only)
+	
 private:
 	ManagedArray<complex> mat; //!< input matrix elements
 	ManagedArray<complex> buf; //!< buffer in which transformations happen and result is produced
