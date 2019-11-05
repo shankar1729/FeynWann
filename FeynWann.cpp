@@ -872,12 +872,9 @@ void FeynWann::setState(FeynWann::StatePh& state)
 		vector3<> qCart = GT * qBZ;
 		double prefac;
 		if (truncDir > 0)
-		{	//prefac = (2.*M_PI) / (prodSup * omegaEff * (qCart.length()*epsInf(2,2) //HACK approx
-			//		+ epsInf.metric_length_squared(qCart)));
 			prefac = (2.*M_PI) / (prodSup * omegaEff * qCart.length()) * lrs2D->wkernel(qCart);
-		}else
-		{	prefac = (4.*M_PI) / (prodSup * Omega * epsInf.metric_length_squared(qCart));
-		}
+		else
+			prefac = (4.*M_PI) / (prodSup * Omega * epsInf.metric_length_squared(qCart));
 		//Construct q.Z for each mode:
 		diagMatrix qdotZbySqrtM(nModes);
 		for(int iMode=0; iMode<nModes; iMode++)
@@ -934,14 +931,13 @@ void FeynWann::setMatrix(const FeynWann::StateE& e1, const FeynWann::StateE& e2,
 	{	complex gLij;
 		for(int iMode=0; iMode<nModes; iMode++) //in Cartesian atom displacement basis
 		{	if (truncDir > 0)
-			{	gLij =  complex(0,1)
-						* ((2*M_PI) * invsqrtM[iMode] / (omegaEff))
-						*  (*lrs2D)(ph.q, Zeff[iMode], atpos[iMode/3]);
-			}else
-			{	gLij =  complex(0,1)
-						* ((4*M_PI) * invsqrtM[iMode] / (Omega))
-						*  (*lrs)(ph.q, Zeff[iMode], atpos[iMode/3]);	
-			}
+				gLij =  complex(0,1)
+					* ((2*M_PI) * invsqrtM[iMode] / (omegaEff))
+					*  (*lrs2D)(ph.q, Zeff[iMode], atpos[iMode/3]);
+			else
+				gLij =  complex(0,1)
+					* ((4*M_PI) * invsqrtM[iMode] / (Omega))
+					*  (*lrs)(ph.q, Zeff[iMode], atpos[iMode/3]);
 			for(int b=0;  b<nBands; b++)
 				Mall.data()[Mall.index(b*(nBands+1), iMode)] += gLij; //diagonal only
 		}
