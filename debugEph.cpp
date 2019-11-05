@@ -55,6 +55,7 @@ struct DebugEph
 	//Previously computed quantities using single-k version to test against transformed ones:
 	FeynWann::StateE e1, e2;
 	FeynWann::StatePh ph;
+	FeynWann::MatrixEph m;
 	
 	DebugEph(int bandStart, int bandStop, int modeStart, int modeStop)
 	: bandStart(bandStart), bandStop(bandStop), modeStart(modeStart), modeStop(modeStop)
@@ -70,9 +71,10 @@ struct DebugEph
 		//---- Single k compute debug ----
 		logPrintf("err(E1):  %le\n", nrm2(e1.E-E1)/nrm2(E1));
 		logPrintf("err(E2):  %le\n", nrm2(e2.E-E2)/nrm2(E2));
-		logPrintf("err(S1):  %le\n", nrm2(diag(e1.S[0])-diag(mEph.e1->S[0]))/nrm2(diag(e1.S[0])));
-		logPrintf("err(S2):  %le\n", nrm2(diag(e2.S[0])-diag(mEph.e2->S[0]))/nrm2(diag(e2.S[0])));
+		logPrintf("err(S1):  %le\n", nrm2(degSqSum(e1.S[0],E1)-degSqSum(mEph.e1->S[0],E1))/nrm2(degSqSum(e1.S[0],E1)));
+		logPrintf("err(S2):  %le\n", nrm2(degSqSum(e2.S[0],E2)-degSqSum(mEph.e2->S[0],E2))/nrm2(degSqSum(e2.S[0],E2)));
 		logPrintf("err(ph):  %le\n", nrm2(ph.omega-omegaPh)/nrm2(omegaPh));
+		logPrintf("err(ePh): %le\n", nrm2(degSqSum(m.M,E1,E2,omegaPh)[1]-degSqSum(mEph.M,E1,E2,omegaPh)[1])/nrm2(degSqSum(mEph.M,E1,E2,omegaPh)[1]));
 		logFlush();
 		
 		/*
@@ -137,6 +139,75 @@ struct DebugEph
 			}
 		return out;
 	}
+	
+	//Sum over degenerate subspace of electrons at one k
+	inline matrix degSqSum(const matrix& M, const diagMatrix& E)
+	{	static const double degeneracyThreshold = 1e-6;
+		matrix ret(M.nRows(), M.nCols());
+		//Loop over left degenerate subspace:
+		for(int b1start=0; b1start<E.nRows();)
+		{	int b1stop=b1start+1;
+			while(b1stop<E.nRows() and E[b1stop]<E[b1start]+degeneracyThreshold)
+				b1stop++;
+			//Loop over right degenerate subspace:
+			for(int b2start=0; b2start<E.nRows();)
+			{	int b2stop=b2start+1;
+				while(b2stop<E.nRows() and E[b2stop]<E[b2start]+degeneracyThreshold)
+					b2stop++;
+				//Compute sum over subspace:
+				double out = 0.;
+				for(int b1=b1start; b1<b1stop; b1++)
+					for(int b2=b2start; b2<b2stop; b2++)
+						out += M(b1,b2).norm();
+				//Set sum over subspace:
+				for(int b1=b1start; b1<b1stop; b1++)
+					for(int b2=b2start; b2<b2stop; b2++)
+						ret.set(b1,b2, out);
+				b2start = b2stop;
+			}
+			b1start = b1stop;
+		}
+		return ret;
+	}
+	
+	//Sum over degenerate subspace of electrons and phonons at k1,k2
+	inline std::vector<matrix> degSqSum(const std::vector<matrix>& M, const diagMatrix& E1, const diagMatrix& E2, const diagMatrix& omegaPh)
+	{	static const double degeneracyThreshold = 1e-6;
+		std::vector<matrix> ret(M.size(), matrix(M[0].nRows(), M[0].nCols()));
+		//Loop over omegaPh subspace:
+		for(int modeStart=0; modeStart<omegaPh.nRows();)
+		{	int modeStop=modeStart+1;
+			while(modeStop<omegaPh.nRows() and omegaPh[modeStop]<omegaPh[modeStart]+degeneracyThreshold)
+				modeStop++;
+			//Loop over E1 degenerate subspace:
+			for(int b1start=0; b1start<E1.nRows();)
+			{	int b1stop=b1start+1;
+				while(b1stop<E1.nRows() and E1[b1stop]<E1[b1start]+degeneracyThreshold)
+					b1stop++;
+				//Loop over E2 degenerate subspace:
+				for(int b2start=0; b2start<E2.nRows();)
+				{	int b2stop=b2start+1;
+					while(b2stop<E2.nRows() and E2[b2stop]<E2[b2start]+degeneracyThreshold)
+						b2stop++;
+					//Compute sum over subspace:
+					double out = 0.;
+					for(int mode=modeStart; mode<modeStop; mode++)
+						for(int b1=b1start; b1<b1stop; b1++)
+							for(int b2=b2start; b2<b2stop; b2++)
+								out += M[mode](b1,b2).norm();
+					//Set sum over subspace:
+					for(int mode=modeStart; mode<modeStop; mode++)
+						for(int b1=b1start; b1<b1stop; b1++)
+							for(int b2=b2start; b2<b2stop; b2++)
+								ret[mode].set(b1,b2, out);
+					b2start = b2stop;
+				}
+				b1start = b1stop;
+			}
+			modeStart = modeStop;
+		}
+		return ret;
+	}
 };
 
 int main(int argc, char** argv)
@@ -170,7 +241,7 @@ int main(int argc, char** argv)
 	fwp.ePhHeadOnly = true; //so as to debug k-path alone
 	fwp.needSpin = true;
 	FeynWann fw(fwp);
-	fw.Bext = vector3<>(1.3,-2.2,0.6)*1e-3; //random B field to break symmetry (to fix unitary rotations for S testing)
+	//fw.Bext = vector3<>(1.3,-2.2,0.6)*1e-3; //random B field to break symmetry (to fix unitary rotations for S testing)
 	if(!bandStop) bandStop = fw.nBands;
 	if(!modeStop) modeStop = fw.nModes;
 	
@@ -195,6 +266,7 @@ int main(int argc, char** argv)
 		fw.eCalc(k1, src.e1);
 		fw.eCalc(k2, src.e2);
 		fw.phCalc(k1-k2, src.ph);
+		fw.ePhCalc(src.e1, src.e2, src.ph, src.m);
 		
 		fw.ePhLoop(k1, k2, DebugEph::ePhProcess, &src);
 	}

@@ -564,7 +564,7 @@ void FeynWann::eLoop(const vector3<>& k0, FeynWann::eProcessFunc eProcess, void*
 	)
 }
 void FeynWann::eCalc(const vector3<>& k, FeynWann::StateE& e)
-{	//Compute Fourier versions for this k-point:
+{	//Compute Fourier versions for this k:
 	Hw->compute(k);
 	if(fwp.needVelocity)
 		Pw->compute(k);
@@ -573,10 +573,16 @@ void FeynWann::eCalc(const vector3<>& k, FeynWann::StateE& e)
 	if(fwp.needLinewidth_ee) ImSigma_eeW->compute(k);
 	if(fwp.needLinewidth_ePh) ImSigma_ePhW->compute(k);
 	if(fwp.needLinewidthP_ePh) ImSigmaP_ePhW->compute(k);
+	if(fwp.needPhonons) //prepare sum rule quantities
+	{	inEphLoop = true;
+		Dw->compute(k);
+		HePhSumW->compute(k);
+	}
 	//Prepare state on group head:
 	e.ik = 0;
 	e.k = k;
 	if(mpiGroup->isHead()) setState(e);
+	inEphLoop = false;
 }
 
 
@@ -600,7 +606,7 @@ void FeynWann::phLoop(const vector3<>& q0, FeynWann::phProcessFunc phProcess, vo
 }
 void FeynWann::phCalc(const vector3<>& q, FeynWann::StatePh& ph)
 {	assert(fwp.needPhonons);
-	//Compute Fourier transforms with this offset:
+	//Compute Fourier versions for this q:
 	OsqW->compute(q);
 	//Prepare state on group head:
 	ph.iqFine = 0;
@@ -688,18 +694,7 @@ void FeynWann::ePhLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::ePh
 			vector3<> k01cur = q0 + k02cur; //momentum conservation
 			if(fwp.ePhHeadOnly and ik2sup.length_squared()) continue; //k-path debug mode
 			//Calculate electron-phonon matrix elements:
-			//HACK start
-			HePhW->compute(k01cur, k02cur);
-			matrix tmp1;
-			if(mpiGroup->isHead()) tmp1 = getMatrix(HePhW->getResult(0), nModes*nBands, nBands);
-			//HACK end
 			HePhW->transform(k01cur, k02cur);
-			//HACK start
-			if(mpiGroup->isHead())
-			{	matrix tmp2 = getMatrix(HePhW->getResult(0), nModes*nBands, nBands);
-				logPrintf("HePhErr: %le\n", nrm2(tmp2-tmp1)/nrm2(tmp2)); logFlush();
-			}
-			//HACK end
 			int ikPair = 0;
 			int ikPairStart = HePhW->ikStart;
 			int ikPairStop = ikPairStart + HePhW->nk;
@@ -726,6 +721,14 @@ void FeynWann::ePhLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::ePh
 			)
 		}
 	}
+}
+void FeynWann::ePhCalc(const FeynWann::StateE& e1, const FeynWann::StateE& e2, const FeynWann::StatePh& ph, FeynWann::MatrixEph& m)
+{	assert(fwp.needPhonons);
+	assert(circDistanceSquared(e1.k-e2.k, ph.q) < 1e-8);
+	//Compute Fourier version of HePh for specified k1,k2 pair:
+	HePhW->compute(e1.k, e2.k);
+	//Prepare state on group head:
+	if(mpiGroup->isHead()) setMatrix(e1, e2, ph, 0, m);
 }
 
 void FeynWann::symmetrize(matrix3<>& m) const
