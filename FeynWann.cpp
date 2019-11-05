@@ -612,7 +612,6 @@ void FeynWann::phCalc(const vector3<>& q, FeynWann::StatePh& ph)
 
 void FeynWann::ePhLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::ePhProcessFunc ePhProcess, void* params)
 {	static StopWatch watchBcast("FeynWann::ePhLoop:bcast"); 
-	static StopWatch watchRotations("FeynWann::ePhLoop:rotations");
 	static StopWatch watchCallback("FeynWann::ePhLoop:callback");
 	assert(fwp.needPhonons);
 	int prodKfold = Hw->nkTot;
@@ -710,53 +709,13 @@ void FeynWann::ePhLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::ePh
 				PartialLoop3D(phononSup, ik2, prodSup, k2, k02cur,
 					if(ikPair>=ikPairStart and ikPair<ikPairStop //subset to be evaluated on this process
 						and (not (fwp.ePhHeadOnly and ikPair)) ) //overridden in k-path debug mode to be ikPair==0 alone
-					{	watchRotations.start();
-						//Get the matrix elements for all modes together:
-						MatrixEph m;
-						matrix Mall = getMatrix(HePhW->getResult(ikPair), nBands*nBands, nModes);
-						//Add long range polar corrections if required:
-						if(polar)
-						{	vector3<> q = k1 - k2;
-							complex gLij;
-							for(int iMode=0; iMode<nModes; iMode++) //in Cartesian atom displacement basis
-							{	if (truncDir > 0)
-								{	gLij =  complex(0,1)
-											* ((2*M_PI) * invsqrtM[iMode] / (omegaEff))
-											*  (*lrs2D)(q, Zeff[iMode], atpos[iMode/3]);
-								}else
-								{	gLij =  complex(0,1)
-											* ((4*M_PI) * invsqrtM[iMode] / (Omega))
-											*  (*lrs)(q, Zeff[iMode], atpos[iMode/3]);	
-								}
-								for(int b=0;  b<nBands; b++)
-									Mall.data()[Mall.index(b*(nBands+1), iMode)] += gLij; //diagonal only
-							}
-						}
-						//Identify associated electronic states:
+					{	//Identify associated electronic and phonon states:
 						int ik1net = calculateIndex(ik1sup + elemwiseProd(kfoldSup, ik1v), kfold);
 						int ik2net = calculateIndex(ik2sup + elemwiseProd(kfoldSup, ik2v), kfold);
-						m.e1 = &e1[ik1net];
-						m.e2 = &e2[ik2net];
-						//Apply sum rule correction:
-						complex* Mdata = Mall.dataPref();
-						for(int iAtom=0; iAtom<nAtoms; iAtom++)
-						{	int nData = m.e1->dHePhSum.nData();
-							double alpha = (-0.5/nAtoms)*invsqrtM[3*iAtom];
-							eblas_zaxpy(nData, alpha, m.e1->dHePhSum.dataPref(),1, Mdata,1);
-							eblas_zaxpy(nData, alpha, m.e2->dHePhSum.dataPref(),1, Mdata,1);
-							Mdata += nData;
-						}
-						//Apply phonon transformation:
 						int iqIndex = calculateIndex(ik1v - ik2v, phononSup);
-						m.ph = &ph[iqIndex];
-						Mall = Mall * m.ph->U; //to phonon eigenbasis
-						//Extract matrices for each phonon mode:
-						const double omegaPhCut = 1e-6;
-						m.M.resize(nModes);
-						for(int iMode=0; iMode<nModes; iMode++)
-							m.M[iMode] = sqrt(m.ph->omega[iMode]<omegaPhCut ? 0. : 0.5/m.ph->omega[iMode]) //frequency-dependent phonon amplitude
-								* (dagger(m.e1->U) * getMatrix(Mall.data(), nBands, nBands, iMode) * m.e2->U); //to E1 and E2 eigenbasis
-						watchRotations.stop();
+						//Set e-ph matrix elements:
+						MatrixEph m;
+						setMatrix(e1[ik1net], e2[ik2net], ph[iqIndex], ikPair, m);
 						//Invoke call-back function:
 						watchCallback.start();
 						ePhProcess(m, params);
@@ -961,6 +920,52 @@ void FeynWann::bcastState(FeynWann::StatePh& state, MPIUtil* mpiUtil, int root)
 	bcast(state.omega, nModes, mpiUtil, root);
 	bcast(state.U, nModes, nModes, mpiUtil, root);
 }
+
+
+void FeynWann::setMatrix(const FeynWann::StateE& e1, const FeynWann::StateE& e2, const FeynWann::StatePh& ph, int ikPair, FeynWann::MatrixEph& m)
+{	static StopWatch watch("FeynWann::setMatrix"); watch.start();
+	m.e1 = &e1;
+	m.e2 = &e2;
+	m.ph = &ph;
+	//Get the matrix elements for all modes together:
+	matrix Mall = getMatrix(HePhW->getResult(ikPair), nBands*nBands, nModes);
+	//Add long range polar corrections if required:
+	if(polar)
+	{	complex gLij;
+		for(int iMode=0; iMode<nModes; iMode++) //in Cartesian atom displacement basis
+		{	if (truncDir > 0)
+			{	gLij =  complex(0,1)
+						* ((2*M_PI) * invsqrtM[iMode] / (omegaEff))
+						*  (*lrs2D)(ph.q, Zeff[iMode], atpos[iMode/3]);
+			}else
+			{	gLij =  complex(0,1)
+						* ((4*M_PI) * invsqrtM[iMode] / (Omega))
+						*  (*lrs)(ph.q, Zeff[iMode], atpos[iMode/3]);	
+			}
+			for(int b=0;  b<nBands; b++)
+				Mall.data()[Mall.index(b*(nBands+1), iMode)] += gLij; //diagonal only
+		}
+	}
+	//Apply sum rule correction:
+	complex* Mdata = Mall.dataPref();
+	for(int iAtom=0; iAtom<nAtoms; iAtom++)
+	{	int nData = m.e1->dHePhSum.nData();
+		double alpha = (-0.5/nAtoms)*invsqrtM[3*iAtom];
+		eblas_zaxpy(nData, alpha, m.e1->dHePhSum.dataPref(),1, Mdata,1);
+		eblas_zaxpy(nData, alpha, m.e2->dHePhSum.dataPref(),1, Mdata,1);
+		Mdata += nData;
+	}
+	//Apply phonon transformation:
+	Mall = Mall * m.ph->U; //to phonon eigenbasis
+	//Extract matrices for each phonon mode:
+	const double omegaPhCut = 1e-6;
+	m.M.resize(nModes);
+	for(int iMode=0; iMode<nModes; iMode++)
+		m.M[iMode] = sqrt(m.ph->omega[iMode]<omegaPhCut ? 0. : 0.5/m.ph->omega[iMode]) //frequency-dependent phonon amplitude
+			* (dagger(m.e1->U) * getMatrix(Mall.data(), nBands, nBands, iMode) * m.e2->U); //to E1 and E2 eigenbasis
+	watch.stop();
+}
+
 
 //----------- class FeynWann::StateE -------------
 inline double interpQuartic(const std::vector<diagMatrix>& Y, int n, double f)

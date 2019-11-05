@@ -166,7 +166,8 @@ public:
 	std::shared_ptr<DistributedMatrix> HePhW; //electron-phonon matrix elements in Wannier basis
 	std::shared_ptr<DistributedMatrix> HePhSumW; //electron-phonon matrix element sum rule in Wannier basis
 	std::shared_ptr<DistributedMatrix> Dw; //gradient matrix elements for sum rule enforcement
-
+	void setMatrix(const StateE& e1, const StateE& e2, const StatePh& ph, int ikPair, MatrixEph& m); //set e-ph properties for e1.ik, e2.ik and ph.iq in m
+	
 private:
 	bool inEphLoop; //flag used internally by setState etc. for special handling of sum rule quantities within an ePhLoop
 };
