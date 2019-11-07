@@ -423,13 +423,14 @@ FeynWann::FeynWann(FeynWannParams& fwp)
 			//Read optical dielectric tensor:
 			std::vector<vector3<>> eps = readArrayVec3(fwp.totalEprefix + ".epsInf");
 			omegaEff = Omega;
+			truncDir = 3;
 			for (int iDir=0; iDir<3; iDir++) 
 			{ 	if(isTruncated[iDir]) 
 				{	truncDir = iDir;
 					omegaEff /= fabs(R(iDir, iDir));
 				}
 			}
-			if (truncDir > 0) 
+			if (truncDir < 3) 
 			{	epsInf2D = eps;
 				lrs2D = std::make_shared<LongRangeSum2D>(R, epsInf2D, truncDir);
 			}else
@@ -874,7 +875,7 @@ void FeynWann::setState(FeynWann::StatePh& state)
 			qBZ[iDir] -= floor(qBZ[iDir] + 0.5);
 		vector3<> qCart = GT * qBZ;
 		double prefac;
-		if (truncDir > 0)
+		if (truncDir < 3)
 			prefac = (2.*M_PI) / (prodSup * omegaEff * qCart.length()) * lrs2D->wkernel(qCart);
 		else
 			prefac = (4.*M_PI) / (prodSup * Omega * epsInf.metric_length_squared(qCart));
@@ -933,7 +934,7 @@ void FeynWann::setMatrix(const FeynWann::StateE& e1, const FeynWann::StateE& e2,
 	if(polar)
 	{	complex gLij;
 		for(int iMode=0; iMode<nModes; iMode++) //in Cartesian atom displacement basis
-		{	if (truncDir > 0)
+		{	if (truncDir < 3)
 				gLij =  complex(0,1)
 					* ((2*M_PI) * invsqrtM[iMode] / (omegaEff))
 					*  (*lrs2D)(ph.q, Zeff[iMode], atpos[iMode/3]);
