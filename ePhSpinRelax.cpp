@@ -317,6 +317,7 @@ int main(int argc, char** argv)
 	fw.phLoop(vector3<>(), EnergyRangeCollect::phProcess, &erc);
 	mpiWorld->allReduce(erc.EvMax, MPIUtil::ReduceMax);
 	mpiWorld->allReduce(erc.EcMin, MPIUtil::ReduceMin);
+	mpiWorld->allReduce(erc.omegaPhMax, MPIUtil::ReduceMax);
 	//--- add margins of max phonon energy, energy conservation width and fermiPrime width
 	double Emargin = erc.omegaPhMax + 6.*EconserveWidth + 20.*T.back();
 	double Estart = erc.EvMax - Emargin;
