@@ -64,13 +64,19 @@ struct LindbladInit
 	}
 	
 	double Estart, Estop; //energy range for k selection
-	std::vector<vector3<>> k;
+	std::vector<vector3<>> k; //selected k-points
+	std::vector<double> E; //all band energies for selected k-points
 	inline void kSelect(const FeynWann::StateE& state)
-	{	for(double E: state.E)
+	{	bool active = false;
+		for(double E: state.E)
 			if(E>=Estart and E<=Estop)
-			{	k.push_back(state.k);
+			{	active = true;
 				break;
 			}
+		if(active)
+		{	k.push_back(state.k);
+			E.insert(E.end(), state.E.begin(), state.E.end());
+		}
 	}
 	static void kSelect(const FeynWann::StateE& state, void* params)
 	{	((LindbladInit*)params)->kSelect(state);
@@ -106,8 +112,33 @@ struct LindbladInit
 			if((o-oStart+1)%oInterval==0) { logPrintf("%d%% ", int(round((o-oStart+1)*100./noMine))); logFlush(); }
 		}
 		logPrintf("done.\n"); logFlush();
-		size_t nkSelected = k.size();
-		mpiWorld->allReduce(nkSelected, MPIUtil::ReduceSum);
+		
+		//Synchronize selected k and E across all processes:
+		//--- determine nk on each process and compute cumulative counts
+		std::vector<size_t> nkPrev(mpiWorld->nProcesses()+1);
+		for(int jProc=0; jProc<mpiWorld->nProcesses(); jProc++)
+		{	size_t nkCur = k.size();
+			mpiWorld->bcast(nkCur, jProc); //nkCur = k.size() on jProc in all processes
+			nkPrev[jProc+1] = nkPrev[jProc] + nkCur; //cumulative count
+		}
+		size_t nkSelected = nkPrev.back();
+		//--- broadcast k and E:
+		{	//Set k and E in position in global arrays:
+			std::vector<vector3<>> k(nkSelected);
+			std::vector<double> E(nkSelected*fw.nBands);
+			std::copy(this->k.begin(), this->k.end(), k.begin()+nkPrev[mpiWorld->iProcess()]);
+			std::copy(this->E.begin(), this->E.end(), E.begin()+nkPrev[mpiWorld->iProcess()]*fw.nBands);
+			//Broadcast:
+			for(int jProc=0; jProc<mpiWorld->nProcesses(); jProc++)
+			{	size_t ikStart = nkPrev[jProc], nk = nkPrev[jProc+1]-ikStart;
+				mpiWorld->bcast(k.data()+ikStart, nk, jProc);
+				mpiWorld->bcast(E.data()+ikStart*fw.nBands, nk*fw.nBands, jProc);
+			}
+			//Store to class variables:
+			std::swap(k, this->k);
+			std::swap(E, this->E);
+		}
+		
 		logPrintf("Found %lu k-points with active states from %lu total k-points (%.0fx reduction)\n",
 			nkSelected, nkTot, round(nkTot*1./nkSelected));
 	}
