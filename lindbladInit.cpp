@@ -27,6 +27,7 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 #include "InputMap.h"
 #include "SparseMatrix.h"
 #include <core/Units.h>
+#include <core/LatticeUtils.h>
 
 //Lindblad initialization using FeynWann callback
 struct LindbladInit
@@ -41,6 +42,10 @@ struct LindbladInit
 	const bool ePhEnabled; //!< whether e-ph coupling is enabled
 	const double ePhDelta; //!< Gaussian energy conservation width
 	
+	size_t oStart, oStop; //!< range of offstes handled by this process group
+	size_t noMine, oInterval; //!< number of offsets on this process group and reporting interval
+	
+	
 	LindbladInit(FeynWann& fw, const std::vector<vector3<>>& k0,
 		double dmuMin, double dmuMax, double Tmax, double pumpOmegaMax,
 		bool ePhEnabled, double ePhDelta)
@@ -48,6 +53,13 @@ struct LindbladInit
 		dmuMin(dmuMin), dmuMax(dmuMax), Tmax(Tmax), pumpOmegaMax(pumpOmegaMax),
 		ePhEnabled(ePhEnabled), ePhDelta(ePhDelta)
 	{
+		//Initialize sampling parameters:
+		if(mpiGroup->isHead())
+			TaskDivision(k0.size(), mpiGroupHead).myRange(oStart, oStop);
+		mpiGroup->bcast(oStart);
+		mpiGroup->bcast(oStop);
+		noMine = oStop-oStart;
+		oInterval = std::max(1, int(round(noMine/50.))); //interval for reporting progress
 	}
 	
 	//--------- k-point selection -------------
@@ -95,15 +107,6 @@ struct LindbladInit
 		Estop = std::max(EvMax + pumpOmegaMax, EcMin) + Emargin;
 		logPrintf("Active energy range: %.3lf to %.3lf eV\n", Estart/eV, Estop/eV);
 		
-		//Initialize sampling parameters:
-		size_t oStart=0, oStop=0; //range of offsets handled by this process group
-		if(mpiGroup->isHead())
-			TaskDivision(k0.size(), mpiGroupHead).myRange(oStart, oStop);
-		mpiGroup->bcast(oStart);
-		mpiGroup->bcast(oStop);
-		size_t noMine = oStop-oStart;
-		size_t oInterval = std::max(1, int(round(noMine/50.))); //interval for reporting progress
-
 		//Select k-points:
 		logPrintf("Scanning k-points with active states: "); logFlush();
 		for(size_t o=oStart; o<oStop; o++)
@@ -138,11 +141,87 @@ struct LindbladInit
 			std::swap(k, this->k);
 			std::swap(E, this->E);
 		}
-		
-		logPrintf("Found %lu k-points with active states from %lu total k-points (%.0fx reduction)\n",
+		logPrintf("Found %lu k-points with active states from %lu total k-points (%.0fx reduction)\n\n",
 			nkSelected, nkTot, round(nkTot*1./nkSelected));
 	}
 	
+	//--------- k-pair selection -------------
+	std::vector<std::pair<size_t,size_t>> kpairs;
+	std::shared_ptr<PeriodicLookup<vector3<>>> plook; //to efficiently search k-points
+	inline void kpSelect(const FeynWann::StatePh& state)
+	{	const double omegaPhCut = 1e-6;
+		//Find pairs of momentum conserving electron states with this q:
+		for(size_t ik1=0; ik1<k.size(); ik1++)
+		{	const vector3<>& k1 = k[ik1];
+			vector3<> k2 = k1 - state.q; //momentum conservation
+			size_t ik2 = plook->find(k2);
+			if(ik2 != string::npos)
+			{	//Check energy conservation for pair of bands within active range:
+				const double *E1begin = E.data()+ik1*fw.nBands, *E1end = E1begin+fw.nBands;
+				const double *E2begin = E.data()+ik2*fw.nBands, *E2end = E2begin+fw.nBands;
+				bool Econserve = false;
+				for(const double* E1=E1begin; E1<E1end; E1++) if((*E1)>=Estart and (*E1)<=Estop) //E1 in active range
+				{	for(const double* E2=E2begin; E2<E2end; E2++) if((*E2)>=Estart and (*E2)<=Estop) //E2 in active range
+					{	for(const double omegaPh: state.omega) if(omegaPh>omegaPhCut) //loop over non-zero phonon frequencies
+						{	double deltaE = (*E1) - (*E2) - omegaPh; //energy conservation violation
+							if(fabs(deltaE) < 4*ePhDelta) //else negligible at the 10^-3 level for a Gaussian
+							{	Econserve = true;
+								break;
+							}
+						}
+						if(Econserve) break;
+					}
+					if(Econserve) break;
+				}
+				if(Econserve) kpairs.push_back(std::make_pair(ik1,ik2));
+			}
+		}
+	}
+	static void kpSelect(const FeynWann::StatePh& state, void* params)
+	{	((LindbladInit*)params)->kpSelect(state);
+	}
+	void kpairSelect()
+	{	
+		//Initialize periodic look up table for searching selected k-points:
+		matrix3<> G = 2*M_PI*inv(fw.R);
+		matrix3<> GGT = G * (~G);
+		plook = std::make_shared<PeriodicLookup<vector3<>>>(k, GGT);
+		
+		//Find momentum-conserving k-pairs for which energy conservation is also possible for some bands:
+		logPrintf("Scanning k-pairs with e-ph coupling: "); logFlush();
+		for(size_t o=oStart; o<oStop; o++)
+		{	fw.phLoop(k0[o], LindbladInit::kpSelect, this);
+			//Print progress:
+			if((o-oStart+1)%oInterval==0) { logPrintf("%d%% ", int(round((o-oStart+1)*100./noMine))); logFlush(); }
+		}
+		logPrintf("done.\n"); logFlush();
+		
+		//Synchronize selected kpairs across all processes:
+		//--- determine nk on each process and compute cumulative counts
+		std::vector<size_t> nkpPrev(mpiWorld->nProcesses()+1);
+		for(int jProc=0; jProc<mpiWorld->nProcesses(); jProc++)
+		{	size_t nkpCur = kpairs.size();
+			mpiWorld->bcast(nkpCur, jProc); //nkCur = k.size() on jProc in all processes
+			nkpPrev[jProc+1] = nkpPrev[jProc] + nkpCur; //cumulative count
+		}
+		size_t nkpairs = nkpPrev.back();
+		//--- broadcast k and E:
+		{	//Set k and E in position in global arrays:
+			std::vector<std::pair<size_t,size_t>> kpairs(nkpairs);
+			std::copy(this->kpairs.begin(), this->kpairs.end(), kpairs.begin()+nkpPrev[mpiWorld->iProcess()]);
+			//Broadcast:
+			for(int jProc=0; jProc<mpiWorld->nProcesses(); jProc++)
+			{	size_t ikpStart = nkpPrev[jProc], nkp = nkpPrev[jProc+1]-ikpStart;
+				mpiWorld->bcast(((size_t*)kpairs.data())+ikpStart*2, nkp*2, jProc);
+			}
+			//Store to class variables:
+			std::swap(kpairs, this->kpairs);
+		}
+		size_t nkpairsTot = k.size()*k.size();
+		logPrintf("Found %lu k-pairs with e-ph coupling from %lu total pairs of selected k-points (%.0fx reduction)\n\n",
+			nkpairs, nkpairsTot, round(nkpairsTot*1./nkpairs));
+	}
+
 	//--------- Initialize -------------
 	/*
 	//Entry in e-ph coupling list below:
@@ -419,8 +498,13 @@ int main(int argc, char** argv)
 	//Create and initialize lindblad calculator:
 	LindbladInit lb(fw, k0, dmuMin, dmuMax, Tmax, pumpOmegaMax, ePhEnabled, ePhDelta);
 	
-	//First pass: k-point selection
+	//First pass (e only): select k-points
 	lb.kpointSelect();
+	
+	//Second pass (ph only): select k pairs
+	lb.kpairSelect();
+	
+	//Final pass: output electronic and e-ph quantities
 	
 	//Cleanup:
 	fw.free();
