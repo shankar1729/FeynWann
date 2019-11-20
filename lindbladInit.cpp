@@ -22,12 +22,15 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 #include <core/scalar.h>
 #include <core/Random.h>
 #include <core/string.h>
+#include <core/Units.h>
+#include <core/LatticeUtils.h>
 #include "FeynWann.h"
 #include "Histogram.h"
 #include "InputMap.h"
 #include "SparseMatrix.h"
-#include <core/Units.h>
-#include <core/LatticeUtils.h>
+
+//Reverse iterator for pointers:
+template<class T> constexpr std::reverse_iterator<T*> reverse(T* i) { return std::reverse_iterator<T*>(i); }
 
 //Lindblad initialization using FeynWann callback
 struct LindbladInit
@@ -157,11 +160,18 @@ struct LindbladInit
 			size_t ik2 = plook->find(k2);
 			if(ik2 != string::npos)
 			{	//Check energy conservation for pair of bands within active range:
+				//--- determine ranges of all E1 and E2:
 				const double *E1begin = E.data()+ik1*fw.nBands, *E1end = E1begin+fw.nBands;
 				const double *E2begin = E.data()+ik2*fw.nBands, *E2end = E2begin+fw.nBands;
+				//--- narrow to active energy ranges:
+				E1begin = std::lower_bound(E1begin, E1end, Estart);
+				E1end = &(*std::lower_bound(reverse(E1end), reverse(E1begin), Estop, std::greater<double>()))+1;
+				E2begin = std::lower_bound(E2begin, E2end, Estart);
+				E2end = &(*std::lower_bound(reverse(E2end), reverse(E2begin), Estop, std::greater<double>()))+1;
+				//--- check energy ranges:
 				bool Econserve = false;
-				for(const double* E1=E1begin; E1<E1end; E1++) if((*E1)>=Estart and (*E1)<=Estop) //E1 in active range
-				{	for(const double* E2=E2begin; E2<E2end; E2++) if((*E2)>=Estart and (*E2)<=Estop) //E2 in active range
+				for(const double* E1=E1begin; E1<E1end; E1++) //E1 in active range
+				{	for(const double* E2=E2begin; E2<E2end; E2++) //E2 in active range
 					{	for(const double omegaPh: state.omega) if(omegaPh>omegaPhCut) //loop over non-zero phonon frequencies
 						{	double deltaE = (*E1) - (*E2) - omegaPh; //energy conservation violation
 							if(fabs(deltaE) < 4*ePhDelta) //else negligible at the 10^-3 level for a Gaussian
