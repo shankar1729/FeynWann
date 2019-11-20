@@ -149,7 +149,8 @@ struct LindbladInit
 	}
 	
 	//--------- k-pair selection -------------
-	std::vector<std::pair<size_t,size_t>> kpairs;
+	std::vector<std::vector<size_t>> kpartners; //list of e-ph coupled k2 for each k1
+	std::vector<std::pair<size_t,size_t>> kpairs; //pairs of k1 and k2
 	std::shared_ptr<PeriodicLookup<vector3<>>> plook; //to efficiently search k-points
 	inline void kpSelect(const FeynWann::StatePh& state)
 	{	const double omegaPhCut = 1e-6;
@@ -227,9 +228,22 @@ struct LindbladInit
 			//Store to class variables:
 			std::swap(kpairs, this->kpairs);
 		}
+		//--- report:
 		size_t nkpairsTot = k.size()*k.size();
-		logPrintf("Found %lu k-pairs with e-ph coupling from %lu total pairs of selected k-points (%.0fx reduction)\n\n",
+		logPrintf("Found %lu k-pairs with e-ph coupling from %lu total pairs of selected k-points (%.0fx reduction)\n",
 			nkpairs, nkpairsTot, round(nkpairsTot*1./nkpairs));
+		//--- initialize kpartners (list of k2 by k1):
+		kpartners.resize(k.size());
+		for(auto kpair: kpairs)
+			kpartners[kpair.first].push_back(kpair.second);
+		size_t nPartnersMin = k.size(), nPartnersMax = 0;
+		for(std::vector<size_t>& kp: kpartners)
+		{	std::sort(kp.begin(), kp.end()); //sort k2 within each k1 array
+			const size_t& nPartners = kp.size();
+			if(nPartners < nPartnersMin) nPartnersMin = nPartners;
+			if(nPartners > nPartnersMax) nPartnersMax = nPartners;
+		}	
+		logPrintf("Number of partners per k-point:  min: %lu  max: %lu  mean: %.1lf\n\n", nPartnersMin, nPartnersMax, nkpairs*1./k.size());
 	}
 
 	//--------- Initialize -------------
