@@ -26,7 +26,7 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 #include "FeynWann.h"
 #include "Histogram.h"
 #include "InputMap.h"
-#include "SparseMatrix.h"
+#include "lindblad.h"
 
 //Reverse iterator for pointers:
 template<class T> constexpr std::reverse_iterator<T*> reverse(T* i) { return std::reverse_iterator<T*>(i); }
@@ -252,7 +252,7 @@ struct LindbladInit
 			const size_t& nPartners = kp.size();
 			if(nPartners < nPartnersMin) nPartnersMin = nPartners;
 			if(nPartners > nPartnersMax) nPartnersMax = nPartners;
-		}	
+		}
 		logPrintf("Number of partners per k-point:  min: %lu  max: %lu  mean: %.1lf\n\n", nPartnersMin, nPartnersMax, nkpairs*1./k.size());
 	}
 
