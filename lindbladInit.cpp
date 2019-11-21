@@ -23,7 +23,6 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 #include <core/Random.h>
 #include <core/string.h>
 #include <core/Units.h>
-#include <core/LatticeUtils.h>
 #include "FeynWann.h"
 #include "Histogram.h"
 #include "InputMap.h"
@@ -37,6 +36,7 @@ struct LindbladInit
 {	
 	FeynWann& fw;
 	const std::vector<vector3<>>& k0; //!< k-point offsets
+	const vector3<int>& NkFine; //!< effective k-point mesh sampled
 	const size_t nkTot; //!< total k-points effectively used in BZ sampling
 	
 	const double dmuMin, dmuMax, Tmax;
@@ -49,10 +49,10 @@ struct LindbladInit
 	size_t noMine, oInterval; //!< number of offsets on this process group and reporting interval
 	
 	
-	LindbladInit(FeynWann& fw, const std::vector<vector3<>>& k0,
+	LindbladInit(FeynWann& fw, const std::vector<vector3<>>& k0, const vector3<int>& NkFine,
 		double dmuMin, double dmuMax, double Tmax, double pumpOmegaMax,
 		bool ePhEnabled, double ePhDelta)
-	: fw(fw), k0(k0), nkTot(fw.eCountPerOffset()*k0.size()),
+	: fw(fw), k0(k0), NkFine(NkFine), nkTot(fw.eCountPerOffset()*k0.size()),
 		dmuMin(dmuMin), dmuMax(dmuMax), Tmax(Tmax), pumpOmegaMax(pumpOmegaMax),
 		ePhEnabled(ePhEnabled), ePhDelta(ePhDelta)
 	{
@@ -151,16 +151,25 @@ struct LindbladInit
 	//--------- k-pair selection -------------
 	std::vector<std::vector<size_t>> kpartners; //list of e-ph coupled k2 for each k1
 	std::vector<std::pair<size_t,size_t>> kpairs; //pairs of k1 and k2
-	std::shared_ptr<PeriodicLookup<vector3<>>> plook; //to efficiently search k-points
+	std::map<size_t,size_t> kIndexMap; //map from k-point mesh index to index in selected set
+	inline size_t kIndex(vector3<> k)
+	{	size_t index=0;
+		for(int iDir=0; iDir<3; iDir++)
+		{	double ki = k[iDir] - floor(k[iDir]); //wrapped to [0,1)
+			index = (size_t)round(NkFine[iDir]*(index+ki));
+		}
+		return index;
+	}
 	inline void kpSelect(const FeynWann::StatePh& state)
 	{	const double omegaPhCut = 1e-6;
 		//Find pairs of momentum conserving electron states with this q:
 		for(size_t ik1=0; ik1<k.size(); ik1++)
 		{	const vector3<>& k1 = k[ik1];
 			vector3<> k2 = k1 - state.q; //momentum conservation
-			size_t ik2 = plook->find(k2);
-			if(ik2 != string::npos)
-			{	//Check energy conservation for pair of bands within active range:
+			const std::map<size_t,size_t>::iterator iter = kIndexMap.find(kIndex(k2));
+			if(iter != kIndexMap.end())
+			{	size_t ik2 = iter->second;
+				//Check energy conservation for pair of bands within active range:
 				//--- determine ranges of all E1 and E2:
 				const double *E1begin = E.data()+ik1*fw.nBands, *E1end = E1begin+fw.nBands;
 				const double *E2begin = E.data()+ik2*fw.nBands, *E2end = E2begin+fw.nBands;
@@ -193,10 +202,9 @@ struct LindbladInit
 	}
 	void kpairSelect()
 	{	
-		//Initialize periodic look up table for searching selected k-points:
-		matrix3<> G = 2*M_PI*inv(fw.R);
-		matrix3<> GGT = G * (~G);
-		plook = std::make_shared<PeriodicLookup<vector3<>>>(k, GGT);
+		//Initialize kIndexMap for searching selected k-points:
+		for(size_t ik=0; ik<k.size(); ik++)
+			kIndexMap[kIndex(k[ik])] = ik;
 		
 		//Find momentum-conserving k-pairs for which energy conservation is also possible for some bands:
 		logPrintf("Scanning k-pairs with e-ph coupling: "); logFlush();
@@ -520,7 +528,7 @@ int main(int argc, char** argv)
 	logPrintf("\n");
 	
 	//Create and initialize lindblad calculator:
-	LindbladInit lb(fw, k0, dmuMin, dmuMax, Tmax, pumpOmegaMax, ePhEnabled, ePhDelta);
+	LindbladInit lb(fw, k0, NkFine, dmuMin, dmuMax, Tmax, pumpOmegaMax, ePhEnabled, ePhDelta);
 	
 	//First pass (e only): select k-points
 	lb.kpointSelect();
