@@ -26,21 +26,21 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 //! Structures stored into sparse lindblad files
 namespace Lindblad
 {
-	static const size_t markerLen = 8; //Length of section markers in file
+	static const size_t markerLen = 4; //Length of section markers in file
 	
 	//! Global file header
 	struct Header
-	{	static constexpr const char* marker = "LINDBLAD";
-		double dmuMin, dmuMax, Tmax, pumpOmegaMax; //mu, T and pump frequency range accounted for
+	{	static constexpr const char* marker = "LDBD";
+		double dmuMin, dmuMax, Tmax, pumpOmegaMax, probeOmegaMax; //mu, T and pump/probe frequency range accounted for
 		size_t nk, nkTot; //number of selected k-points and original total k-points (1/nkTot is BZ integration weight)
 		bool ePhEnabled, spinorial; //whether e-ph and spinorial info are available
 		
-		constexpr size_t size() const
-		{	return sizeof(char)*markerLen + sizeof(double)*4 + sizeof(size_t)*2 + sizeof(bool)*2;
+		constexpr size_t nBytes() const
+		{	return sizeof(char)*markerLen + sizeof(double)*5 + sizeof(size_t)*2 + sizeof(bool)*2;
 		}
 		void write(MPIUtil::File fp, const MPIUtil* mpiUtil) const
 		{	mpiUtil->fwrite(marker, sizeof(char), markerLen, fp);
-			mpiUtil->fwrite(&dmuMin, sizeof(double), 4, fp);
+			mpiUtil->fwrite(&dmuMin, sizeof(double), 5, fp);
 			mpiUtil->fwrite(&nk, sizeof(size_t), 2, fp);
 			mpiUtil->fwrite(&ePhEnabled, sizeof(bool), 2, fp);
 		}
@@ -49,11 +49,11 @@ namespace Lindblad
 			char markerIn[8];
 			mpiUtil->fread(markerIn, sizeof(char), markerLen, fp);
 			if(strncmp(markerIn, marker, markerLen) != 0)
-			{	fprintf(stderr, "File format error: could not find LINDBLAD header.\n");
+			{	fprintf(stderr, "File format error: could not find LDBD header.\n");
 				mpiUtil->exit(1);
 			}
 			//Read data:
-			mpiUtil->fread(&dmuMin, sizeof(double), 4, fp);
+			mpiUtil->fread(&dmuMin, sizeof(double), 5, fp);
 			mpiUtil->fread(&nk, sizeof(size_t), 2, fp);
 			mpiUtil->fread(&ePhEnabled, sizeof(bool), 2, fp);
 		}
@@ -61,12 +61,12 @@ namespace Lindblad
 	
 	//! E-ph coupling to a specific k and for a phonon mode
 	struct GePhEntry
-	{	static constexpr const char* marker = "\n  GEPH\n";
+	{	static constexpr const char* marker = "GEPH";
 		size_t jk; //index of second k-point
 		double omegaPh; //phonon frequency
 		SparseMatrix G; //e-ph matrix elements
 		
-		size_t size() const
+		size_t nBytes() const
 		{	return sizeof(char)*markerLen + sizeof(size_t) + sizeof(double)
 				+ sizeof(size_t)+sizeof(SparseEntry)*G.size(); //storage for G.size() and then its entries
 		}
@@ -98,7 +98,7 @@ namespace Lindblad
 	
 	//! K-point header
 	struct Kpoint
-	{	static constexpr const char* marker = "\nKPOINT\n";
+	{	static constexpr const char* marker = "\nKPT";
 		vector3<> k; //k-point in reciprocal lattice coordinates
 		int nInner; //number of bands in the inner pump-active window
 		int nOuter; //number of bands in the outer probe-active window
@@ -107,19 +107,21 @@ namespace Lindblad
 		
 		diagMatrix E; //energies (dim: nOuter)
 		matrix P[3]; //momentum matrix elements (dim: nInner x nOuter each)
-		matrix S[3]; //spin matrix elements (dim: nInner x nOuter each, only if spinorial)
+		matrix S[3]; //spin matrix elements (dim: nInner x nInner each, only if spinorial)
 		std::vector<GePhEntry> GePh; //e-ph matrix elements (only if ePhEnabled)
 		
 		void setDataSize(const Header& h) //set dataSize based on remaining entries (call after initializing everything else and before write)
 		{	dataSize = nOuter*sizeof(double) //E
-				+ nInner*nOuter*sizeof(complex)*(h.spinorial ? 6 : 3); //P, and optionally S if spinorial
+				+ 3*nInner*nOuter*sizeof(complex); //P
+			if(h.spinorial)
+				dataSize += 3*nInner*nInner*sizeof(complex); //S
 			if(h.ePhEnabled)
 			{	dataSize += sizeof(size_t); //to store number of g
 				for(const GePhEntry& g: GePh)
-					dataSize += g.size();
+					dataSize += g.nBytes();
 			}
 		}
-		size_t size() const
+		size_t nBytes() const
 		{	return sizeof(char)*markerLen + sizeof(vector3<>) + sizeof(int)*3 + 
 				+ sizeof(size_t) + dataSize; //storage for dataSize and then the actual data (note: must call setDataSize beforehand)
 		}
@@ -147,7 +149,7 @@ namespace Lindblad
 			char markerIn[8];
 			mpiUtil->fread(markerIn, sizeof(char), markerLen, fp);
 			if(strncmp(markerIn, marker, markerLen) != 0)
-			{	fprintf(stderr, "File format error: could not find KPOINT header.\n");
+			{	fprintf(stderr, "File format error: could not find KPT header.\n");
 				mpiUtil->exit(1);
 			}
 			//Read data:
@@ -163,7 +165,7 @@ namespace Lindblad
 				}
 				if(h.spinorial)
 				{	for(int iDir=0; iDir<3; iDir++)
-					{	S[iDir] = zeroes(nInner, nOuter);
+					{	S[iDir] = zeroes(nInner, nInner);
 						mpiUtil->freadData(S[iDir], fp);
 					}
 				}

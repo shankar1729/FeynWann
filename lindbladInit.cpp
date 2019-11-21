@@ -40,7 +40,7 @@ struct LindbladInit
 	const size_t nkTot; //!< total k-points effectively used in BZ sampling
 	
 	const double dmuMin, dmuMax, Tmax;
-	const double pumpOmegaMax;
+	const double pumpOmegaMax, probeOmegaMax;
 	
 	const bool ePhEnabled; //!< whether e-ph coupling is enabled
 	const double ePhDelta; //!< Gaussian energy conservation width
@@ -50,10 +50,11 @@ struct LindbladInit
 	
 	
 	LindbladInit(FeynWann& fw, const std::vector<vector3<>>& k0, const vector3<int>& NkFine,
-		double dmuMin, double dmuMax, double Tmax, double pumpOmegaMax,
+		double dmuMin, double dmuMax, double Tmax, double pumpOmegaMax, double probeOmegaMax,
 		bool ePhEnabled, double ePhDelta)
 	: fw(fw), k0(k0), NkFine(NkFine), nkTot(fw.eCountPerOffset()*k0.size()),
-		dmuMin(dmuMin), dmuMax(dmuMax), Tmax(Tmax), pumpOmegaMax(pumpOmegaMax),
+		dmuMin(dmuMin), dmuMax(dmuMax), Tmax(Tmax),
+		pumpOmegaMax(pumpOmegaMax), probeOmegaMax(probeOmegaMax),
 		ePhEnabled(ePhEnabled), ePhDelta(ePhDelta)
 	{
 		//Initialize sampling parameters:
@@ -160,9 +161,9 @@ struct LindbladInit
 		}
 		return index;
 	}
-	inline void selectActive(const double*& Ebegin, const double*& Eend) //narrow pointer range to data within [Estart,Estop]
-	{	Ebegin = std::lower_bound(Ebegin, Eend, Estart);
-		Eend = &(*std::lower_bound(reverse(Eend), reverse(Ebegin), Estop, std::greater<double>()))+1;
+	inline void selectActive(const double*& Ebegin, const double*& Eend, double Elo, double Ehi) //narrow pointer range to data within [Estart,Estop]
+	{	Ebegin = std::lower_bound(Ebegin, Eend, Elo);
+		Eend = &(*std::lower_bound(reverse(Eend), reverse(Ebegin), Ehi, std::greater<double>()))+1;
 	}
 	inline void kpSelect(const FeynWann::StatePh& state)
 	{	const double omegaPhCut = 1e-6;
@@ -178,8 +179,8 @@ struct LindbladInit
 				const double *E1begin = E.data()+ik1*fw.nBands, *E1end = E1begin+fw.nBands;
 				const double *E2begin = E.data()+ik2*fw.nBands, *E2end = E2begin+fw.nBands;
 				//--- narrow to active energy ranges:
-				selectActive(E1begin, E1end);
-				selectActive(E2begin, E2end);
+				selectActive(E1begin, E1end, Estart, Estop);
+				selectActive(E2begin, E2end, Estart, Estop);
 				//--- check energy ranges:
 				bool Econserve = false;
 				for(const double* E1=E1begin; E1<E1end; E1++) //E1 in active range
@@ -256,6 +257,108 @@ struct LindbladInit
 		logPrintf("Number of partners per k-point:  min: %lu  max: %lu  mean: %.1lf\n\n", nPartnersMin, nPartnersMax, nkpairs*1./k.size());
 	}
 
+	//--------- Save data -------------
+	void saveData()
+	{
+		//Initialize and write header:
+		MPIUtil::File fp;
+		if(mpiGroup->isHead()) mpiGroupHead->fopenWrite(fp, "ldbd.dat"); //I/O collectively only from group heads
+		Lindblad::Header h;
+		h.dmuMin = dmuMin;
+		h.dmuMax = dmuMax;
+		h.Tmax = Tmax;
+		h.pumpOmegaMax = pumpOmegaMax;
+		h.probeOmegaMax = probeOmegaMax;
+		h.nk = k.size();
+		h.nkTot = nkTot;
+		h.ePhEnabled = ePhEnabled;
+		h.spinorial = (fw.nSpinor==2);
+		if(mpiWorld->isHead()) h.write(fp, mpiGroupHead);
+		size_t nBytesWritten = h.nBytes();
+		
+		//Make group index and count available on all processes of each group:
+		size_t iGroup, nGroups;
+		if(mpiGroup->isHead())
+		{	iGroup = mpiGroupHead->iProcess();
+			nGroups = mpiGroupHead->nProcesses();
+		}
+		mpiGroup->bcast(iGroup);
+		mpiGroup->bcast(nGroups);
+		
+		//Loop over k-points in parallel over process groups:
+		size_t nPasses = ceildiv(k.size(), nGroups);
+		for(size_t iPass=0; iPass<nPasses; iPass++)
+		{	size_t ik = iPass*nGroups + iGroup;
+			Lindblad::Kpoint kp;
+			if(ik < k.size())
+			{	kp.k = k[ik];
+				
+				//Determine energy ranges:
+				const double *Ebegin = E.data()+ik*fw.nBands, *Eend = Ebegin+fw.nBands;
+				//--- pump-active (inner) energy range:
+				const double *EinnerBegin = Ebegin, *EinnerEnd = Eend;
+				selectActive(EinnerBegin, EinnerEnd, Estart, Estop);
+				kp.nInner = EinnerEnd - EinnerBegin;
+				//--- probe-active (outer) energy range:
+				const double *EouterBegin = Ebegin, *EouterEnd = Eend;
+				selectActive(EouterBegin, EouterEnd,
+					(*EinnerBegin)-probeOmegaMax, //lowest occupied energy accessible from bottom of active window
+					(*(EinnerEnd-1))+probeOmegaMax);  //highest unoccupied energy accessible from top of active window
+				kp.nOuter = EouterEnd - EouterBegin;
+				kp.innerStart = EinnerBegin - EouterBegin;
+				int innerOffset = EinnerBegin - Ebegin; //offset from original bands to inner window
+				int outerOffset = EouterBegin - Ebegin; //offset from original bands to outer window
+				
+				//Calculate electronic state:
+				FeynWann::StateE ei;
+				fw.eCalc(kp.k, ei);
+				
+				//Save energy and matrix elements to kp:
+				if(mpiGroup->isHead())
+				{	//Energies:
+					kp.E.assign(EouterBegin, EouterEnd);
+					//Momenta:
+					for(int iDir=0; iDir<3; iDir++)
+						kp.P[iDir] = ei.v[iDir](innerOffset,innerOffset+kp.nInner, outerOffset,outerOffset+kp.nOuter);
+					//Spin:
+					if(h.spinorial)
+						for(int iDir=0; iDir<3; iDir++)
+							kp.S[iDir] = ei.S[iDir](innerOffset,innerOffset+kp.nInner, innerOffset,innerOffset+kp.nInner);
+				}
+				
+				//Electron-phonon matrix elements:
+				if(h.ePhEnabled)
+				{
+					//TODO
+					die("Testing.\n");
+				}
+			}
+			
+			//Synchronize write from group heads to make sure kpoints are written in order:
+			if(mpiGroup->isHead())
+			{
+				std::vector<size_t> nBytesPrev(nGroups+1); //number of bytes from previous k
+				nBytesPrev[0] = nBytesWritten;
+				for(size_t jGroup=0; jGroup<nGroups; jGroup++)
+				{	if(jGroup==iGroup)
+					{	nBytesPrev[iGroup+1] = nBytesPrev[iGroup];
+						if(ik<k.size())
+						{	kp.setDataSize(h);
+							nBytesPrev[iGroup+1] += kp.nBytes();
+						}
+					}
+					mpiGroupHead->bcast(nBytesPrev[jGroup+1], jGroup);
+				}
+				
+				if(ik<k.size())
+				{	mpiGroupHead->fseek(fp, nBytesPrev[iGroup], SEEK_SET);
+					kp.write(fp, mpiGroupHead, h);
+				}
+				nBytesWritten = nBytesPrev.back();
+			}
+		}
+	}
+	
 	//--------- Initialize -------------
 	/*
 	//Entry in e-ph coupling list below:
@@ -479,6 +582,7 @@ int main(int argc, char** argv)
 	const double Tmax = inputMap.get("Tmax") * Kelvin; //maximum temperature in Kelvin (ambient phonon T = initial electron T)
 	//--- pump
 	const double pumpOmegaMax = inputMap.get("pumpOmegaMax") * eV; //maximum pump frequency in eV
+	const double probeOmegaMax = inputMap.get("probeOmegaMax") * eV; //maximum probe frequency in eV
 	const string ePhMode = inputMap.getString("ePhMode"); //must be Off or DiagK (add FullK in future)
 	const bool ePhEnabled = (ePhMode != "Off");
 	const double ePhDelta = inputMap.get("ePhDelta") * eV; //energy conservation width for e-ph coupling
@@ -489,6 +593,7 @@ int main(int argc, char** argv)
 	logPrintf("dmuMax = %lg\n", dmuMax);
 	logPrintf("Tmax = %lg\n", Tmax);
 	logPrintf("pumpOmegaMax = %lg\n", pumpOmegaMax);
+	logPrintf("probeOmegaMax = %lg\n", probeOmegaMax);
 	logPrintf("ePhMode = %s\n", ePhMode.c_str());
 	logPrintf("ePhDelta = %lg\n", ePhDelta);
 	
@@ -530,15 +635,17 @@ int main(int argc, char** argv)
 	logPrintf("\n");
 	
 	//Create and initialize lindblad calculator:
-	LindbladInit lb(fw, k0, NkFine, dmuMin, dmuMax, Tmax, pumpOmegaMax, ePhEnabled, ePhDelta);
+	LindbladInit lb(fw, k0, NkFine, dmuMin, dmuMax, Tmax, pumpOmegaMax, probeOmegaMax, ePhEnabled, ePhDelta);
 	
 	//First pass (e only): select k-points
 	lb.kpointSelect();
 	
 	//Second pass (ph only): select k pairs
-	lb.kpairSelect();
+	if(ePhEnabled)
+		lb.kpairSelect();
 	
 	//Final pass: output electronic and e-ph quantities
+	lb.saveData();
 	
 	//Cleanup:
 	fw.free();
