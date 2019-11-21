@@ -160,6 +160,10 @@ struct LindbladInit
 		}
 		return index;
 	}
+	inline void selectActive(const double*& Ebegin, const double*& Eend) //narrow pointer range to data within [Estart,Estop]
+	{	Ebegin = std::lower_bound(Ebegin, Eend, Estart);
+		Eend = &(*std::lower_bound(reverse(Eend), reverse(Ebegin), Estop, std::greater<double>()))+1;
+	}
 	inline void kpSelect(const FeynWann::StatePh& state)
 	{	const double omegaPhCut = 1e-6;
 		//Find pairs of momentum conserving electron states with this q:
@@ -174,10 +178,8 @@ struct LindbladInit
 				const double *E1begin = E.data()+ik1*fw.nBands, *E1end = E1begin+fw.nBands;
 				const double *E2begin = E.data()+ik2*fw.nBands, *E2end = E2begin+fw.nBands;
 				//--- narrow to active energy ranges:
-				E1begin = std::lower_bound(E1begin, E1end, Estart);
-				E1end = &(*std::lower_bound(reverse(E1end), reverse(E1begin), Estop, std::greater<double>()))+1;
-				E2begin = std::lower_bound(E2begin, E2end, Estart);
-				E2end = &(*std::lower_bound(reverse(E2end), reverse(E2begin), Estop, std::greater<double>()))+1;
+				selectActive(E1begin, E1end);
+				selectActive(E2begin, E2end);
 				//--- check energy ranges:
 				bool Econserve = false;
 				for(const double* E1=E1begin; E1<E1end; E1++) //E1 in active range
