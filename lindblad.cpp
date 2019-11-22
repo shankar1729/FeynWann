@@ -418,9 +418,9 @@ struct Lindblad : public Integrator<DM1>
 	DM1 compute(double t, const DM1& rho)
 	{	static StopWatch watchPump("Lindblad::compute::Pump");
 		static StopWatch watchEph("Lindblad::compute::ePh");
-		/*
-		DM1 rhoDot(nkMine*noMine, zeroes(fw.nBands, fw.nBands));
-		matrix id = eye(fw.nBands); //identity used below repeatedly
+		DM1 rhoDot; rhoDot.reserve(nkMine);
+		for(const State& s: state)
+			rhoDot.push_back(zeroes(s.nInner, s.nInner));
 		//Pump contribution:
 		if(pumpEvolve)
 		{	watchPump.start();
@@ -429,24 +429,22 @@ struct Lindblad : public Integrator<DM1>
 			matrix* rhoDotPtr = rhoDot.data();
 			const matrix* rhoPtr = rho.data();
 			const State* sPtr = state.data();
-			for(size_t o=oStart; o<oStop; o++)
-				for(size_t ik=ikStart; ik<ikStop; ik++)
-				{	const matrix& rhoCur = *(rhoPtr);
-					const matrix rhoBar = id - rhoCur; //1-rho
-					//Compute and apply perturbation:
-					matrix P = sPtr->pumpPD; //P-
-					matrix Pdag = dagger(P); //P+
-					for(int s=-1; s<=+1; s+=2)
-					{	*(rhoDotPtr) += prefac * (rhoBar*P*rhoCur*Pdag - Pdag*rhoBar*P*rhoCur); //+ h.c. added together below
-						std::swap(P, Pdag); //P- <--> P+
-					}
-					//Advance pointers for next k:
-					rhoDotPtr++;
-					rhoPtr++;
-					sPtr++;
+			for(size_t ikMine=0; ikMine<nkMine; ikMine++)
+			{	const State& s = *(sPtr++);
+				const matrix& rhoCur = *(rhoPtr++);
+				const matrix rhoBar = eye(s.nInner) - rhoCur; //1-rho
+				matrix& rhoDotCur = *(rhoDotPtr++);
+				//Compute and apply perturbation:
+				matrix P = s.pumpPD; //P-
+				matrix Pdag = dagger(P); //P+
+				for(int s=-1; s<=+1; s+=2)
+				{	rhoDotCur += prefac * (rhoBar*P*rhoCur*Pdag - Pdag*rhoBar*P*rhoCur); //+ h.c. added together below
+					std::swap(P, Pdag); //P- <--> P+
 				}
+			}
 			watchPump.stop();
 		}
+		/*
 		//E-ph relaxation contribution:
 		if(ePhEnabled)
 		{	watchEph.start();
@@ -491,6 +489,7 @@ struct Lindblad : public Integrator<DM1>
 				}
 			watchEph.stop();
 		}
+		*/
 		
 		//Add + h.c. (omited everywhere above):
 		for(matrix& m: rhoDot)
@@ -517,8 +516,6 @@ struct Lindblad : public Integrator<DM1>
 		else logPrintf("(t[fs]: %lg) ", t/fs);
 		logFlush();
 		return rhoDot;
-		*/
-		return DM1(); //HACK
 	}
 	
 	//Print / dump quantities at each checkpointed step
