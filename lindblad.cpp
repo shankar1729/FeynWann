@@ -312,31 +312,36 @@ struct Lindblad : public Integrator<DM1>
 			}
 			watchPump.stop();
 		}
-		/*
+		
 		//E-ph relaxation contribution:
 		if(ePhEnabled)
 		{	watchEph.start();
 			const double prefac = M_PI/nkTot;
-			//Loop over second k index by going over all offsets and ik
+			//Loop over second k:
 			int iProc = mpiWorld->iProcess(); //current process
-			for(size_t o2=0; o2<k0.size(); o2++)
-				for(size_t ik2=0; ik2<nkOffset; ik2++)
-				{	size_t index2 = ik2 + o2*nkOffset; //global index2
-					int jProc = whoseIndex[index2]; //who owns index2
-					//Make current rho2 available on all processes:
-					matrix rho2 = (jProc==iProc)
-						? rho[ik2-ikStart+(o2-oStart)*nkMine] //local index2, only on process that owns it
-						: zeroes(fw.nBands, fw.nBands);
-					mpiWorld->bcastData(rho2, jProc);
-					const matrix rho2bar = id - rho2;
-					matrix rho2dot = zeroes(fw.nBands, fw.nBands); //contributions to remote derivative
-					//Loop over rho1 local to each process:
-					for(size_t index1=0; index1<rho.size(); index1++) //local index1
-					{	matrix& rho1dot = rhoDot[index1];
-						const matrix& rho1 = rho[index1];
-						//const matrix rho1bar = id - rho1;
-						for(const GePhEntry& g: state[index1].GePh[index2])
-						{	//Phonon occupation factor:
+			for(size_t ik2=0; ik2<nk; ik2++)
+			{	int jProc = whose(ik2); //who owns index2
+				//Make current rho2 available on all processes:
+				size_t nInner2, ik2mine; 
+				matrix rho2;
+				if(jProc==iProc)
+				{	ik2mine = ik2-ikStart;
+					rho2 = rho[ik2mine];
+					nInner2 = state[ik2mine].nInner;
+				}
+				mpiWorld->bcast(nInner2, jProc);
+				if(jProc!=iProc) rho2 = zeroes(nInner2, nInner2);
+				mpiWorld->bcastData(rho2, jProc);
+				const matrix rho2bar = eye(nInner2) - rho2;
+				matrix rho2dot = zeroes(nInner2, nInner2); //contributions to remote derivative
+				//Loop over rho1 local to each process:
+				for(size_t ik1mine=0; ik1mine<nkMine; ik1mine++)
+				{	matrix& rho1dot = rhoDot[ik1mine];
+					const matrix& rho1 = rho[ik1mine];
+					const State& s = state[ik1mine];
+					//const matrix rho1bar = eye(s.nInner) - rho1;
+					for(const LindbladFile::GePhEntry& g: s.GePh) if(g.jk == ik2)
+					{	//Phonon occupation factor:
 // 							// Old dense implementation with temperature 
 // 							double omegaPhByT = g.omegaPh/T;
 // 							double nPh = bose(std::max(1e-3, omegaPhByT));
@@ -346,18 +351,17 @@ struct Lindblad : public Integrator<DM1>
 // 							matrix D = rho2 * dagger(g.G) * (prefac*nPh);
 // 							rho1dot += C*D - B*A; //+ h.c. added together below
 // 							rho2dot += A*B - D*C; //+ h.c. added together below
-							//Sparse implementation currently at T=0:
-							rho1dot -= prefac * (rho1 * SMSdag(g.G, rho2bar));
-							rho2dot += prefac * (rho2bar * SdagMS(g.G, rho1));
-						}
+						//Sparse implementation currently at T=0:
+						rho1dot -= prefac * (rho1 * SMSdag(g.G, rho2bar));
+						rho2dot += prefac * (rho2bar * SdagMS(g.G, rho1));
 					}
-					//Collect remote contributions:
-					mpiWorld->allReduceData(rho2dot, MPIUtil::ReduceSum);
-					if(jProc==iProc) rhoDot[ik2-ikStart+(o2-oStart)*nkMine] += rho2dot; //local index2, only on process that owns it
 				}
+				//Collect remote contributions:
+				mpiWorld->allReduceData(rho2dot, MPIUtil::ReduceSum);
+				if(jProc==iProc) rhoDot[ik2mine] += rho2dot;
+			}
 			watchEph.stop();
 		}
-		*/
 		
 		//Add + h.c. (omited everywhere above):
 		for(matrix& m: rhoDot)
