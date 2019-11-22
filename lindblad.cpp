@@ -339,21 +339,16 @@ struct Lindblad : public Integrator<DM1>
 				{	matrix& rho1dot = rhoDot[ik1mine];
 					const matrix& rho1 = rho[ik1mine];
 					const State& s = state[ik1mine];
-					//const matrix rho1bar = eye(s.nInner) - rho1;
-					for(const LindbladFile::GePhEntry& g: s.GePh) if(g.jk == ik2)
+					const matrix rho1bar = eye(s.nInner) - rho1;
+					for(const LindbladFile::GePhEntry& g: s.GePh) if(g.jk == ik2) //TODO: smarter selection of relevant ik2
 					{	//Phonon occupation factor:
-// 							// Old dense implementation with temperature 
-// 							double omegaPhByT = g.omegaPh/T;
-// 							double nPh = bose(std::max(1e-3, omegaPhByT));
-// 							matrix A = dagger(g.G) * rho1 * (prefac*(nPh+1));
-// 							matrix B = g.G * rho2bar;
-// 							matrix C = rho1bar * g.G;
-// 							matrix D = rho2 * dagger(g.G) * (prefac*nPh);
-// 							rho1dot += C*D - B*A; //+ h.c. added together below
-// 							rho2dot += A*B - D*C; //+ h.c. added together below
-						//Sparse implementation currently at T=0:
-						rho1dot -= prefac * (rho1 * SMSdag(g.G, rho2bar));
-						rho2dot += prefac * (rho2bar * SdagMS(g.G, rho1));
+						double omegaPhByT = g.omegaPh/T;
+						double nPh = bose(std::max(1e-3, omegaPhByT));
+						rho1dot += (prefac*nPh) * (rho1bar * SMSdag(g.G, rho2)) - (SMSdag(g.G, rho2bar) * rho1) * (prefac*(nPh+1)); //+ h.c. added together below
+						rho2dot += (prefac*(nPh+1)) * (SdagMS(g.G, rho1) * rho2bar) - (rho2 * SdagMS(g.G, rho1bar)) * (prefac*nPh); //+ h.c. added together below
+						//T=0:
+// 						rho1dot -= prefac * (rho1 * SMSdag(g.G, rho2bar));
+// 						rho2dot += prefac * (rho2bar * SdagMS(g.G, rho1));
 					}
 				}
 				//Collect remote contributions:
