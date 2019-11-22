@@ -22,11 +22,12 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 #include <core/scalar.h>
 #include <core/Random.h>
 #include <core/string.h>
+#include <commands/command.h>
 #include "FeynWann.h"
 #include "Histogram.h"
 #include "InputMap.h"
 #include "Integrator.h"
-#include "SparseMatrix.h"
+#include "LindbladFile.h"
 #include <core/Units.h>
 
 inline matrix dot(const matrix* P, vector3<complex> pol)
@@ -57,41 +58,74 @@ DM1 clone(const DM1& x) { return x; }
 //Lindblad initialization, time evolution and measurement operators using FeynWann callback
 struct Lindblad : public Integrator<DM1>
 {	
-	FeynWann& fw;
-	const std::vector<vector3<>>& k0; //!< k-point offsets
-	const size_t oStart, oStop, noMine; //!< range of offsets handled by this process group
-	const size_t ikStart, ikStop, nkMine; //!< range of k-points within offset handled by this process
-	const size_t nkOffset, nkTot; //!< numbe rof k-points per offset, and total k-points effectively used in BZ sampling
-	
 	int stepID; //current time and reporting step number
 	DM1 rho; //!< current density matrices (indexed by offset and ik)
 	
 	const double dmu, T, invT; //!< Fermi level position relative to neutral value / VBM, and temperature
 	const double pumpOmega, pumpA0, pumpTau; const vector3<complex> pumpPol; const bool pumpEvolve; //!< pump parameters
-	const double omegaMin, domega; const int nomega; //!< probe frequency grid
+	const double omegaMin, domega, omegaMax; const int nomega; //!< probe frequency grid
 	const double tau; const std::vector<vector3<complex>> pol; //!< probe parameters
 	const double dE; //!< energy resolution for distribution functions
 	
 	const bool ePhEnabled; //!< whether e-ph coupling is enabled
-	const double ePhDelta; //!< Gaussian energy conservation width
 	const bool verbose; //!< whether to print more detailed stats during evolution
+	bool spinorial; //!< whether spin is available
 	
-	Lindblad(FeynWann& fw, const std::vector<vector3<>>& k0, int oStart, int oStop,
-		double dmu, double T, double pumpOmega, double pumpA0, double pumpTau, vector3<complex> pumpPol, bool pumpEvolve,
+	size_t nk, nkTot; //!< number of selected k-points overall and original total k-points effectively used in BZ sampling
+	size_t ikStart, ikStop, nkMine; //!< range and number of selected k-points on this process
+	std::vector<LindbladFile::Kpoint> state; //!< all information read from lindbladInit output (e and e-ph properties)
+	
+	Lindblad(double dmu, double T, double pumpOmega, double pumpA0, double pumpTau, vector3<complex> pumpPol, bool pumpEvolve,
 		double omegaMin, double omegaMax, double domega, double tau, std::vector<vector3<complex>> pol, double dE,
-		bool ePhEnabled, double ePhDelta, bool verbose)
-	: fw(fw), k0(k0), oStart(oStart), oStop(oStop), noMine(oStop-oStart),
-		ikStart(fw.Hw->ikStart), ikStop(ikStart+fw.Hw->nk), nkMine(ikStop-ikStart),
-		nkOffset(fw.eCountPerOffset()), nkTot(nkOffset*k0.size()), stepID(0),
-		rho(noMine * nkMine), dmu(dmu), T(T), invT(1./T),
+		bool ePhEnabled, bool verbose)
+	: stepID(0),
+		dmu(dmu), T(T), invT(1./T),
 		pumpOmega(pumpOmega), pumpA0(pumpA0), pumpTau(pumpTau), pumpPol(pumpPol), pumpEvolve(pumpEvolve),
-		omegaMin(omegaMin), domega(domega), nomega(1+int(round((omegaMax-omegaMin)/domega))),
-		tau(tau), pol(pol), dE(dE), ePhEnabled(ePhEnabled), ePhDelta(ePhDelta), verbose(verbose)
+		omegaMin(omegaMin), domega(domega), omegaMax(omegaMax), nomega(1+int(round((omegaMax-omegaMin)/domega))),
+		tau(tau), pol(pol), dE(dE), ePhEnabled(ePhEnabled), verbose(verbose)
 	{
 	}
 	
 	//--------- Initialize -------------
+	void initialize()
+	{
+		//Read header and check parameters:
+		MPIUtil::File fp;
+		mpiWorld->fopenRead(fp, "ldbd.dat");
+		LindbladFile::Header h; h.read(fp, mpiWorld);
+		if(dmu<h.dmuMin or dmu>h.dmuMax)
+			die("dmu = %lg eV is out of range [ %lg , %lg ] eV specified in lindbladInit.\n", dmu/eV, h.dmuMin/eV, h.dmuMax/eV);
+		if(T > h.Tmax)
+			die("T = %lg K is larger than Tmax = %lg K specified in lindbladInit.\n", T/Kelvin, h.Tmax/Kelvin);
+		if(pumpOmega > h.pumpOmegaMax)
+			die("pumpOmega = %lg eV is larger than pumpOmegaMax = %lg eV specified in lindbladInit.\n", pumpOmega/eV, h.pumpOmegaMax/eV);
+		if(omegaMax > h.probeOmegaMax)
+			die("omegaMax = %lg eV is larger than probeOmegaMax = %lg eV specified in lindbladInit.\n", omegaMax/eV, h.probeOmegaMax/eV);
+		nk = h.nk;
+		nkTot = h.nkTot;
+		spinorial = h.spinorial;
+		if(ePhEnabled != h.ePhEnabled)
+			die("ePhEnabled = %s differs from the mode specified in lindbladInit.\n", boolMap.getString(ePhEnabled));
+		
+		//Divide k-points between processes:
+		TaskDivision(nk, mpiWorld).myRange(ikStart, ikStop);
+		nkMine = ikStop-ikStart;
+		state.resize(nkMine);
+		
+		//Read k-point info:
+		for(size_t ik=0; ik<ikStart; ik++)
+		{	LindbladFile::Kpoint unused;
+			logPrintf("Reading ik = %lu on process %d\n", ik, mpiWorld->iProcess()); logFlush();
+			unused.read(fp, mpiWorld, h, false);
+		}
+		for(size_t ikMine=0; ikMine<nkMine; ikMine++)
+		{	logPrintf("Reading ik = %lu on process %d\n", ikStart+ikMine, mpiWorld->iProcess()); logFlush();
+			state[ikMine].read(fp, mpiWorld, h, true);
+		}
+		mpiWorld->fclose(fp);
+	}
 	
+	/*
 	//Entry in e-ph coupling list below:
 	struct GePhEntry
 	{	SparseMatrix G; //coupling matrix to partner
@@ -314,7 +348,7 @@ struct Lindblad : public Integrator<DM1>
 		}
 		logPrintf("\n");
 	}
-	
+	*/
 	
 	//Calculate probe response at current rho (update this->imEps)
 	diagMatrix calcImEps() const
@@ -323,6 +357,7 @@ struct Lindblad : public Integrator<DM1>
 		if(nImEps==0) return diagMatrix(); //no probe specified
 		watch.start();
 		diagMatrix imEps(nImEps);
+		/*
 		//Collect contributions from each k at this process:
 		const matrix* rhoPtr = rho.data();
 		const State* sPtr = state.data();
@@ -364,6 +399,7 @@ struct Lindblad : public Integrator<DM1>
 			}
 		//Accumulate contributions from all processes on head:
 		mpiWorld->reduceData(imEps, MPIUtil::ReduceSum);
+		*/
 		watch.stop();
 		return imEps;
 	}
@@ -390,6 +426,7 @@ struct Lindblad : public Integrator<DM1>
 	void applyPump()
 	{	static StopWatch watch("Lindblad::applyPump"); 
 		if(pumpEvolve) return; //only use this function when perturbing instantly
+		/*
 		watch.start();
 		matrix* rhoPtr = rho.data();
 		const State* sPtr = state.data();
@@ -412,12 +449,14 @@ struct Lindblad : public Integrator<DM1>
 				sPtr++;
 			}
 		watch.stop();
+		*/
 	}
 	
 	//Time evolution operator returning drho/dt
 	DM1 compute(double t, const DM1& rho)
 	{	static StopWatch watchPump("Lindblad::compute::Pump");
 		static StopWatch watchEph("Lindblad::compute::ePh");
+		/*
 		DM1 rhoDot(nkMine*noMine, zeroes(fw.nBands, fw.nBands));
 		matrix id = eye(fw.nBands); //identity used below repeatedly
 		//Pump contribution:
@@ -470,16 +509,15 @@ struct Lindblad : public Integrator<DM1>
 						//const matrix rho1bar = id - rho1;
 						for(const GePhEntry& g: state[index1].GePh[index2])
 						{	//Phonon occupation factor:
-							/* Old dense implementation with temperature 
-							double omegaPhByT = g.omegaPh/T;
-							double nPh = bose(std::max(1e-3, omegaPhByT));
-							matrix A = dagger(g.G) * rho1 * (prefac*(nPh+1));
-							matrix B = g.G * rho2bar;
-							matrix C = rho1bar * g.G;
-							matrix D = rho2 * dagger(g.G) * (prefac*nPh);
-							rho1dot += C*D - B*A; //+ h.c. added together below
-							rho2dot += A*B - D*C; //+ h.c. added together below
-							*/
+// 							// Old dense implementation with temperature 
+// 							double omegaPhByT = g.omegaPh/T;
+// 							double nPh = bose(std::max(1e-3, omegaPhByT));
+// 							matrix A = dagger(g.G) * rho1 * (prefac*(nPh+1));
+// 							matrix B = g.G * rho2bar;
+// 							matrix C = rho1bar * g.G;
+// 							matrix D = rho2 * dagger(g.G) * (prefac*nPh);
+// 							rho1dot += C*D - B*A; //+ h.c. added together below
+// 							rho2dot += A*B - D*C; //+ h.c. added together below
 							//Sparse implementation currently at T=0:
 							rho1dot -= prefac * (rho1 * SMSdag(g.G, rho2bar));
 							rho2dot += prefac * (rho2bar * SdagMS(g.G, rho1));
@@ -517,12 +555,15 @@ struct Lindblad : public Integrator<DM1>
 		else logPrintf("(t[fs]: %lg) ", t/fs);
 		logFlush();
 		return rhoDot;
+		*/
+		return DM1(); //HACK
 	}
 	
 	//Print / dump quantities at each checkpointed step
 	void report(double t, const DM1& rho) const
 	{	static StopWatch watch("Lindblad::report"); watch.start();
 		ostringstream ossID; ossID << stepID;
+		/*
 		//Compute total energy and distributions:
 		int nDist = fw.fwp.needSpin ? 4 : 1; //number distribution only, or also spin distribution
 		std::vector<Histogram> dist(nDist, Histogram(Emin, dE, Emax));
@@ -587,6 +628,7 @@ struct Lindblad : public Integrator<DM1>
 				ofs << '\n';
 			}
 		}
+		*/
 		watch.stop();
 		//Probe responses if present:
 		diagMatrix imEps = calcImEps();
@@ -608,12 +650,6 @@ int main(int argc, char** argv)
 
 	//Get the system parameters:
 	InputMap inputMap(ip.inputFilename);
-	//--- kpoints
-	const int NkMultAll = int(round(inputMap.get("NkMult"))); //increase in number of k-points for phonon mesh
-	vector3<int> NkMult;
-	NkMult[0] = inputMap.get("NkxMult", NkMultAll); //override increase in x direction
-	NkMult[1] = inputMap.get("NkyMult", NkMultAll); //override increase in y direction
-	NkMult[2] = inputMap.get("NkzMult", NkMultAll); //override increase in z direction
 	//--- doping / temperature
 	const double dmu = inputMap.get("dmu", 0.) * eV; //optional: shift in fermi level from neutral value / VBM in eV (default: 0)
 	const double T = inputMap.get("T") * Kelvin; //temperature in Kelvin (ambient phonon T = initial electron T)
@@ -650,14 +686,12 @@ int main(int argc, char** argv)
 	if(ePhMode!="Off" and ePhMode!="DiagK")
 		die("\nePhMode must be 'Off' or 'DiagK'\n");
 	const bool ePhEnabled = (ePhMode != "Off");
-	const double ePhDelta = inputMap.get("ePhDelta") * eV; //energy conservation width for e-ph coupling
 	const string verboseMode = inputMap.getString("verbose"); //must be yes or no
 	if(verboseMode!="yes" and verboseMode!="no")
 		die("\nverboseMode must be 'yes' or 'no'\n");
 	const bool verbose = (verboseMode=="yes");
 	
 	logPrintf("\nInputs after conversion to atomic units:\n");
-	logPrintf("NkMult = "); NkMult.print(globalLog, " %d ");
 	logPrintf("dmu = %lg\n", dmu);
 	logPrintf("T = %lg\n", T);
 	logPrintf("pumpMode = %s\n", pumpMode.c_str());
@@ -677,57 +711,19 @@ int main(int argc, char** argv)
 	logPrintf("dt = %lg\n", dt);
 	logPrintf("tStop = %lg\n", tStop);
 	logPrintf("ePhMode = %s\n", ePhMode.c_str());
-	logPrintf("ePhDelta = %lg\n", ePhDelta);
 	logPrintf("verbose = %s\n", verboseMode.c_str());
-	
-	//Initialize FeynWann:
-	FeynWannParams fwp;
-	fwp.needVelocity = true;
-	fwp.needSpin = true;
-	fwp.needPhonons = ePhEnabled;
-	FeynWann fw(fwp);
-	
-	//Construct mesh of k-offsets:
-	std::vector<vector3<>> k0;
-	vector3<int> NkFine;
-	for(int iDir=0; iDir<3; iDir++)
-	{	if(fw.isTruncated[iDir] && NkMult[iDir]!=1)
-		{	logPrintf("Setting NkMult = 1 along truncated direction %d.\n", iDir+1);
-			NkMult[iDir] = 1; //no multiplication in truncated directions
-		}
-		NkFine[iDir] = fw.kfold[iDir] * NkMult[iDir];
-	}
-	matrix3<> NkFineInv = inv(Diag(vector3<>(NkFine)));
-	vector3<int> ikMult;
-	for(ikMult[0]=0; ikMult[0]<NkMult[0]; ikMult[0]++)
-	for(ikMult[1]=0; ikMult[1]<NkMult[1]; ikMult[1]++)
-	for(ikMult[2]=0; ikMult[2]<NkMult[2]; ikMult[2]++)
-		k0.push_back(NkFineInv * ikMult);
-	logPrintf("Effective interpolated k-mesh dimensions: ");
-	NkFine.print(globalLog, " %d ");
-	size_t nOffsets = k0.size();
-	size_t nKeff = nOffsets * fw.eCountPerOffset();
-	logPrintf("Effectively sampled %s: %lu\n", "nKpts", nKeff);
 	
 	if(ip.dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
-		fw.free();
 		FeynWann::finalize();
 		return 0;
 	}
 	logPrintf("\n");
 	
-	//Initialize sampling parameters:
-	int oStart=0, oStop=0;
-	if(mpiGroup->isHead())
-		TaskDivision(nOffsets, mpiGroupHead).myRange(oStart, oStop);
-	mpiGroup->bcast(oStart);
-	mpiGroup->bcast(oStop);
-	
 	//Create and initialize lindblad calculator:
-	Lindblad lb(fw, k0, oStart, oStop, dmu, T,
+	Lindblad lb(dmu, T,
 		pumpOmega, pumpA0, pumpTau, pumpPol, (pumpMode=="Evolve"),
-		omegaMin, omegaMax, domega, tau, pol, dE, ePhEnabled, ePhDelta, verbose);
+		omegaMin, omegaMax, domega, tau, pol, dE, ePhEnabled, verbose);
 	lb.initialize();
 	logPrintf("Initialization completed successfully at t[s]: %9.2lf\n\n", clock_sec());
 	logFlush();
@@ -755,7 +751,6 @@ int main(int argc, char** argv)
 	}
 	
 	//Cleanup:
-	fw.free();
 	FeynWann::finalize();
 	return 0;
 }

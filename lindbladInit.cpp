@@ -26,7 +26,7 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 #include "FeynWann.h"
 #include "Histogram.h"
 #include "InputMap.h"
-#include "lindblad.h"
+#include "LindbladFile.h"
 
 //Reverse iterator for pointers:
 template<class T> constexpr std::reverse_iterator<T*> reverse(T* i) { return std::reverse_iterator<T*>(i); }
@@ -263,7 +263,7 @@ struct LindbladInit
 		//Initialize and write header:
 		MPIUtil::File fp;
 		if(mpiGroup->isHead()) mpiGroupHead->fopenWrite(fp, "ldbd.dat"); //I/O collectively only from group heads
-		Lindblad::Header h;
+		LindbladFile::Header h;
 		h.dmuMin = dmuMin;
 		h.dmuMax = dmuMax;
 		h.Tmax = Tmax;
@@ -289,7 +289,7 @@ struct LindbladInit
 		size_t nPasses = ceildiv(k.size(), nGroups);
 		for(size_t iPass=0; iPass<nPasses; iPass++)
 		{	size_t ik = iPass*nGroups + iGroup;
-			Lindblad::Kpoint kp;
+			LindbladFile::Kpoint kp;
 			if(ik < k.size())
 			{	kp.k = k[ik];
 				
@@ -357,6 +357,7 @@ struct LindbladInit
 				nBytesWritten = nBytesPrev.back();
 			}
 		}
+		if(mpiGroup->isHead()) mpiGroupHead->fclose(fp);
 	}
 	
 	//--------- Initialize -------------

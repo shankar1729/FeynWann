@@ -17,14 +17,14 @@ You should have received a copy of the GNU General Public License
 along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 -------------------------------------------------------------------*/
 
-#ifndef FEYNWANN_LINDBLAD_H
-#define FEYNWANN_LINDBLAD_H
+#ifndef FEYNWANN_LINDBLADFILE_H
+#define FEYNWANN_LINDBLADFILE_H
 
 #include <core/MPIUtil.h>
 #include "SparseMatrix.h"
 
 //! Structures stored into sparse lindblad files
-namespace Lindblad
+namespace LindbladFile
 {
 	static const size_t markerLen = 4; //Length of section markers in file
 	
@@ -149,7 +149,7 @@ namespace Lindblad
 			char markerIn[8];
 			mpiUtil->fread(markerIn, sizeof(char), markerLen, fp);
 			if(strncmp(markerIn, marker, markerLen) != 0)
-			{	fprintf(stderr, "File format error: could not find KPT header.\n");
+			{	fprintf(stderr, "File format error: could not find KPT header (%s).\n", markerIn);
 				mpiUtil->exit(1);
 			}
 			//Read data:
@@ -184,4 +184,4 @@ namespace Lindblad
 	};
 }
 
-#endif //FEYNWANN_LINDBLAD_H
+#endif //FEYNWANN_LINDBLADFILE_H
