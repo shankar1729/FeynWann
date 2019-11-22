@@ -105,9 +105,11 @@ namespace LindbladFile
 		int innerStart; //start of inner window relative to outer window
 		
 		diagMatrix E; //energies (dim: nOuter)
-		matrix P[3]; //momentum matrix elements (dim: nInner x nOuter each)
+		std::vector<matrix> P; //momentum matrix elements (dim: nInner x nOuter for each Cartesian direction (later converted to probe polarization))
 		matrix S[3]; //spin matrix elements (dim: nInner x nInner each, only if spinorial)
 		std::vector<GePhEntry> GePh; //e-ph matrix elements (only if ePhEnabled)
+		
+		Kpoint() : P(3) {}
 		
 		size_t nBytes(const Header& h) const
 		{	size_t dataSize = sizeof(char)*markerLen + sizeof(vector3<>) + sizeof(int)*3

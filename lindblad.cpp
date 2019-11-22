@@ -73,7 +73,14 @@ struct Lindblad : public Integrator<DM1>
 	
 	size_t nk, nkTot; //!< number of selected k-points overall and original total k-points effectively used in BZ sampling
 	size_t ikStart, ikStop, nkMine; //!< range and number of selected k-points on this process
-	std::vector<LindbladFile::Kpoint> state; //!< all information read from lindbladInit output (e and e-ph properties)
+
+	struct State : LindbladFile::Kpoint
+	{	int innerStop; //end of active inner window range (relative to outer window)
+		diagMatrix rho0; //equilibrium / initial density matrix (diagonal)
+		matrix pumpPD; //P matrix elements at pump polarization x energy conservation delta (D), but without A0 and time factor
+	};
+	std::vector<State> state; //!< all information read from lindbladInit output (e and e-ph properties) + extra local variables above
+	double Emin, Emax; //!< energy range of active space across all k (for spin and number density output)
 	
 	Lindblad(double dmu, double T, double pumpOmega, double pumpA0, double pumpTau, vector3<complex> pumpPol, bool pumpEvolve,
 		double omegaMin, double omegaMax, double domega, double tau, std::vector<vector3<complex>> pol, double dE,
@@ -82,9 +89,11 @@ struct Lindblad : public Integrator<DM1>
 		dmu(dmu), T(T), invT(1./T),
 		pumpOmega(pumpOmega), pumpA0(pumpA0), pumpTau(pumpTau), pumpPol(pumpPol), pumpEvolve(pumpEvolve),
 		omegaMin(omegaMin), domega(domega), omegaMax(omegaMax), nomega(1+int(round((omegaMax-omegaMin)/domega))),
-		tau(tau), pol(pol), dE(dE), ePhEnabled(ePhEnabled), verbose(verbose)
+		tau(tau), pol(pol), dE(dE), ePhEnabled(ePhEnabled), verbose(verbose),
+		Emin(+DBL_MAX), Emax(-DBL_MAX)
 	{
 	}
+	
 	
 	//--------- Initialize -------------
 	void initialize()
@@ -115,12 +124,49 @@ struct Lindblad : public Integrator<DM1>
 		TaskDivision(nk, mpiWorld).myRange(ikStart, ikStop);
 		nkMine = ikStop-ikStart;
 		state.resize(nkMine);
+		rho.resize(nkMine);
 		
-		//Read k-point info:
+		//Read k-point info and initialize states:
 		mpiWorld->fseek(fp, byteOffsets[ikStart], SEEK_SET);
 		for(size_t ikMine=0; ikMine<nkMine; ikMine++)
-			state[ikMine].read(fp, mpiWorld, h);
+		{	State& s = state[ikMine];
+			
+			//Read base info from LindbladFile:
+			((LindbladFile::Kpoint&)s).read(fp, mpiWorld, h);
+			
+			//Initialize extra quantities in state:
+			s.innerStop = s.innerStart + s.nInner;
+			//--- Active energy range:
+			Emin = std::min(Emin, s.E[s.innerStart]);
+			Emax = std::max(Emax, s.E[s.innerStop-1]);
+			//--- Probe matrix elements (without energy conservation)
+			std::vector<matrix> Ppol; Ppol.reserve(pol.size());
+			for(const vector3<complex>& pol_i: pol)
+				Ppol.push_back(dot(s.P.data(), pol_i));
+			//--- Pump matrix elements
+			s.pumpPD = dot(s.P.data(), pumpPol)(0,s.nInner, s.innerStart,s.innerStop); //restrict to inner active
+			double normFac = sqrt(pumpTau/sqrt(M_PI));
+			complex* PDdata = s.pumpPD.data();
+			for(int b2=s.innerStart; b2<s.innerStop; b2++)
+				for(int b1=s.innerStart; b1<s.innerStop; b1++)
+				{	//Multiply energy conservation:
+					double tauDeltaE = pumpTau*(s.E[b1] - s.E[b2] - pumpOmega);
+					*(PDdata++) *= normFac * exp(-0.5*tauDeltaE*tauDeltaE);
+				}
+			
+			//Set rho to initial occupations:
+			s.rho0.resize(s.nInner);
+			for(int b=0; b<s.nInner; b++)
+				s.rho0[b] = fermi((s.E[b+s.innerStart]-dmu)*invT);
+			rho[ikMine] = s.rho0;
+		}
 		mpiWorld->fclose(fp);
+		
+		//Synchronize energy range:
+		mpiWorld->allReduce(Emin, MPIUtil::ReduceMin);
+		mpiWorld->allReduce(Emax, MPIUtil::ReduceMax);
+		logPrintf("Electron energy grid from %lg eV to %lg eV with spacing %lg eV.\n", Emin/eV, Emax/eV, dE/eV);
+		
 	}
 	
 	/*
@@ -164,58 +210,7 @@ struct Lindblad : public Integrator<DM1>
 			iss.read((char*)&g.omegaPh, sizeof(double));
 		}
 	}
-	
-	//Cache required properties per state
-	struct State
-	{	diagMatrix E; //energy eigenvalues (i.e. H0)
-		diagMatrix rho0; //equilibrium / initial density matrix (diagonal)
-		std::vector<matrix> P; //P matrix elements for each probe polarization (energy conservation delta (D) not included)
-		std::vector<matrix> S; //spin matrix elements (if available)
-		matrix pumpPD; //P matrix elements at pump polarization x energy conservation delta (D), but without A0 and time factor
-		GePhSet GePh; //list of e-ph partners
-	};
-	std::vector<State> state;
-	double Emin, Emax; //range of energies in grid
-	
-	inline void initializeE(const FeynWann::StateE& stateE, int o)
-	{	//Identify destination for results:
-		size_t index = stateE.ik-ikStart + nkMine*(o-oStart);
-		State& s = state[index];
-		
-		//Cache required properties to state:
-		//--- Energies
-		s.E = stateE.E;
-		Emin = std::min(Emin, s.E.front());
-		Emax = std::max(Emax, s.E.back());
-		//--- Probe matrix elements (without energy conservation)
-		s.P.clear(); s.P.reserve(pol.size());
-		for(const vector3<complex>& pol_i: pol)
-			s.P.push_back(dot(stateE.v, pol_i));
-		//--- Pump matrix elements
-		s.pumpPD = dot(stateE.v, pumpPol);
-		double normFac = sqrt(pumpTau/sqrt(M_PI));
-		complex* PDdata = s.pumpPD.data();
-		for(int b2=0; b2<fw.nBands; b2++)
-			for(int b1=0; b1<fw.nBands; b1++)
-			{	//Multiply energy conservation:
-				double tauDeltaE = pumpTau*(s.E[b1] - s.E[b2] - pumpOmega);
-				*(PDdata++) *= normFac * exp(-0.5*tauDeltaE*tauDeltaE);
-			}
-		//--- Spin matrix elements
-		if(fw.fwp.needSpin)
-			s.S.assign(stateE.S, stateE.S+3);
-		
-		//Set rho to initial occupations:
-		s.rho0.resize(fw.nBands);
-		for(int b=0; b<fw.nBands; b++)
-			s.rho0[b] = fermi((s.E[b]-dmu)*invT);
-		rho[index] = s.rho0;
-	}
-	struct InitEparams { Lindblad* lb; size_t o; };
-	static void initializeE(const FeynWann::StateE& stateE, void* params)
-	{	InitEparams& p = *((InitEparams*)params);
-		p.lb->initializeE(stateE, p.o);
-	}
+
 	
 	std::vector<GePhSet> GePhGroup; //temporary GePh storage within process group for initializeEph: first index is index of k in group
 	std::vector<int> whoseIndex; //which process (mpiWorld index) owns each global k-point index
@@ -252,25 +247,7 @@ struct Lindblad : public Integrator<DM1>
 	}
 	
 	void initialize()
-	{	state.resize(rho.size());
-		Emin = +DBL_MAX;
-		Emax = -DBL_MAX;
-		
-		//Initialize eLoop:
-		size_t oInterval = std::max(1, int(round(noMine/50.))); //interval for reporting progress
-		logPrintf("\nInitializing electronic quantities: "); logFlush();
-		for(size_t o=oStart; o<oStop; o++)
-		{	InitEparams params = {this, o};
-			fw.eLoop(k0[o], Lindblad::initializeE, &params);
-			//Print progress:
-			if((o-oStart+1)%oInterval==0) { logPrintf("%d%% ", int(round((o-oStart+1)*100./noMine))); logFlush(); }
-		}
-		logPrintf("done.\n"); logFlush();
-		
-		//Synchronize energy range:
-		mpiWorld->allReduce(Emin, MPIUtil::ReduceMin);
-		mpiWorld->allReduce(Emax, MPIUtil::ReduceMax);
-		logPrintf("Electron energy grid from %lg eV to %lg eV with spacing %lg eV.\n", Emin/eV, Emax/eV, dE/eV);
+	{	
 		
 		//Initialize ePhLoop (if needed):
 		if(ePhEnabled)
