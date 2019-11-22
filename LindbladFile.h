@@ -46,7 +46,7 @@ namespace LindbladFile
 		}
 		void read(MPIUtil::File fp, const MPIUtil* mpiUtil)
 		{	//Read and check marker:
-			char markerIn[8];
+			char markerIn[markerLen];
 			mpiUtil->fread(markerIn, sizeof(char), markerLen, fp);
 			if(strncmp(markerIn, marker, markerLen) != 0)
 			{	fprintf(stderr, "File format error: could not find LDBD header.\n");
@@ -80,7 +80,7 @@ namespace LindbladFile
 		}
 		void read(MPIUtil::File fp, const MPIUtil* mpiUtil)
 		{	//Read and check marker:
-			char markerIn[8];
+			char markerIn[markerLen];
 			mpiUtil->fread(markerIn, sizeof(char), markerLen, fp);
 			if(strncmp(markerIn, marker, markerLen) != 0)
 			{	fprintf(stderr, "File format error: could not find GEPH header.\n");
@@ -128,7 +128,7 @@ namespace LindbladFile
 		void write(MPIUtil::File fp, const MPIUtil* mpiUtil, const Header& h) const
 		{	mpiUtil->fwrite(marker, sizeof(char), markerLen, fp);
 			mpiUtil->fwrite(&k, sizeof(vector3<>), 1, fp);
-			mpiUtil->fwrite(&nInner, sizeof(double), 3, fp);
+			mpiUtil->fwrite(&nInner, sizeof(int), 3, fp);
 			mpiUtil->fwrite(&dataSize, sizeof(size_t), 1, fp); //note: must call setDataSize beforehand
 			mpiUtil->fwriteData(E, fp);
 			for(int iDir=0; iDir<3; iDir++)
@@ -146,7 +146,7 @@ namespace LindbladFile
 		}
 		void read(MPIUtil::File fp, const MPIUtil* mpiUtil, const Header& h, bool readData)
 		{	//Read and check marker:
-			char markerIn[8];
+			char markerIn[markerLen];
 			mpiUtil->fread(markerIn, sizeof(char), markerLen, fp);
 			if(strncmp(markerIn, marker, markerLen) != 0)
 			{	fprintf(stderr, "File format error: could not find KPT header (%s).\n", markerIn);
@@ -154,7 +154,7 @@ namespace LindbladFile
 			}
 			//Read data:
 			mpiUtil->fread(&k, sizeof(vector3<>), 1, fp);
-			mpiUtil->fread(&nInner, sizeof(double), 3, fp);
+			mpiUtil->fread(&nInner, sizeof(int), 3, fp);
 			mpiUtil->fread(&dataSize, sizeof(size_t), 1, fp); //note: must call setDataSize beforehand
 			if(readData)
 			{	E.resize(nOuter);
@@ -179,6 +179,11 @@ namespace LindbladFile
 			}
 			else //Skip data read and move ahead to end of this entry (using dataSize)
 			{	mpiUtil->fseek(fp, dataSize, SEEK_CUR);
+			}
+
+			if(mpiUtil->iProcess()==1)
+			{	MPI_Offset offset; MPI_File_get_position(fp, &offset);
+				printf("At location: %lld (dataSize = %lu)\n", offset, dataSize);
 			}
 		}
 	};

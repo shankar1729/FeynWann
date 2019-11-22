@@ -115,11 +115,11 @@ struct Lindblad : public Integrator<DM1>
 		//Read k-point info:
 		for(size_t ik=0; ik<ikStart; ik++)
 		{	LindbladFile::Kpoint unused;
-			logPrintf("Reading ik = %lu on process %d\n", ik, mpiWorld->iProcess()); logFlush();
+			if(mpiWorld->iProcess()==1) printf("Discarding ik = %lu on process %d\n", ik, mpiWorld->iProcess()); fflush(stdout);
 			unused.read(fp, mpiWorld, h, false);
 		}
 		for(size_t ikMine=0; ikMine<nkMine; ikMine++)
-		{	logPrintf("Reading ik = %lu on process %d\n", ikStart+ikMine, mpiWorld->iProcess()); logFlush();
+		{	if(mpiWorld->iProcess()==1) printf("Reading ik = %lu on process %d\n", ikStart+ikMine, mpiWorld->iProcess()); fflush(stdout);
 			state[ikMine].read(fp, mpiWorld, h, true);
 		}
 		mpiWorld->fclose(fp);
