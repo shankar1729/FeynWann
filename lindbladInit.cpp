@@ -343,9 +343,7 @@ struct LindbladInit
 				{	if(jGroup==iGroup)
 					{	nBytesPrev[iGroup+1] = nBytesPrev[iGroup];
 						if(ik<k.size())
-						{	kp.setDataSize(h);
-							nBytesPrev[iGroup+1] += kp.nBytes();
-						}
+							nBytesPrev[iGroup+1] += kp.nBytes(h);
 					}
 					mpiGroupHead->bcast(nBytesPrev[jGroup+1], jGroup);
 				}

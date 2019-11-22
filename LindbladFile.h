@@ -103,15 +103,15 @@ namespace LindbladFile
 		int nInner; //number of bands in the inner pump-active window
 		int nOuter; //number of bands in the outer probe-active window
 		int innerStart; //start of inner window relative to outer window
-		size_t dataSize; //size of remaining data for this k-point in bytes (as stored in file)
 		
 		diagMatrix E; //energies (dim: nOuter)
 		matrix P[3]; //momentum matrix elements (dim: nInner x nOuter each)
 		matrix S[3]; //spin matrix elements (dim: nInner x nInner each, only if spinorial)
 		std::vector<GePhEntry> GePh; //e-ph matrix elements (only if ePhEnabled)
 		
-		void setDataSize(const Header& h) //set dataSize based on remaining entries (call after initializing everything else and before write)
-		{	dataSize = nOuter*sizeof(double) //E
+		size_t nBytes(const Header& h) const
+		{	size_t dataSize = sizeof(char)*markerLen + sizeof(vector3<>) + sizeof(int)*3
+				+ nOuter*sizeof(double) //E
 				+ 3*nInner*nOuter*sizeof(complex); //P
 			if(h.spinorial)
 				dataSize += 3*nInner*nInner*sizeof(complex); //S
@@ -120,16 +120,12 @@ namespace LindbladFile
 				for(const GePhEntry& g: GePh)
 					dataSize += g.nBytes();
 			}
-		}
-		size_t nBytes() const
-		{	return sizeof(char)*markerLen + sizeof(vector3<>) + sizeof(int)*3 + 
-				+ sizeof(size_t) + dataSize; //storage for dataSize and then the actual data (note: must call setDataSize beforehand)
+			return dataSize;
 		}
 		void write(MPIUtil::File fp, const MPIUtil* mpiUtil, const Header& h) const
 		{	mpiUtil->fwrite(marker, sizeof(char), markerLen, fp);
 			mpiUtil->fwrite(&k, sizeof(vector3<>), 1, fp);
 			mpiUtil->fwrite(&nInner, sizeof(int), 3, fp);
-			mpiUtil->fwrite(&dataSize, sizeof(size_t), 1, fp); //note: must call setDataSize beforehand
 			mpiUtil->fwriteData(E, fp);
 			for(int iDir=0; iDir<3; iDir++)
 				mpiUtil->fwriteData(P[iDir], fp);
@@ -144,7 +140,7 @@ namespace LindbladFile
 					g.write(fp, mpiUtil);
 			}
 		}
-		void read(MPIUtil::File fp, const MPIUtil* mpiUtil, const Header& h, bool readData)
+		void read(MPIUtil::File fp, const MPIUtil* mpiUtil, const Header& h)
 		{	//Read and check marker:
 			char markerIn[markerLen];
 			mpiUtil->fread(markerIn, sizeof(char), markerLen, fp);
@@ -155,36 +151,30 @@ namespace LindbladFile
 			//Read data:
 			mpiUtil->fread(&k, sizeof(vector3<>), 1, fp);
 			mpiUtil->fread(&nInner, sizeof(int), 3, fp);
-			mpiUtil->fread(&dataSize, sizeof(size_t), 1, fp); //note: must call setDataSize beforehand
-			if(readData)
-			{	E.resize(nOuter);
-				mpiUtil->freadData(E, fp);
-				for(int iDir=0; iDir<3; iDir++)
-				{	P[iDir] = zeroes(nInner, nOuter);
-					mpiUtil->freadData(P[iDir], fp);
-				}
-				if(h.spinorial)
-				{	for(int iDir=0; iDir<3; iDir++)
-					{	S[iDir] = zeroes(nInner, nInner);
-						mpiUtil->freadData(S[iDir], fp);
-					}
-				}
-				if(h.ePhEnabled)
-				{	size_t Gsize;
-					mpiUtil->fread(&Gsize, sizeof(size_t), 1, fp);
-					GePh.resize(Gsize);
-					for(GePhEntry& g: GePh)
-						g.read(fp, mpiUtil);
+			E.resize(nOuter);
+			mpiUtil->freadData(E, fp);
+			for(int iDir=0; iDir<3; iDir++)
+			{	P[iDir] = zeroes(nInner, nOuter);
+				mpiUtil->freadData(P[iDir], fp);
+			}
+			if(h.spinorial)
+			{	for(int iDir=0; iDir<3; iDir++)
+				{	S[iDir] = zeroes(nInner, nInner);
+					mpiUtil->freadData(S[iDir], fp);
 				}
 			}
-			else //Skip data read and move ahead to end of this entry (using dataSize)
-			{	mpiUtil->fseek(fp, dataSize, SEEK_CUR);
+			if(h.ePhEnabled)
+			{	size_t Gsize;
+				mpiUtil->fread(&Gsize, sizeof(size_t), 1, fp);
+				GePh.resize(Gsize);
+				for(GePhEntry& g: GePh)
+					g.read(fp, mpiUtil);
 			}
 
-			if(mpiUtil->iProcess()==1)
-			{	MPI_Offset offset; MPI_File_get_position(fp, &offset);
-				printf("At location: %lld (dataSize = %lu)\n", offset, dataSize);
-			}
+// 			if(mpiUtil->iProcess()==1)
+// 			{	MPI_Offset offset; MPI_File_get_position(fp, &offset);
+// 				printf("At location: %lld (dataSize = %lu)\n", offset, dataSize);
+// 			}
 		}
 	};
 }
