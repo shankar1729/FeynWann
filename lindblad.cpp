@@ -107,21 +107,19 @@ struct Lindblad : public Integrator<DM1>
 		if(ePhEnabled != h.ePhEnabled)
 			die("ePhEnabled = %s differs from the mode specified in lindbladInit.\n", boolMap.getString(ePhEnabled));
 		
+		//Read k-point offsets:
+		std::vector<size_t> byteOffsets(h.nk);
+		mpiWorld->freadData(byteOffsets, fp);
+		
 		//Divide k-points between processes:
 		TaskDivision(nk, mpiWorld).myRange(ikStart, ikStop);
 		nkMine = ikStop-ikStart;
 		state.resize(nkMine);
 		
 		//Read k-point info:
-		for(size_t ik=0; ik<ikStart; ik++)
-		{	LindbladFile::Kpoint unused;
-			if(mpiWorld->iProcess()==1) printf("Discarding ik = %lu on process %d\n", ik, mpiWorld->iProcess()); fflush(stdout);
-			unused.read(fp, mpiWorld, h);
-		}
+		mpiWorld->fseek(fp, byteOffsets[ikStart], SEEK_SET);
 		for(size_t ikMine=0; ikMine<nkMine; ikMine++)
-		{	if(mpiWorld->iProcess()==1) printf("Reading ik = %lu on process %d\n", ikStart+ikMine, mpiWorld->iProcess()); fflush(stdout);
 			state[ikMine].read(fp, mpiWorld, h);
-		}
 		mpiWorld->fclose(fp);
 	}
 	

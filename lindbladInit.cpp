@@ -276,6 +276,12 @@ struct LindbladInit
 		if(mpiWorld->isHead()) h.write(fp, mpiGroupHead);
 		size_t nBytesWritten = h.nBytes();
 		
+		//Chunk for storing byte offsets to each k-point data before location for data:
+		std::vector<size_t> byteOffsets;
+		size_t byteOffsetLocation = nBytesWritten; //this is where byteOffsets will be put
+		nBytesWritten += sizeof(size_t)*h.nk; //skip ahead now; write at the end once known
+		byteOffsets.push_back(nBytesWritten); //offset to first k-point
+		
 		//Make group index and count available on all processes of each group:
 		size_t iGroup, nGroups;
 		if(mpiGroup->isHead())
@@ -337,23 +343,27 @@ struct LindbladInit
 			//Synchronize write from group heads to make sure kpoints are written in order:
 			if(mpiGroup->isHead())
 			{
-				std::vector<size_t> nBytesPrev(nGroups+1); //number of bytes from previous k
-				nBytesPrev[0] = nBytesWritten;
 				for(size_t jGroup=0; jGroup<nGroups; jGroup++)
-				{	if(jGroup==iGroup)
-					{	nBytesPrev[iGroup+1] = nBytesPrev[iGroup];
-						if(ik<k.size())
-							nBytesPrev[iGroup+1] += kp.nBytes(h);
-					}
-					mpiGroupHead->bcast(nBytesPrev[jGroup+1], jGroup);
+				{	size_t byteOffsetNext = byteOffsets.back();
+					if(jGroup==iGroup and ik<k.size())
+						byteOffsetNext += kp.nBytes(h);
+					mpiGroupHead->bcast(byteOffsetNext, jGroup);
+					byteOffsets.push_back(byteOffsetNext); //available on all group heads for all k
 				}
 				
 				if(ik<k.size())
-				{	mpiGroupHead->fseek(fp, nBytesPrev[iGroup], SEEK_SET);
+				{	mpiGroupHead->fseek(fp, byteOffsets[ik], SEEK_SET);
 					kp.write(fp, mpiGroupHead, h);
 				}
-				nBytesWritten = nBytesPrev.back();
+				nBytesWritten = byteOffsets.back();
 			}
+		}
+		
+		//Write byte offsets:
+		if(mpiWorld->isHead())
+		{	mpiGroupHead->fseek(fp, byteOffsetLocation, SEEK_SET);
+			byteOffsets.resize(h.nk); //drop the end values (only keep start for the actual k's written)
+			mpiGroupHead->fwriteData(byteOffsets, fp);
 		}
 		if(mpiGroup->isHead()) mpiGroupHead->fclose(fp);
 	}
