@@ -55,6 +55,8 @@ DM1& operator*=(DM1& x, double a)
 }
 DM1 clone(const DM1& x) { return x; }
 
+static const double degeneracyThreshold = 1e-5; //!< currently used only for spin-density calculation in report()
+
 //Lindblad initialization, time evolution and measurement operators using FeynWann callback
 struct Lindblad : public Integrator<DM1>
 {	
@@ -170,7 +172,6 @@ struct Lindblad : public Integrator<DM1>
 		mpiWorld->allReduce(Emin, MPIUtil::ReduceMin);
 		mpiWorld->allReduce(Emax, MPIUtil::ReduceMax);
 		logPrintf("Electron energy grid from %lg eV to %lg eV with spacing %lg eV.\n", Emin/eV, Emax/eV, dE/eV);
-		
 	}
 	
 	/*
@@ -392,30 +393,25 @@ struct Lindblad : public Integrator<DM1>
 	void applyPump()
 	{	static StopWatch watch("Lindblad::applyPump"); 
 		if(pumpEvolve) return; //only use this function when perturbing instantly
-		/*
 		watch.start();
 		matrix* rhoPtr = rho.data();
 		const State* sPtr = state.data();
 		//Perturb each k separately:
-		for(size_t o=oStart; o<oStop; o++)
-			for(size_t ik=ikStart; ik<ikStop; ik++)
-			{	matrix& rhoCur = *(rhoPtr);
-				matrix rhoBar = eye(fw.nBands) - rhoCur; //1-rho
-				//Compute and apply perturbation:
-				matrix P = sPtr->pumpPD; //P-
-				matrix Pdag = dagger(P); //P+
-				matrix deltaRho;
-				for(int s=-1; s<=+1; s+=2)
-				{	deltaRho += rhoBar*P*rhoCur*Pdag - Pdag*rhoBar*P*rhoCur;
-					std::swap(P, Pdag); //P- <--> P+
-				}
-				rhoCur += (M_PI*pumpA0*pumpA0) * (deltaRho + dagger(deltaRho));
-				//Advance pointers for next k:
-				rhoPtr++;
-				sPtr++;
+		for(size_t ikMine=0; ikMine<nkMine; ikMine++)
+		{	const State& s = *(sPtr++);
+			matrix& rhoCur = *(rhoPtr++);
+			matrix rhoBar = eye(s.nInner) - rhoCur; //1-rho
+			//Compute and apply perturbation:
+			matrix P = s.pumpPD; //P-
+			matrix Pdag = dagger(P); //P+
+			matrix deltaRho;
+			for(int s=-1; s<=+1; s+=2)
+			{	deltaRho += rhoBar*P*rhoCur*Pdag - Pdag*rhoBar*P*rhoCur;
+				std::swap(P, Pdag); //P- <--> P+
 			}
+			rhoCur += (M_PI*pumpA0*pumpA0) * (deltaRho + dagger(deltaRho));
+		}
 		watch.stop();
-		*/
 	}
 	
 	//Time evolution operator returning drho/dt
@@ -529,51 +525,53 @@ struct Lindblad : public Integrator<DM1>
 	void report(double t, const DM1& rho) const
 	{	static StopWatch watch("Lindblad::report"); watch.start();
 		ostringstream ossID; ossID << stepID;
-		/*
 		//Compute total energy and distributions:
-		int nDist = fw.fwp.needSpin ? 4 : 1; //number distribution only, or also spin distribution
+		int nDist = spinorial ? 4 : 1; //number distribution only, or also spin distribution
 		std::vector<Histogram> dist(nDist, Histogram(Emin, dE, Emax));
-		const double prefac = fw.spinWeight * (1./nkTot);
+		const double prefac = (spinorial ? 2. : 1.)/nkTot; //spinWeight/nkTot = BZ integration weight
 		double Etot = 0., dfMax = 0.;
 		const matrix* rhoPtr = rho.data();
 		const State* sPtr = state.data();
-		for(size_t o=oStart; o<oStop; o++)
-			for(size_t ik=ikStart; ik<ikStop; ik++)
-			{	matrix drho = *(rhoPtr) - sPtr->rho0;
-				//Energy and distribution:
-				const complex* drhoData = drho.data();
-				for(int b=0; b<fw.nBands; b++)
-				{	double weight = prefac * drhoData->real();
-					Etot += weight * sPtr->E[b];
-					dfMax = std::max(dfMax, fabs(drhoData->real()));
-					dist[0].addEvent(sPtr->E[b], weight);
-					drhoData += (fw.nBands+1); //advance to next diagonal entry
-				}
-				//Spin distribution of available:
-				if(fw.fwp.needSpin)
-				{	const complex* drhoData = drho.data();
-					vector3<const complex*> Sdata; for(int k=0; k<3; k++) Sdata[k] = sPtr->S[k].data();
-					for(int b2=0; b2<fw.nBands; b2++)
-					{	int i = b2*fw.nBands; //offset into data
-						for(int b1=0; b1<=b2; b1++) //use Hermitian symmetry
-						{	complex weight = ((b1==b2 ? 1 : 2) * prefac) * drhoData[i];
-							//Precalculate histogram position:
-							double E = 0.5*(sPtr->E[b1] + sPtr->E[b2]);
+		for(size_t ikMine=0; ikMine<nkMine; ikMine++)
+		{	const State& s = *(sPtr++);
+			const matrix& rhoCur = *(rhoPtr++);
+			matrix drho = rhoCur - s.rho0;
+			//Energy and distribution:
+			const complex* drhoData = drho.data();
+			for(int b=0; b<s.nInner; b++)
+			{	double weight = prefac * drhoData->real();
+				const double& Ecur = s.E[b+s.innerStart];
+				Etot += weight * Ecur;
+				dfMax = std::max(dfMax, fabs(drhoData->real()));
+				dist[0].addEvent(Ecur, weight);
+				drhoData += (s.nInner+1); //advance to next diagonal entry
+			}
+			//Spin distribution of available:
+			if(spinorial)
+			{	const complex* drhoData = drho.data();
+				vector3<const complex*> Sdata; for(int k=0; k<3; k++) Sdata[k] = s.S[k].data();
+				for(int b2=0; b2<s.nInner; b2++)
+				{	int i = b2*s.nInner; //offset into data
+					const double& E2 = s.E[b2+s.innerStart];
+					for(int b1=0; b1<=b2; b1++) //use Hermitian symmetry
+					{	complex weight = ((b1==b2 ? 1 : 2) * prefac) * drhoData[i];
+						const double& E1 = s.E[b1+s.innerStart];
+						if(fabs(E1-E2) < degeneracyThreshold)
+						{	//Precalculate histogram position:
+							double E = 0.5*(E1+E2);
 							int iEvent; double tEvent;
 							if(dist[1].eventPrecalc(E, iEvent, tEvent))
 							{	//Collect spin densities:
 								for(int k=0; k<3; k++)
 									dist[k+1].addEventPrecalc(iEvent, tEvent, (weight * Sdata[k][i]).real());
 							}
-							//Advance to next entry of Hermitian matrix:
-							i++;
 						}
+						//Advance to next entry of Hermitian matrix:
+						i++;
 					}
 				}
-				//Advance pointers for next k:
-				rhoPtr++;
-				sPtr++;
 			}
+		}
 		mpiWorld->reduce(Etot, MPIUtil::ReduceSum);
 		mpiWorld->reduce(dfMax, MPIUtil::ReduceMax);
 		for(Histogram& h: dist) h.reduce(MPIUtil::ReduceSum);
@@ -583,7 +581,7 @@ struct Lindblad : public Integrator<DM1>
 			//Save distribution functions:
 			ofstream ofs("dist."+ossID.str());
 			ofs << "#E-mu/VBM[eV] n[eV^-1]";
-			if(fw.fwp.needSpin)
+			if(spinorial)
 				ofs << "Sx[eV^-1] Sy[eV^-1] Sz[eV^-1]";
 			ofs << "\n";
 			for(int iE=0; iE<dist[0].nE; iE++)
@@ -594,7 +592,6 @@ struct Lindblad : public Integrator<DM1>
 				ofs << '\n';
 			}
 		}
-		*/
 		watch.stop();
 		//Probe responses if present:
 		diagMatrix imEps = calcImEps();
