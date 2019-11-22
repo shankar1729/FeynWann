@@ -31,6 +31,9 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 //Reverse iterator for pointers:
 template<class T> constexpr std::reverse_iterator<T*> reverse(T* i) { return std::reverse_iterator<T*>(i); }
 
+static const double omegaPhCut = 1e-6;
+static const double nEphDelta = 4.; //number of ePhDelta to include in output
+
 //Lindblad initialization using FeynWann callback
 struct LindbladInit
 {	
@@ -166,8 +169,7 @@ struct LindbladInit
 		Eend = &(*std::lower_bound(reverse(Eend), reverse(Ebegin), Ehi, std::greater<double>()))+1;
 	}
 	inline void kpSelect(const FeynWann::StatePh& state)
-	{	const double omegaPhCut = 1e-6;
-		//Find pairs of momentum conserving electron states with this q:
+	{	//Find pairs of momentum conserving electron states with this q:
 		for(size_t ik1=0; ik1<k.size(); ik1++)
 		{	const vector3<>& k1 = k[ik1];
 			vector3<> k2 = k1 - state.q; //momentum conservation
@@ -187,7 +189,7 @@ struct LindbladInit
 				{	for(const double* E2=E2begin; E2<E2end; E2++) //E2 in active range
 					{	for(const double omegaPh: state.omega) if(omegaPh>omegaPhCut) //loop over non-zero phonon frequencies
 						{	double deltaE = (*E1) - (*E2) - omegaPh; //energy conservation violation
-							if(fabs(deltaE) < 4*ePhDelta) //else negligible at the 10^-3 level for a Gaussian
+							if(fabs(deltaE) < nEphDelta*ePhDelta) //else negligible at the 10^-3 level for a Gaussian
 							{	Econserve = true;
 								break;
 							}
@@ -295,6 +297,8 @@ struct LindbladInit
 		
 		//Loop over k-points in parallel over process groups:
 		size_t nPasses = ceildiv(k.size(), nGroups);
+		size_t passInterval = std::max(1, int(round(nPasses/50.))); //interval for reporting progress
+		logPrintf("Writing ldbd.dat: "); logFlush();
 		for(size_t iPass=0; iPass<nPasses; iPass++)
 		{	size_t ik = iPass*nGroups + iGroup;
 			LindbladFile::Kpoint kp;
@@ -337,8 +341,49 @@ struct LindbladInit
 				//Electron-phonon matrix elements:
 				if(h.ePhEnabled)
 				{
-					//TODO
-					die("Testing.\n");
+					for(size_t jk: kpartners[ik])
+					{	
+						//Compute other electronic state:
+						FeynWann::StateE ej;
+						fw.eCalc(k[jk], ej);
+						//--- determine active range:
+						const double *EjBegin = E.data()+jk*fw.nBands, *EjEnd = EjBegin+fw.nBands;
+						const double *EjInnerBegin = EjBegin, *EjInnerEnd = EjEnd;
+						selectActive(EjInnerBegin, EjInnerEnd, Estart, Estop);
+						int innerOffset_j = EjInnerBegin - EjBegin;
+						int nInner_j = EjInnerEnd - EjInnerBegin;
+						
+						//Compute phonon state:
+						FeynWann::StatePh ph;
+						fw.phCalc(k[ik]-k[jk], ph);
+						
+						//Compute e-ph matrix elements:
+						FeynWann::MatrixEph m;
+						fw.ePhCalc(ei, ej, ph, m);
+						
+						//Collect energy-conserving matrix elements within active window:
+						double sigmaInv = 1./ePhDelta;
+						double deltaPrefac = sqrt(sigmaInv/sqrt(M_PI));
+						for(int alpha=0; alpha<fw.nModes; alpha++)
+						{	LindbladFile::GePhEntry g;
+							g.jk = jk;
+							g.omegaPh = m.ph->omega[alpha];
+							if(g.omegaPh < omegaPhCut) continue; //avoid zero frequency phonons
+							const matrix& M = m.M[alpha];
+							for(int n2=innerOffset_j; n2<innerOffset_j+nInner_j; n2++)
+								for(int n1=innerOffset; n1<innerOffset+kp.nInner; n1++)
+								{	double deltaEbySigma = sigmaInv*(m.e1->E[n1] - m.e2->E[n2] - g.omegaPh);
+									if(fabs(deltaEbySigma)<nEphDelta and (m.e1->E[n1] > m.e2->E[n2]))
+									{	SparseEntry s;
+										s.i = n1 - innerOffset;
+										s.j = n2 - innerOffset_j;
+										s.val = M(n1,n2) * (deltaPrefac*exp(-0.5*deltaEbySigma*deltaEbySigma)); //apply e-conservation factor
+										g.G.push_back(s);
+									}
+								}
+							if(g.G.size()) kp.GePh.push_back(g);
+						}
+					}
 				}
 			}
 			
@@ -359,7 +404,11 @@ struct LindbladInit
 				}
 				nBytesWritten = byteOffsets.back();
 			}
+			
+			//Print progress:
+			if((iPass+1)%passInterval==0) { logPrintf("%d%% ", int(round((iPass+1)*100./nPasses))); logFlush(); }
 		}
+		logPrintf("done.\n"); logFlush();
 		
 		//Write byte offsets:
 		if(mpiWorld->isHead())
