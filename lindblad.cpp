@@ -73,6 +73,9 @@ struct Lindblad : public Integrator<DM1>
 	
 	size_t nk, nkTot; //!< number of selected k-points overall and original total k-points effectively used in BZ sampling
 	size_t ikStart, ikStop, nkMine; //!< range and number of selected k-points on this process
+	TaskDivision kDivision;
+	inline bool isMine(size_t ik) const { return kDivision.isMine(ik); } //!< check if k-point index is local
+	inline int whose(size_t ik) const { return kDivision.whose(ik); } //!< find out which process (in mpiWorld) this k-point belongs to
 
 	struct State : LindbladFile::Kpoint
 	{	int innerStop; //end of active inner window range (relative to outer window)
@@ -121,7 +124,8 @@ struct Lindblad : public Integrator<DM1>
 		mpiWorld->freadData(byteOffsets, fp);
 		
 		//Divide k-points between processes:
-		TaskDivision(nk, mpiWorld).myRange(ikStart, ikStop);
+		kDivision.init(nk, mpiWorld);
+		kDivision.myRange(ikStart, ikStop);
 		nkMine = ikStop-ikStart;
 		state.resize(nkMine);
 		rho.resize(nkMine);
@@ -307,19 +311,6 @@ struct Lindblad : public Integrator<DM1>
 					}
 			}
 			logPrintf("done.\n"); logFlush();
-			//Initialize global array of who (in mpiWorld) owns which k-point:
-			std::vector<std::pair<int,int>> whoseTemp(nkTot);
-			for(size_t o1=oStart; o1<oStop; o1++)
-				for(size_t ik=ikStart; ik<ikStop; ik++)
-					whoseTemp[ik+o1*nkOffset] = std::make_pair(1, mpiWorld->iProcess());
-			#ifdef MPI_ENABLED
-			if(mpiWorld->nProcesses() > 1)
-			{	MPI_Allreduce(MPI_IN_PLACE, whoseTemp.data(), nkTot, MPI_2INT, MPI_MAXLOC, mpiWorld->communicator());
-			} //else results are already up to date on the only process (which necessarily owns all the data)
-			#endif
-			whoseIndex.resize(nkTot);
-			for(size_t index=0; index<nkTot; index++)
-				whoseIndex[index] = whoseTemp[index].second; //only keep the process indices from above
 		}
 		logPrintf("\n");
 	}
