@@ -273,6 +273,8 @@ struct LindbladInit
 		h.nkTot = nkTot;
 		h.ePhEnabled = ePhEnabled;
 		h.spinorial = (fw.nSpinor==2);
+		h.spinWeight = fw.spinWeight;
+		h.R = fw.R;
 		if(mpiWorld->isHead()) h.write(fp, mpiGroupHead);
 		size_t nBytesWritten = h.nBytes();
 		

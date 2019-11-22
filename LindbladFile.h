@@ -34,15 +34,19 @@ namespace LindbladFile
 		double dmuMin, dmuMax, Tmax, pumpOmegaMax, probeOmegaMax; //mu, T and pump/probe frequency range accounted for
 		size_t nk, nkTot; //number of selected k-points and original total k-points (1/nkTot is BZ integration weight)
 		bool ePhEnabled, spinorial; //whether e-ph and spinorial info are available
+		int spinWeight; //spin factor in BZ integration
+		matrix3<> R; //unit cell lattice vectors
 		
-		constexpr size_t nBytes() const
-		{	return sizeof(char)*markerLen + sizeof(double)*5 + sizeof(size_t)*2 + sizeof(bool)*2;
+		size_t nBytes() const
+		{	return sizeof(char)*markerLen + sizeof(double)*5 + sizeof(size_t)*2 + sizeof(bool)*2 + sizeof(int) + sizeof(matrix3<>);
 		}
 		void write(MPIUtil::File fp, const MPIUtil* mpiUtil) const
 		{	mpiUtil->fwrite(marker, sizeof(char), markerLen, fp);
 			mpiUtil->fwrite(&dmuMin, sizeof(double), 5, fp);
 			mpiUtil->fwrite(&nk, sizeof(size_t), 2, fp);
 			mpiUtil->fwrite(&ePhEnabled, sizeof(bool), 2, fp);
+			mpiUtil->fwrite(&spinWeight, sizeof(int), 1, fp);
+			mpiUtil->fwrite(&R, sizeof(matrix3<>), 1, fp);
 		}
 		void read(MPIUtil::File fp, const MPIUtil* mpiUtil)
 		{	//Read and check marker:
@@ -56,6 +60,8 @@ namespace LindbladFile
 			mpiUtil->fread(&dmuMin, sizeof(double), 5, fp);
 			mpiUtil->fread(&nk, sizeof(size_t), 2, fp);
 			mpiUtil->fread(&ePhEnabled, sizeof(bool), 2, fp);
+			mpiUtil->fread(&spinWeight, sizeof(int), 1, fp);
+			mpiUtil->fread(&R, sizeof(matrix3<>), 1, fp);
 		}
 	};
 	
@@ -105,11 +111,9 @@ namespace LindbladFile
 		int innerStart; //start of inner window relative to outer window
 		
 		diagMatrix E; //energies (dim: nOuter)
-		std::vector<matrix> P; //momentum matrix elements (dim: nInner x nOuter for each Cartesian direction (later converted to probe polarization))
+		matrix P[3]; //momentum matrix elements (dim: nInner x nOuter each)
 		matrix S[3]; //spin matrix elements (dim: nInner x nInner each, only if spinorial)
 		std::vector<GePhEntry> GePh; //e-ph matrix elements (only if ePhEnabled)
-		
-		Kpoint() : P(3) {}
 		
 		size_t nBytes(const Header& h) const
 		{	size_t dataSize = sizeof(char)*markerLen + sizeof(vector3<>) + sizeof(int)*3

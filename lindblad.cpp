@@ -72,6 +72,8 @@ struct Lindblad : public Integrator<DM1>
 	const bool ePhEnabled; //!< whether e-ph coupling is enabled
 	const bool verbose; //!< whether to print more detailed stats during evolution
 	bool spinorial; //!< whether spin is available
+	int spinWeight; //!< weight of spin in BZ integration
+	matrix3<> R; double Omega; //!< lattice vectors and unit cell volume
 	
 	size_t nk, nkTot; //!< number of selected k-points overall and original total k-points effectively used in BZ sampling
 	size_t ikStart, ikStop, nkMine; //!< range and number of selected k-points on this process
@@ -118,6 +120,8 @@ struct Lindblad : public Integrator<DM1>
 		nk = h.nk;
 		nkTot = h.nkTot;
 		spinorial = h.spinorial;
+		spinWeight = h.spinWeight;
+		R = h.R; Omega = fabs(det(R));
 		if(ePhEnabled != h.ePhEnabled)
 			die("ePhEnabled = %s differs from the mode specified in lindbladInit.\n", boolMap.getString(ePhEnabled));
 		
@@ -145,12 +149,8 @@ struct Lindblad : public Integrator<DM1>
 			//--- Active energy range:
 			Emin = std::min(Emin, s.E[s.innerStart]);
 			Emax = std::max(Emax, s.E[s.innerStop-1]);
-			//--- Probe matrix elements (without energy conservation)
-			std::vector<matrix> Ppol; Ppol.reserve(pol.size());
-			for(const vector3<complex>& pol_i: pol)
-				Ppol.push_back(dot(s.P.data(), pol_i));
-			//--- Pump matrix elements
-			s.pumpPD = dot(s.P.data(), pumpPol)(0,s.nInner, s.innerStart,s.innerStop); //restrict to inner active
+			//--- Pump matrix elements with energy conservation
+			s.pumpPD = dot(s.P, pumpPol)(0,s.nInner, s.innerStart,s.innerStop); //restrict to inner active
 			double normFac = sqrt(pumpTau/sqrt(M_PI));
 			complex* PDdata = s.pumpPD.data();
 			for(int b2=s.innerStart; b2<s.innerStop; b2++)
@@ -324,49 +324,60 @@ struct Lindblad : public Integrator<DM1>
 		if(nImEps==0) return diagMatrix(); //no probe specified
 		watch.start();
 		diagMatrix imEps(nImEps);
-		/*
 		//Collect contributions from each k at this process:
 		const matrix* rhoPtr = rho.data();
 		const State* sPtr = state.data();
-		for(size_t o=oStart; o<oStop; o++)
-			for(size_t ik=ikStart; ik<ikStop; ik++)
-			{	const matrix& rhoCur = *(rhoPtr);
-				matrix rhoBar = eye(fw.nBands) - rhoCur; //1-rho
-				//Probe response:
-				for(int iomega=0; iomega<nomega; iomega++)
-				{	double omega = omegaMin + iomega*domega;
-					double prefac = (4*M_PI*fw.spinWeight)/(nkTot * fw.Omega * std::pow(std::max(omega, 1./tau), 3));
-					//Energy conservation factors for all pair of bands at this frequency:
-					std::vector<double> delta(fw.nBands*fw.nBands);
-					double* deltaData = delta.data();
-					double normFac = sqrt(tau/sqrt(M_PI));
-					for(int b2=0; b2<fw.nBands; b2++)
-						for(int b1=0; b1<fw.nBands; b1++)
-						{	double tauDeltaE = tau*(sPtr->E[b1] - sPtr->E[b2] - omega);
-							*(deltaData++) = normFac * exp(-0.5*tauDeltaE*tauDeltaE);
-						}
-					//Loop over polarizations:
-					for(int iPol=0; iPol<int(pol.size()); iPol++)
-					{	//Multiply matrix elements with energy conservation:
-						matrix P = sPtr->P[iPol];
-						eblas_zmuld(P.nData(), delta.data(),1, P.data(),1); //P-
-						matrix Pdag = dagger(P); //P+
-						//Loop over directions of excitations:
-						diagMatrix deltaRhoDiag(fw.nBands);
-						for(int s=-1; s<=+1; s+=2)
-						{	deltaRhoDiag += diag(rhoBar*P*rhoCur*Pdag - Pdag*rhoBar*P*rhoCur);
-							std::swap(P, Pdag); //P- <--> P+
-						}
-						imEps[iPol*nomega+iomega] += prefac * dot(sPtr->E, deltaRhoDiag);
-					}
-				}
-				//Advance pointers for next k:
-				rhoPtr++;
-				sPtr++;
+		for(size_t ikMine=0; ikMine<nkMine; ikMine++)
+		{	const State& s = *(sPtr++);
+			const matrix& rhoCurSub = *(rhoPtr++);
+			//Expand density matrix:
+			matrix rhoCur = zeroes(s.nOuter, s.nOuter);
+			if(s.innerStart) rhoCur.set(0,s.innerStart, 0,s.innerStart, eye(s.innerStart));
+			rhoCur.set(s.innerStart,s.innerStop, s.innerStart,s.innerStop, rhoCurSub);
+			matrix rhoBar = eye(s.nOuter) - rhoCur; //1-rho
+			//Expand probe matrix elements:
+			std::vector<matrix> Ppol(pol.size(), zeroes(s.nOuter, s.nOuter));
+			for(int iDir=0; iDir<3; iDir++)
+			{	//Expand Cartesian component:
+				const matrix& PiSub = s.P[iDir]; //nInner x nOuter
+				matrix Pi = zeroes(s.nOuter, s.nOuter);
+				Pi.set(s.innerStart,s.innerStop, 0,s.nOuter, PiSub);
+				Pi.set(0,s.nOuter, s.innerStart,s.innerStop, dagger(PiSub));
+				//Update each polarization:
+				for(int iPol=0; iPol<int(pol.size()); iPol++)
+					Ppol[iPol] += pol[iPol][iDir] * Pi;
 			}
+			//Probe response:
+			for(int iomega=0; iomega<nomega; iomega++)
+			{	double omega = omegaMin + iomega*domega;
+				double prefac = (4*M_PI*spinWeight)/(nkTot * Omega * std::pow(std::max(omega, 1./tau), 3));
+				//Energy conservation factors for all pair of bands at this frequency:
+				std::vector<double> delta(s.nOuter*s.nOuter);
+				double* deltaData = delta.data();
+				double normFac = sqrt(tau/sqrt(M_PI));
+				for(int b2=0; b2<s.nOuter; b2++)
+					for(int b1=0; b1<s.nOuter; b1++)
+					{	double tauDeltaE = tau*(s.E[b1] - s.E[b2] - omega);
+						*(deltaData++) = normFac * exp(-0.5*tauDeltaE*tauDeltaE);
+					}
+				//Loop over polarizations:
+				for(int iPol=0; iPol<int(pol.size()); iPol++)
+				{	//Multiply matrix elements with energy conservation:
+					matrix P = Ppol[iPol];
+					eblas_zmuld(P.nData(), delta.data(),1, P.data(),1); //P-
+					matrix Pdag = dagger(P); //P+
+					//Loop over directions of excitations:
+					diagMatrix deltaRhoDiag(s.nOuter);
+					for(int s=-1; s<=+1; s+=2)
+					{	deltaRhoDiag += diag(rhoBar*P*rhoCur*Pdag - Pdag*rhoBar*P*rhoCur);
+						std::swap(P, Pdag); //P- <--> P+
+					}
+					imEps[iPol*nomega+iomega] += prefac * dot(s.E, deltaRhoDiag);
+				}
+			}
+		}
 		//Accumulate contributions from all processes on head:
 		mpiWorld->reduceData(imEps, MPIUtil::ReduceSum);
-		*/
 		watch.stop();
 		return imEps;
 	}
@@ -525,7 +536,7 @@ struct Lindblad : public Integrator<DM1>
 		//Compute total energy and distributions:
 		int nDist = spinorial ? 4 : 1; //number distribution only, or also spin distribution
 		std::vector<Histogram> dist(nDist, Histogram(Emin, dE, Emax));
-		const double prefac = (spinorial ? 2. : 1.)/nkTot; //spinWeight/nkTot = BZ integration weight
+		const double prefac = spinWeight*(1./nkTot); //BZ integration weight
 		double Etot = 0., dfMax = 0.;
 		const matrix* rhoPtr = rho.data();
 		const State* sPtr = state.data();
