@@ -87,6 +87,7 @@ struct Lindblad : public Integrator<DM1>
 		matrix pumpPD; //P matrix elements at pump polarization x energy conservation delta (D), but without A0 and time factor
 	};
 	std::vector<State> state; //!< all information read from lindbladInit output (e and e-ph properties) + extra local variables above
+	std::vector<int> nInnerAll; //!< nInner for all k-points on all processes
 	double Emin, Emax; //!< energy range of active space across all k (for spin and number density output)
 	
 	Lindblad(double dmu, double T, double pumpOmega, double pumpA0, double pumpTau, vector3<complex> pumpPol, bool pumpEvolve,
@@ -134,6 +135,7 @@ struct Lindblad : public Integrator<DM1>
 		kDivision.myRange(ikStart, ikStop);
 		nkMine = ikStop-ikStart;
 		state.resize(nkMine);
+		nInnerAll.resize(nk);
 		rho.resize(nkMine);
 		
 		//Read k-point info and initialize states:
@@ -143,6 +145,7 @@ struct Lindblad : public Integrator<DM1>
 			
 			//Read base info from LindbladFile:
 			((LindbladFile::Kpoint&)s).read(fp, mpiWorld, h);
+			nInnerAll[ikStart+ikMine] = s.nInner;
 			
 			//Initialize extra quantities in state:
 			s.innerStop = s.innerStart + s.nInner;
@@ -172,6 +175,11 @@ struct Lindblad : public Integrator<DM1>
 		mpiWorld->allReduce(Emin, MPIUtil::ReduceMin);
 		mpiWorld->allReduce(Emax, MPIUtil::ReduceMax);
 		logPrintf("Electron energy grid from %lg eV to %lg eV with spacing %lg eV.\n", Emin/eV, Emax/eV, dE/eV);
+		
+		//Make nInner for all k available on all processes:
+		for(int jProc=0; jProc<mpiWorld->nProcesses(); jProc++)
+			mpiWorld->bcast(nInnerAll.data()+kDivision.start(jProc),
+				kDivision.stop(jProc)-kDivision.start(jProc), jProc);
 	}
 	
 	//Calculate probe response at current rho (update this->imEps)
@@ -322,15 +330,14 @@ struct Lindblad : public Integrator<DM1>
 			for(size_t ik2=0; ik2<nk; ik2++)
 			{	int jProc = whose(ik2); //who owns index2
 				//Make current rho2 available on all processes:
-				size_t nInner2, ik2mine; 
+				size_t nInner2 = nInnerAll[ik2], ik2mine; 
 				matrix rho2;
 				if(jProc==iProc)
 				{	ik2mine = ik2-ikStart;
 					rho2 = rho[ik2mine];
-					nInner2 = state[ik2mine].nInner;
 				}
-				mpiWorld->bcast(nInner2, jProc);
-				if(jProc!=iProc) rho2 = zeroes(nInner2, nInner2);
+				else
+					rho2 = zeroes(nInner2, nInner2);
 				mpiWorld->bcastData(rho2, jProc);
 				const matrix rho2bar = eye(nInner2) - rho2;
 				matrix rho2dot = zeroes(nInner2, nInner2); //contributions to remote derivative
