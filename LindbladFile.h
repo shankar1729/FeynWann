@@ -100,6 +100,11 @@ namespace LindbladFile
 			G.resize(Gsize);
 			mpiUtil->freadData(G, fp);
 		}
+		
+		//For searching partner lists:
+		inline bool operator<(const size_t jk2) const
+		{	return jk < jk2;
+		}
 	};
 	
 	//! K-point header

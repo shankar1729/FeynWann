@@ -380,30 +380,41 @@ struct Lindblad : public Integrator<diagMatrix>
 				else
 					rho_j.resize(rhoSize[jProc]);
 				mpiWorld->bcastData(rho_j, jProc);
+				size_t jkStart = kDivision.start(jProc);
+				size_t jkStop = kDivision.stop(jProc);
 				//Loop over rho1 local to each process:
+				const State* sPtr = state.data();
 				for(size_t ik1=ikStart; ik1<ikStop; ik1++)
-				{	const int& nInner1 = nInnerAll[ik1];
+				{	const State& s = *(sPtr++);
+					const int& nInner1 = nInnerAll[ik1];
 					const matrix rho1 = getRho(rho.data()+rhoOffset[ik1], nInner1);
 					const matrix rho1bar = eye(nInner1) - rho1;
 					matrix rho1dot = zeroes(nInner1, nInner1);
-					for(const LindbladFile::GePhEntry& g: state[ik1-ikStart].GePh)
-						if(whose(g.jk) == jProc) //TODO: smarter selection of relevant g
-						{	const size_t& ik2 = g.jk;
-							const int& nInner2 = nInnerAll[ik2];
-							const matrix rho2 = getRho(rho_j.data()+rhoOffset[ik2], nInner2);
-							const matrix rho2bar = eye(nInner2) - rho2;
-							matrix rho2dot = zeroes(nInner2, nInner2);
-							//Phonon occupation factor:
-							double omegaPhByT = g.omegaPh/T;
+					//Find first entry of GePh whose partner is on jProc (if any):
+					std::vector<LindbladFile::GePhEntry>::const_iterator g = std::lower_bound(s.GePh.begin(), s.GePh.end(), jkStart);
+					while(g != s.GePh.end())
+					{	if(g->jk >= jkStop) break;
+						const size_t& ik2 = g->jk;
+						const int& nInner2 = nInnerAll[ik2];
+						const matrix rho2 = getRho(rho_j.data()+rhoOffset[ik2], nInner2);
+						const matrix rho2bar = eye(nInner2) - rho2;
+						matrix rho2dot = zeroes(nInner2, nInner2);
+						//Loop over all connections to the same partner k:
+						while((g != s.GePh.end()) and (g->jk == ik2))
+						{	//Phonon occupation factor:
+							double omegaPhByT = g->omegaPh/T;
 							double nPh = bose(std::max(1e-3, omegaPhByT));
-							rho1dot += (prefac*nPh) * (rho1bar * SMSdag(g.G, rho2)) - (SMSdag(g.G, rho2bar) * rho1) * (prefac*(nPh+1)); //+ h.c. added together below
-							rho2dot += (prefac*(nPh+1)) * (SdagMS(g.G, rho1) * rho2bar) - (rho2 * SdagMS(g.G, rho1bar)) * (prefac*nPh); //+ h.c. added together below
+							rho1dot += (prefac*nPh) * (rho1bar * SMSdag(g->G, rho2)) - (SMSdag(g->G, rho2bar) * rho1) * (prefac*(nPh+1)); //+ h.c. added together below
+							rho2dot += (prefac*(nPh+1)) * (SdagMS(g->G, rho1) * rho2bar) - (rho2 * SdagMS(g->G, rho1bar)) * (prefac*nPh); //+ h.c. added together below
 							//T=0:
-	// 						rho1dot -= prefac * (rho1 * SMSdag(g.G, rho2bar));
-	// 						rho2dot += prefac * (rho2bar * SdagMS(g.G, rho1));
-							//Accumulate rho2 gradients:
-							accumRhoHC(rho2dot, rhoDot_j.data()+rhoOffset[ik2]);
+	// 						rho1dot -= prefac * (rho1 * SMSdag(g->G, rho2bar));
+	// 						rho2dot += prefac * (rho2bar * SdagMS(g->G, rho1));
+							//Move to next element:
+							g++;
 						}
+						//Accumulate rho2 gradients:
+						accumRhoHC(rho2dot, rhoDot_j.data()+rhoOffset[ik2]);
+					}
 					//Accumulate rho1 gradients:
 					accumRhoHC(rho1dot, rhoDot.data()+rhoOffset[ik1]);
 				}
