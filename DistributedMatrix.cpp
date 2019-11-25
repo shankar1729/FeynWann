@@ -425,6 +425,7 @@ void DistributedMatrix::compute(vector3<> k1, vector3<> k2)
 
 void DistributedMatrix::collectHead()
 {
+#ifdef MPI_ENABLED
 	if(mpiUtil->nProcesses() > 1)
 	{	if(mpiUtil->isHead())
 		{	std::vector<MPIUtil::Request> requests; requests.reserve(mpiUtil->nProcesses()-1);
@@ -441,5 +442,7 @@ void DistributedMatrix::collectHead()
 		{	if(nElems)
 				mpiUtil->send(buf.data(), nElems, 0, mpiUtil->iProcess());
 		}
+		MPI_Barrier(mpiUtil->communicator());
 	}
+#endif
 }
