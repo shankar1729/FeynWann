@@ -34,6 +34,13 @@ inline matrix dot(const matrix* P, vector3<complex> pol)
 {	return pol[0]*P[0] + pol[1]*P[1] + pol[2]*P[2];
 }
 
+//Extend version in matrix.h to accumulate results over mpiWorld:
+inline double dot(const diagMatrix& A, const diagMatrix& B)
+{	double result = eblas_ddot(A.size(), A.data(),1, B.data(),1);
+	mpiWorld->allReduce(result, MPIUtil::ReduceSum, true);
+	return result;
+}
+
 static const double degeneracyThreshold = 1e-5; //!< currently used only for spin-density calculation in report()
 
 //Lindblad initialization, time evolution and measurement operators using FeynWann callback
