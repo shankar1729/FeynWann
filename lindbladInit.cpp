@@ -362,26 +362,28 @@ struct LindbladInit
 						fw.ePhCalc(ei, ej, ph, m);
 						
 						//Collect energy-conserving matrix elements within active window:
-						double sigmaInv = 1./ePhDelta;
-						double deltaPrefac = sqrt(sigmaInv/sqrt(M_PI));
-						for(int alpha=0; alpha<fw.nModes; alpha++)
-						{	LindbladFile::GePhEntry g;
-							g.jk = jk;
-							g.omegaPh = m.ph->omega[alpha];
-							if(g.omegaPh < omegaPhCut) continue; //avoid zero frequency phonons
-							const matrix& M = m.M[alpha];
-							for(int n2=innerOffset_j; n2<innerOffset_j+nInner_j; n2++)
-								for(int n1=innerOffset; n1<innerOffset+kp.nInner; n1++)
-								{	double deltaEbySigma = sigmaInv*(m.e1->E[n1] - m.e2->E[n2] - g.omegaPh);
-									if(fabs(deltaEbySigma)<nEphDelta and (m.e1->E[n1] > m.e2->E[n2]))
-									{	SparseEntry s;
-										s.i = n1 - innerOffset;
-										s.j = n2 - innerOffset_j;
-										s.val = M(n1,n2) * (deltaPrefac*exp(-0.5*deltaEbySigma*deltaEbySigma)); //apply e-conservation factor
-										g.G.push_back(s);
+						if(mpiGroup->isHead())
+						{	double sigmaInv = 1./ePhDelta;
+							double deltaPrefac = sqrt(sigmaInv/sqrt(M_PI));
+							for(int alpha=0; alpha<fw.nModes; alpha++)
+							{	LindbladFile::GePhEntry g;
+								g.jk = jk;
+								g.omegaPh = m.ph->omega[alpha];
+								if(g.omegaPh < omegaPhCut) continue; //avoid zero frequency phonons
+								const matrix& M = m.M[alpha];
+								for(int n2=innerOffset_j; n2<innerOffset_j+nInner_j; n2++)
+									for(int n1=innerOffset; n1<innerOffset+kp.nInner; n1++)
+									{	double deltaEbySigma = sigmaInv*(m.e1->E[n1] - m.e2->E[n2] - g.omegaPh);
+										if(fabs(deltaEbySigma)<nEphDelta and (m.e1->E[n1] > m.e2->E[n2]))
+										{	SparseEntry s;
+											s.i = n1 - innerOffset;
+											s.j = n2 - innerOffset_j;
+											s.val = M(n1,n2) * (deltaPrefac*exp(-0.5*deltaEbySigma*deltaEbySigma)); //apply e-conservation factor
+											g.G.push_back(s);
+										}
 									}
-								}
-							if(g.G.size()) kp.GePh.push_back(g);
+								if(g.G.size()) kp.GePh.push_back(g);
+							}
 						}
 					}
 				}
