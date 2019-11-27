@@ -62,6 +62,12 @@ if(EnableMPI)
 	add_definitions("-DMPI_ENABLED")
 endif()
 
+#MPI I/O options:
+option(MPISafeWrite "Safe mode for MPI writes: write from one process; may be needed on some NFS installations")
+if(MPISafeWrite)
+	add_definitions("-DMPI_SAFE_WRITE")
+endif()
+
 find_package(GSL REQUIRED)
 include_directories(${GSL_INCLUDE_DIR})
 

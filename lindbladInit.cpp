@@ -263,8 +263,13 @@ struct LindbladInit
 	void saveData()
 	{
 		//Initialize and write header:
+		#ifdef MPI_SAFE_WRITE
+		FILE* fp = NULL;
+		if(mpiWorld->isHead()) fp = fopen("ldbd.dat", "w"); //I/O from world head alone
+		#else
 		MPIUtil::File fp;
 		if(mpiGroup->isHead()) mpiGroupHead->fopenWrite(fp, "ldbd.dat"); //I/O collectively only from group heads
+		#endif
 		LindbladFile::Header h;
 		h.dmuMin = dmuMin;
 		h.dmuMax = dmuMax;
@@ -280,7 +285,11 @@ struct LindbladInit
 		if(mpiWorld->isHead())
 		{	std::ostringstream oss;
 			h.write(oss);
+			#ifdef MPI_SAFE_WRITE
+			fwrite(oss.str().data(), 1, h.nBytes(), fp);
+			#else
 			mpiGroupHead->fwrite(oss.str().data(), 1, h.nBytes(), fp);
+			#endif
 		}
 		size_t nBytesWritten = h.nBytes();
 		
@@ -393,7 +402,7 @@ struct LindbladInit
 				}
 			}
 			
-			//Synchronize write from group heads to make sure kpoints are written in order:
+			//Synchronize write from group heads (or send data to world head if MPI_SAFE_WRITE) to make sure kpoints are written in order:
 			if(mpiGroup->isHead())
 			{
 				for(size_t jGroup=0; jGroup<nGroups; jGroup++)
@@ -407,9 +416,35 @@ struct LindbladInit
 				if(ik<k.size())
 				{	std::ostringstream oss;
 					kp.write(oss, h);
+					#ifdef MPI_SAFE_WRITE
+					//Send data to world head to write (may be necessary on NFS locations due to MPI-IO issues):
+					if(mpiGroupHead->isHead()) //on head already; write:
+					{	fseek(fp, byteOffsets[ik], SEEK_SET);
+						fwrite(oss.str().data(), 1, kp.nBytes(h), fp);
+					}
+					else
+						mpiGroupHead->send(oss.str().data(), kp.nBytes(h), 0, iGroup);//send to head to write
+					#else
+					//Write from each process in parallel based on offset determined above:
 					mpiGroupHead->fseek(fp, byteOffsets[ik], SEEK_SET);
 					mpiGroupHead->fwrite(oss.str().data(), 1, kp.nBytes(h), fp);
+					#endif
 				}
+				#ifdef MPI_SAFE_WRITE
+				//Write data from other processes on head:
+				if(mpiGroupHead->isHead())
+				{	for(size_t jGroup=1; jGroup<nGroups; jGroup++)
+					{	size_t ikRemote = iPass*nGroups + jGroup;
+						if(ikRemote < k.size())
+						{	std::vector<char> buf(byteOffsets[ikRemote+1]-byteOffsets[ikRemote]);
+							mpiGroupHead->recvData(buf, jGroup, jGroup); //recv data to write
+							fseek(fp, byteOffsets[ikRemote], SEEK_SET);
+							fwrite(buf.data(), 1, buf.size(), fp);
+						}
+					}
+				}
+				#endif
+				
 				nBytesWritten = byteOffsets.back();
 			}
 			
@@ -420,11 +455,20 @@ struct LindbladInit
 		
 		//Write byte offsets:
 		if(mpiWorld->isHead())
-		{	mpiGroupHead->fseek(fp, byteOffsetLocation, SEEK_SET);
-			byteOffsets.resize(h.nk); //drop the end values (only keep start for the actual k's written)
+		{	byteOffsets.resize(h.nk); //drop the end values (only keep start for the actual k's written)
+			#ifdef MPI_SAFE_WRITE
+			fseek(fp, byteOffsetLocation, SEEK_SET);
+			fwrite(byteOffsets.data(), sizeof(size_t), byteOffsets.size(), fp);
+			#else
+			mpiGroupHead->fseek(fp, byteOffsetLocation, SEEK_SET);
 			mpiGroupHead->fwriteData(byteOffsets, fp);
+			#endif
 		}
+		#ifdef MPI_SAFE_WRITE
+		if(mpiWorld->isHead()) fclose(fp);
+		#else
 		if(mpiGroup->isHead()) mpiGroupHead->fclose(fp);
+		#endif
 	}
 };
 
