@@ -40,13 +40,13 @@ namespace LindbladFile
 		size_t nBytes() const
 		{	return sizeof(char)*markerLen + sizeof(double)*5 + sizeof(size_t)*2 + sizeof(bool)*2 + sizeof(int) + sizeof(matrix3<>);
 		}
-		void write(MPIUtil::File fp, const MPIUtil* mpiUtil) const
-		{	mpiUtil->fwrite(marker, sizeof(char), markerLen, fp);
-			mpiUtil->fwrite(&dmuMin, sizeof(double), 5, fp);
-			mpiUtil->fwrite(&nk, sizeof(size_t), 2, fp);
-			mpiUtil->fwrite(&ePhEnabled, sizeof(bool), 2, fp);
-			mpiUtil->fwrite(&spinWeight, sizeof(int), 1, fp);
-			mpiUtil->fwrite(&R, sizeof(matrix3<>), 1, fp);
+		void write(std::ostream& out) const
+		{	out.write((const char*)marker, sizeof(char)*markerLen);
+			out.write((const char*)&dmuMin, sizeof(double)*5);
+			out.write((const char*)&nk, sizeof(size_t)*2);
+			out.write((const char*)&ePhEnabled, sizeof(bool)*2);
+			out.write((const char*)&spinWeight, sizeof(int));
+			out.write((const char*)&R, sizeof(matrix3<>));
 		}
 		void read(MPIUtil::File fp, const MPIUtil* mpiUtil)
 		{	//Read and check marker:
@@ -76,13 +76,13 @@ namespace LindbladFile
 		{	return sizeof(char)*markerLen + sizeof(size_t) + sizeof(double)
 				+ sizeof(size_t)+sizeof(SparseEntry)*G.size(); //storage for G.size() and then its entries
 		}
-		void write(MPIUtil::File fp, const MPIUtil* mpiUtil) const
-		{	mpiUtil->fwrite(marker, sizeof(char), markerLen, fp);
-			mpiUtil->fwrite(&jk, sizeof(size_t), 1, fp);
-			mpiUtil->fwrite(&omegaPh, sizeof(double), 1, fp);
+		void write(std::ostream& out) const
+		{	out.write((const char*)marker, sizeof(char)*markerLen);
+			out.write((const char*)&jk, sizeof(size_t));
+			out.write((const char*)&omegaPh, sizeof(double));
 			size_t Gsize = G.size();
-			mpiUtil->fwrite(&Gsize, sizeof(size_t), 1, fp);
-			mpiUtil->fwriteData(G, fp);
+			out.write((const char*)&Gsize, sizeof(size_t));
+			out.write((const char*)G.data(), sizeof(SparseEntry)*Gsize);
 		}
 		void read(MPIUtil::File fp, const MPIUtil* mpiUtil)
 		{	//Read and check marker:
@@ -133,22 +133,22 @@ namespace LindbladFile
 			}
 			return dataSize;
 		}
-		void write(MPIUtil::File fp, const MPIUtil* mpiUtil, const Header& h) const
-		{	mpiUtil->fwrite(marker, sizeof(char), markerLen, fp);
-			mpiUtil->fwrite(&k, sizeof(vector3<>), 1, fp);
-			mpiUtil->fwrite(&nInner, sizeof(int), 3, fp);
-			mpiUtil->fwriteData(E, fp);
+		void write(std::ostream& out, const Header& h) const
+		{	out.write((const char*)marker, sizeof(char)*markerLen);
+			out.write((const char*)&k, sizeof(vector3<>));
+			out.write((const char*)&nInner, sizeof(int)*3);
+			out.write((const char*)E.data(), sizeof(double)*E.size());
 			for(int iDir=0; iDir<3; iDir++)
-				mpiUtil->fwriteData(P[iDir], fp);
+				out.write((const char*)P[iDir].data(), sizeof(complex)*P[iDir].nData());
 			if(h.spinorial)
 			{	for(int iDir=0; iDir<3; iDir++)
-					mpiUtil->fwriteData(S[iDir], fp);
+					out.write((const char*)S[iDir].data(), sizeof(complex)*S[iDir].nData());
 			}
 			if(h.ePhEnabled)
 			{	size_t Gsize = GePh.size();
-				mpiUtil->fwrite(&Gsize, sizeof(size_t), 1, fp);
+				out.write((const char*)&Gsize, sizeof(size_t));
 				for(const GePhEntry& g: GePh)
-					g.write(fp, mpiUtil);
+					g.write(out);
 			}
 		}
 		void read(MPIUtil::File fp, const MPIUtil* mpiUtil, const Header& h)
@@ -181,11 +181,6 @@ namespace LindbladFile
 				for(GePhEntry& g: GePh)
 					g.read(fp, mpiUtil);
 			}
-
-// 			if(mpiUtil->iProcess()==1)
-// 			{	MPI_Offset offset; MPI_File_get_position(fp, &offset);
-// 				printf("At location: %lld (dataSize = %lu)\n", offset, dataSize);
-// 			}
 		}
 	};
 }

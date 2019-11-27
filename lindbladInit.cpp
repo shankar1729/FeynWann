@@ -277,7 +277,11 @@ struct LindbladInit
 		h.spinorial = (fw.nSpinor==2);
 		h.spinWeight = fw.spinWeight;
 		h.R = fw.R;
-		if(mpiWorld->isHead()) h.write(fp, mpiGroupHead);
+		if(mpiWorld->isHead())
+		{	std::ostringstream oss;
+			h.write(oss);
+			mpiGroupHead->fwrite(oss.str().data(), 1, h.nBytes(), fp);
+		}
 		size_t nBytesWritten = h.nBytes();
 		
 		//Chunk for storing byte offsets to each k-point data before location for data:
@@ -401,8 +405,10 @@ struct LindbladInit
 				}
 				
 				if(ik<k.size())
-				{	mpiGroupHead->fseek(fp, byteOffsets[ik], SEEK_SET);
-					kp.write(fp, mpiGroupHead, h);
+				{	std::ostringstream oss;
+					kp.write(oss, h);
+					mpiGroupHead->fseek(fp, byteOffsets[ik], SEEK_SET);
+					mpiGroupHead->fwrite(oss.str().data(), 1, kp.nBytes(h), fp);
 				}
 				nBytesWritten = byteOffsets.back();
 			}
