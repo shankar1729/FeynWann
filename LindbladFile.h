@@ -23,6 +23,26 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 #include <core/MPIUtil.h>
 #include "SparseMatrix.h"
 
+//! Data type for lindblad dynamics integration
+typedef std::vector<double> DM1;
+
+//---- Functions required by Integrator on DM1 ----
+inline void axpy(double a, const DM1& x, DM1& y)
+{	assert(x.size()==y.size());
+	eblas_daxpy(x.size(), a, x.data(),1, y.data(),1);
+}
+inline DM1& operator*=(DM1& x, double s)
+{	eblas_dscal(x.size(), s, x.data(),1);
+	return x;
+}
+inline double dot(const DM1& A, const DM1& B)
+{	double result = eblas_ddot(A.size(), A.data(),1, B.data(),1);
+	mpiWorld->allReduce(result, MPIUtil::ReduceSum, true);
+	return result;
+}
+inline DM1 clone(const DM1& x) { return DM1(x); }
+
+
 //! Structures stored into sparse lindblad files
 namespace LindbladFile
 {

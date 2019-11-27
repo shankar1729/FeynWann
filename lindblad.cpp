@@ -26,25 +26,18 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 #include "FeynWann.h"
 #include "Histogram.h"
 #include "InputMap.h"
-#include "Integrator.h"
 #include "LindbladFile.h"
+#include "Integrator.h"
 #include <core/Units.h>
 
 inline matrix dot(const matrix* P, vector3<complex> pol)
 {	return pol[0]*P[0] + pol[1]*P[1] + pol[2]*P[2];
 }
 
-//Extend version in matrix.h to accumulate results over mpiWorld:
-inline double dot(const diagMatrix& A, const diagMatrix& B)
-{	double result = eblas_ddot(A.size(), A.data(),1, B.data(),1);
-	mpiWorld->allReduce(result, MPIUtil::ReduceSum, true);
-	return result;
-}
-
 static const double degeneracyThreshold = 1e-5; //!< currently used only for spin-density calculation in report()
 
 //Lindblad initialization, time evolution and measurement operators using FeynWann callback
-struct Lindblad : public Integrator<diagMatrix>
+struct Lindblad : public Integrator<DM1>
 {	
 	int stepID; //current time and reporting step number
 	
@@ -89,7 +82,7 @@ struct Lindblad : public Integrator<diagMatrix>
 	
 	
 	//---- Flat density matrix storage and access functions ----
-	diagMatrix rho; //!< flat array of density matrices of all k stored on this process
+	DM1 rho; //!< flat array of density matrices of all k stored on this process
 	std::vector<size_t> rhoOffset; //!< array of offsets into process's rho for each k
 	std::vector<size_t> rhoSize; //!< total size of rho on each process
 	
@@ -339,10 +332,10 @@ struct Lindblad : public Integrator<diagMatrix>
 	}
 	
 	//Time evolution operator returning drho/dt
-	diagMatrix compute(double t, const diagMatrix& rho)
+	DM1 compute(double t, const DM1& rho)
 	{	static StopWatch watchPump("Lindblad::compute::Pump");
 		static StopWatch watchEph("Lindblad::compute::ePh");
-		diagMatrix rhoDot(rho.size(), 0.);
+		DM1 rhoDot(rho.size(), 0.);
 		//Pump contribution:
 		if(pumpEvolve)
 		{	watchPump.start();
@@ -374,7 +367,7 @@ struct Lindblad : public Integrator<diagMatrix>
 			int iProc = mpiWorld->iProcess(); //current process
 			for(int jProc=0; jProc<mpiWorld->nProcesses(); jProc++)
 			{	//Make data from jProc available:
-				diagMatrix rho_j, rhoDot_j(rhoSize[jProc]);
+				DM1 rho_j, rhoDot_j(rhoSize[jProc]);
 				if(jProc==iProc)
 					rho_j = rho;
 				else
@@ -420,7 +413,7 @@ struct Lindblad : public Integrator<diagMatrix>
 				}
 				//Collect remote contributions:
 				mpiWorld->reduceData(rhoDot_j, MPIUtil::ReduceSum, jProc);
-				if(jProc==iProc) rhoDot += rhoDot_j;
+				if(jProc==iProc) axpy(1., rhoDot_j, rhoDot);
 			}
 			watchEph.stop();
 		}
@@ -453,7 +446,7 @@ struct Lindblad : public Integrator<diagMatrix>
 	}
 	
 	//Print / dump quantities at each checkpointed step
-	void report(double t, const diagMatrix& rho) const
+	void report(double t, const DM1& rho) const
 	{	static StopWatch watch("Lindblad::report"); watch.start();
 		ostringstream ossID; ossID << stepID;
 		//Compute total energy and distributions:
