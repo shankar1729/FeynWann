@@ -22,6 +22,7 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 
 #include <core/MPIUtil.h>
 #include "SparseMatrix.h"
+#include "FeynWann.h"
 
 //! Data type for lindblad dynamics integration
 typedef std::vector<double> DM1;
@@ -90,7 +91,8 @@ namespace LindbladFile
 	{	static constexpr const char* marker = "GEPH";
 		size_t jk; //index of second k-point
 		double omegaPh; //phonon frequency
-		SparseMatrix G; //e-ph matrix elements
+		SparseMatrix G; //e-ph matrix elements (with energy conservation sqrt included)
+		SparseMatrix Am, Ap; //G with sqrt(nPh) and sqrt(nPh+1) respectively multiplied (not stored by lindbladInit, but computed on startup in lindblad) 
 		
 		size_t nBytes() const
 		{	return sizeof(char)*markerLen + sizeof(size_t) + sizeof(double)
@@ -124,6 +126,19 @@ namespace LindbladFile
 		//For searching partner lists:
 		inline bool operator<(const size_t jk2) const
 		{	return jk < jk2;
+		}
+		
+		//Initialize Am and Ap given energy arrays and T:
+		void initA(const double* Ei, const double* Ej, double T)
+		{	Am.clear(); Am.reserve(G.size());
+			Ap.clear(); Ap.reserve(G.size());
+			for(const SparseEntry& se: G)
+			{	double omegaEff = Ei[se.i] - Ej[se.j]; //phonon frequency with exact energy conservation
+				if(omegaEff < 1e-3*T) continue;
+				double nPh = T>0 ? bose(omegaEff/T) : 0.; 
+				SparseEntry sm = se; sm.val *= sqrt(nPh);   Am.push_back(sm);
+				SparseEntry sp = se; sp.val *= sqrt(nPh+1); Ap.push_back(sp);
+			}
 		}
 	};
 	

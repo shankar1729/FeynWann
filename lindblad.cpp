@@ -223,6 +223,33 @@ struct Lindblad : public Integrator<DM1>
 		{	const State& s = *(sPtr++);
 			accumRho(s.rho0, rho.data()+rhoOffset[ik]);
 		}
+		
+		//Initialize A+ and A- for e-ph matrix elements if required:
+		if(ePhEnabled)
+		{	//Make inner-window energies available for all processes:
+			std::vector<size_t> nInnerPrev(nk+1, 0);
+			for(size_t ik=0; ik<nk; ik++)
+				nInnerPrev[ik+1] = nInnerPrev[ik] + nInnerAll[ik];
+			std::vector<double> Eall(nInnerPrev.back());
+			for(size_t ik=ikStart; ik<ikStop; ik++)
+			{	const State& s = state[ik-ikStart];
+				const double* Ei = &(s.E[s.innerStart]);
+				std::copy(Ei, Ei+s.nInner, Eall.begin()+nInnerPrev[ik]);
+			}
+			for(int jProc=0; jProc<mpiWorld->nProcesses(); jProc++)
+			{	size_t iEstart = nInnerPrev[kDivision.start(jProc)];
+				size_t iEstop = nInnerPrev[kDivision.stop(jProc)];
+				mpiWorld->bcast(&Eall[iEstart], iEstop-iEstart, jProc);
+			}
+			//Initialize A+ and A- for all matrix elements:
+			for(State& s: state)
+			{	const double* Ei = &(s.E[s.innerStart]);
+				for(LindbladFile::GePhEntry& g: s.GePh)
+				{	const double* Ej = &(Eall[nInnerPrev[g.jk]]);
+					g.initA(Ei, Ej, T);
+				}
+			}
+		}
 	}
 	
 	//Calculate probe response at current rho (update this->imEps)
@@ -395,13 +422,12 @@ struct Lindblad : public Integrator<DM1>
 						//Loop over all connections to the same partner k:
 						while((g != s.GePh.end()) and (g->jk == ik2))
 						{	//Phonon occupation factor:
-							double omegaPhByT = g->omegaPh/T;
-							double nPh = bose(std::max(1e-3, omegaPhByT));
-							rho1dot += (prefac*nPh) * (rho1bar * SMSdag(g->G, rho2)) - (SMSdag(g->G, rho2bar) * rho1) * (prefac*(nPh+1)); //+ h.c. added together below
-							rho2dot += (prefac*(nPh+1)) * (SdagMS(g->G, rho1) * rho2bar) - (rho2 * SdagMS(g->G, rho1bar)) * (prefac*nPh); //+ h.c. added together below
-							//T=0:
-	// 						rho1dot -= prefac * (rho1 * SMSdag(g->G, rho2bar));
-	// 						rho2dot += prefac * (rho2bar * SdagMS(g->G, rho1));
+// 							double omegaPhByT = g->omegaPh/T;
+// 							double nPh = bose(std::max(1e-3, omegaPhByT));
+// 							rho1dot += (prefac*nPh) * (rho1bar * SMSdag(g->G, rho2)) - (SMSdag(g->G, rho2bar) * rho1) * (prefac*(nPh+1)); //+ h.c. added together below
+// 							rho2dot += (prefac*(nPh+1)) * (SdagMS(g->G, rho1) * rho2bar) - (rho2 * SdagMS(g->G, rho1bar)) * (prefac*nPh); //+ h.c. added together below
+							rho1dot += prefac * (rho1bar * SMSdag(g->Am, rho2) - SMSdag(g->Ap, rho2bar) * rho1); //+ h.c. added together below
+							rho2dot += prefac * (SdagMS(g->Ap, rho1) * rho2bar - rho2 * SdagMS(g->Am, rho1bar)); //+ h.c. added together below
 							//Move to next element:
 							g++;
 						}
