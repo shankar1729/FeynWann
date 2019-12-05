@@ -376,18 +376,18 @@ struct LindbladInit
 						
 						//Collect energy-conserving matrix elements within active window:
 						if(mpiGroup->isHead())
-						{	double sigmaInv = 1./ePhDelta;
-							double deltaPrefac = sqrt(sigmaInv/sqrt(M_PI));
-							for(int alpha=0; alpha<fw.nModes; alpha++)
+						{	for(int alpha=0; alpha<fw.nModes; alpha++)
 							{	LindbladFile::GePhEntry g;
 								g.jk = jk;
 								g.omegaPh = m.ph->omega[alpha];
 								if(g.omegaPh < omegaPhCut) continue; //avoid zero frequency phonons
+								double sigmaInv = 1./std::min(ePhDelta, g.omegaPh/(nEphDelta+1)); //make sure flipped energies not included within energy conservation
+								double deltaPrefac = sqrt(sigmaInv/sqrt(M_PI));
 								const matrix& M = m.M[alpha];
 								for(int n2=innerOffset_j; n2<innerOffset_j+nInner_j; n2++)
 									for(int n1=innerOffset; n1<innerOffset+kp.nInner; n1++)
 									{	double deltaEbySigma = sigmaInv*(m.e1->E[n1] - m.e2->E[n2] - g.omegaPh);
-										if(fabs(deltaEbySigma)<nEphDelta and (m.e1->E[n1] > m.e2->E[n2]))
+										if(fabs(deltaEbySigma) < nEphDelta)
 										{	SparseEntry s;
 											s.i = n1 - innerOffset;
 											s.j = n2 - innerOffset_j;
