@@ -209,6 +209,7 @@ int main(int argc, char** argv)
 	const int nOffsets = inputMap.get("nOffsets"); assert(nOffsets>0);
 	const double omegaMax = inputMap.get("omegaMax") * eV;
 	const double T = inputMap.get("T") * Kelvin;
+	const double dE = inputMap.get("dE") * eV; //energy resolution used for output and energy conservation
 	const vector3<> polRe = inputMap.getVector("polRe", vector3<>(1.,0.,0.)); //Real part of polarization
 	const vector3<> polIm = inputMap.getVector("polIm", vector3<>(0.,0.,0.)); //Imag part of polarization
 	const double GammaS = inputMap.get("GammaS", 0.) * eV; //surface contribution for broadening (default to 0.0 eV)
@@ -230,6 +231,7 @@ int main(int argc, char** argv)
 	logPrintf("nOffsets = %d\n", nOffsets);
 	logPrintf("omegaMax = %lg\n", omegaMax);
 	logPrintf("T = %lg\n", T);
+	logPrintf("dE = %lg\n", dE);
 	logPrintf("polRe = "); polRe.print(globalLog, " %lg ");
 	logPrintf("polIm = "); polIm.print(globalLog, " %lg ");
 	logPrintf("GammaS = %lg\n", GammaS);
@@ -273,7 +275,7 @@ int main(int argc, char** argv)
 	int oInterval = std::max(1, int(round(noMine/50.))); //interval for reporting progress
 	
 	//Initialize frequency grid:
-	const double domega = T;
+	const double domega = dE;
 	EnergyRange er = { DBL_MAX, -DBL_MAX, 0. };
 	fw->eLoop(vector3<>(), EnergyRange::eProcess, &er);
 	mpiWorld->allReduce(er.Emin, MPIUtil::ReduceMin);
