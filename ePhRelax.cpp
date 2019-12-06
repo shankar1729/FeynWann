@@ -21,6 +21,8 @@ struct ePhRelax
 	double pInject; //probability that a carrier gets injected to substrate
 	double De, scaledDe; //De, and De scaled by g(eF)**-3
 	diagMatrix hInt; //energy resolved electron-phonon coupling
+	diagMatrix Mee; //energy resolved electron-electron matrix element
+	diagMatrix gM; //elementwise dos * Mee
 	string runName;
 	
 	//Energy grid:
@@ -46,6 +48,7 @@ struct ePhRelax
 		const double Uabs = inputMap.get("Uabs") * Joule/std::pow(meter,3); //absorbed laser energy per unit volume in Joule/meter^3
 		const double Eplasmon = inputMap.get("Eplasmon") * eV; //incident photon energy in eV
 		De = inputMap.get("De") / eV; //quadratic e-e lifetime coefficient in eV^-1
+		const string MeeFile = inputMap.getString("MeeFile"); //energy-dependent matrix element filename (use None to disable)
 		runName = inputMap.getString("runName"); //prefix to use for output files
 		const matrix3<> R = matrix3<>(0,1,1, 1,0,1, 1,1,0) * (0.5*inputMap.get("aCubic")*Angstrom);
 		detR = fabs(det(R));
@@ -60,6 +63,7 @@ struct ePhRelax
 		logPrintf("Uabs = %lg\n", Uabs);
 		logPrintf("Eplasmon = %lg\n", Eplasmon);
 		logPrintf("De = %lg\n", De);
+		logPrintf("MeeFile = %s\n", MeeFile.c_str());
 		logPrintf("runName = %s\n", runName.c_str());
 		logPrintf("R:\n"); R.print(globalLog, " %lg ");
 		logPrintf("detR = %lg\n", detR);
@@ -70,6 +74,18 @@ struct ePhRelax
 		nE = dos.xGrid.size();
 		dE = dos.dx;
 		f0.resize(nE);
+		
+		//Read energy dependent matrix elements if specified:
+		Mee.assign(nE, 1.); //default: no scaling relative to De
+		if(MeeFile != "None")
+		{	Interp1 MeeInterp;
+			MeeInterp.init(MeeFile.c_str(), eV, 1.);
+			for(int ie=0; ie<nE; ie++)
+				Mee[ie] = MeeInterp(Egrid(ie));
+		}
+		gM.resize(nE);
+		for(int ie=0; ie<nE; ie++)
+			gM[ie] = dos.yGrid[0][ie] * Mee[ie];
 		
 		//Calculate maximum electron temperature after absorption (asymptote without e-ph):
 		double Umax = get_Uthermal(T) + Uabs;
@@ -186,7 +202,6 @@ struct ePhRelax
 	{	diagMatrix results(nE+1); //last entry is TlDot
 		double& TlDot = results.back();
 		const double Tl = f.back();
-		const double* g = dos.yGrid[0].data(); //DOS data pointer
 		//e-e collisions:
 		for(int i=ieStart; i<ieStop; i++)
 		{	double rateSum = 0.;
@@ -200,14 +215,15 @@ struct ePhRelax
 				{	int i3 = i+i1-i2; //energy conservation
 					double outOcc = f[i2]*f[i3];
 					double outUnocc = (1.-f[i2])*(1.-f[i3]);
-					rateSum += (inUnocc*outOcc - inOcc*outUnocc) * g[i1]*g[i2]*g[i3];
+					rateSum += (inUnocc*outOcc - inOcc*outUnocc) * gM[i1]*gM[i2]*gM[i3];
 				}
 			}
-			results[i] = (2*scaledDe) * (dE*dE) * rateSum;
+			results[i] = (2*scaledDe) * (dE*dE) * rateSum * Mee[i];
 		}
 		mpiWorld->allReduceData(results, MPIUtil::ReduceSum, true);
 		//e-ph collisions:
 		double ElDot = 0.; //rate of energy transfer to lattice
+		const double* g = dos.yGrid[0].data(); //DOS data pointer
 		for(int i=0; i<nE-1; i++)
 		{	if(std::min(g[i],g[i+1]) < 1e-3*dos0) continue; //ignore intervals with no electrons to avoid division by zero below
 			double fPrime = (f[i+1]-f[i])/dE;
