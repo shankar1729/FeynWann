@@ -3,14 +3,13 @@
 #include "InputMap.h"
 #include "Interp1.h"
 #include "Histogram.h"
+#include "Integrator.h"
 #include <core/Util.h>
 #include <core/Operators.h>
 #include <core/matrix.h>
-#include <gsl/gsl_errno.h>
-#include <gsl/gsl_odeiv2.h>
 #include <fstream>
 
-struct ePhRelax
+struct ePhRelax : public Integrator<diagMatrix>
 {
 	Interp1 dos, dosPh;
 	diagMatrix f0, fPert; //Initial Fermi and photon-perturbed distributions
@@ -24,6 +23,10 @@ struct ePhRelax
 	diagMatrix Mee; //energy resolved electron-electron matrix element
 	diagMatrix gM; //elementwise dos * Mee
 	string runName;
+	
+	double Ee0, El0; //initial electronic and lattice energies
+	std::vector<double> tArr; //time-points for which results are stored
+	std::vector<diagMatrix> fArr; //distributions (and Tl) for each t in tArr
 	
 	//Energy grid:
 	int nE; double Emin, dE;
@@ -205,11 +208,12 @@ struct ePhRelax
 		return U;
 	}
 	
-	//Evaluate e-e and e-Ph collision integrals (nonlinear):
-	diagMatrix fdot(const diagMatrix& f) const
-	{	diagMatrix results(nE+1); //last entry is TlDot
-		double& TlDot = results.back();
+	//Compute df/dt given f (nonlinear e-e and e-Ph collision integrals):
+	diagMatrix compute(double t, const diagMatrix& f)
+	{	diagMatrix fdot(nE+1); //last entry is TlDot
+		double& TlDot = fdot.back();
 		const double Tl = f.back();
+		
 		//e-e collisions:
 		for(int i=ieStart; i<ieStop; i++)
 		{	double rateSum = 0.;
@@ -226,9 +230,10 @@ struct ePhRelax
 					rateSum += (inUnocc*outOcc - inOcc*outUnocc) * gM[i1]*gM[i2]*gM[i3];
 				}
 			}
-			results[i] = (2*scaledDe) * (dE*dE) * rateSum * Mee[i];
+			fdot[i] = (2*scaledDe) * (dE*dE) * rateSum * Mee[i];
 		}
-		mpiWorld->allReduceData(results, MPIUtil::ReduceSum, true);
+		mpiWorld->allReduceData(fdot, MPIUtil::ReduceSum, true);
+		
 		//e-ph collisions:
 		double ElDot = 0.; //rate of energy transfer to lattice
 		const double* g = dos.yGrid[0].data(); //DOS data pointer
@@ -238,11 +243,27 @@ struct ePhRelax
 			double fMean = 0.5*(f[i+1]+f[i]);
 			double ElDot_i = (2*M_PI*dE) * hInt[i] * (fMean*(1.-fMean) + fPrime*Tl); //rate of energy transfer to lattice from this interval
 			ElDot += ElDot_i;
-			results[i] += ElDot_i / (dE*dE*g[i]);
-			results[i+1] -= ElDot_i / (dE*dE*g[i+1]);
+			fdot[i] += ElDot_i / (dE*dE*g[i]);
+			fdot[i+1] -= ElDot_i / (dE*dE*g[i+1]);
 		}
 		TlDot = ElDot / Cl(Tl);
-		return results;
+		
+		mpiWorld->bcastData(fdot); //Ensure consistency on all processes
+		return fdot;
+	}
+	
+	//Per time-step reporting:
+	void report(double t, const diagMatrix& f) const
+	{	const double Eunits = Joule/pow(meter,3);
+		double dEe = Ee(f) - Ee0;
+		double dEl = El(f.back()) - El0;
+		logPrintf("Integrate:  t[fs]: %5g   Ee[J/m^3]: %14.8le   El[J/m^3]: %14.8le   Etot[J/m^3]: %14.8le   Tl[K]: %7.2lf\n",
+			t/fs, dEe/Eunits, dEl/Eunits, (dEe+dEl)/Eunits, f.back()/Kelvin);
+		logFlush();
+		//Store time and corresponding results:
+		ePhRelax& e = *((ePhRelax*)this);
+		e.tArr.push_back(t);
+		e.fArr.push_back(f);
 	}
 	
 	//Evaluate e-e linewidth correction:
@@ -290,57 +311,31 @@ struct ePhRelax
 	}
 };
 
-//Wrapper function for GSL integrator:
-int fdot_wrapper(double t, const double* f, double* fdot, void* params)
-{	const ePhRelax& e = *((ePhRelax*)params);
-	diagMatrix fMat; fMat.assign(f, f+e.nE+1); //copy input to diagMatrix
-	diagMatrix fdotMat = e.fdot(fMat); //calculate result in diagMatrix form
-	mpiWorld->bcastData(fdotMat); //make sure results are consistent across processes to numerical precision
-	std::copy(fdotMat.begin(), fdotMat.end(), fdot); //copy output to pointer
-	return GSL_SUCCESS;
-}
-
 int main(int argc, char** argv)
 {	ePhRelax e(argc, argv);
 	
 	//Solve time dependence:
-	std::vector<diagMatrix> fArr;
 	StopWatch watchSolve("Solve"); watchSolve.start();
-	gsl_odeiv2_system odeSystem = {fdot_wrapper, NULL, size_t(e.nE+1), &e };
-	gsl_odeiv2_driver* odeDriver = gsl_odeiv2_driver_alloc_y_new(&odeSystem, gsl_odeiv2_step_msadams, 1e-4, 1e-4, 0.0);
-	double Ee0 = e.Ee(e.f0), El0 = e.El(e.T);
+	e.Ee0 = e.Ee(e.f0);
+	e.El0 = e.El(e.T);
+
 	//--- t = -dt: just before absorption
 	double t = -e.dt;
 	diagMatrix f = e.f0; f.push_back(e.T);
-	fArr.push_back(f);
+	e.report(t, f);
+
 	//--- t = 0: just after absorption
 	t = 0;
 	f = e.fPert; f.push_back(e.T);
-	fArr.push_back(f);
-	logPrintf("\nSolving boltzmann eqn:\n");
-	logPrintf("%5s  %19s  %19s  %19s  %7s  %s\n", "t[fs]",  "Ee[J/m^3]", "El[J/m^3]", "(El+Ee)[J/m^3]", "Tl[K]", "Progress");
-	logFlush();
 	
-	while(t < e.tMax-1e-3*e.dt)
-	{	int status = gsl_odeiv2_driver_apply(odeDriver, &t, t+e.dt, f.data());
-		if(status != GSL_SUCCESS) die("Error %d in ODE propagation", status)
-		fArr.push_back(f);
-		
-		//Print progress:
-		const double Eunits = Joule/pow(meter,3);
-		double dEe = e.Ee(f)-Ee0, dEl = e.El(f.back())-El0;
-		logPrintf("%5g  %19.13le  %19.13le  %19.13le  %7.2lf  %.1f%%\n", t/fs, dEe/Eunits, dEl/Eunits, (dEe+dEl)/Eunits, f.back()/Kelvin, 100.*t/e.tMax);
-		logFlush();
-	}
-	logPrintf("done.\n"); logFlush();
-	gsl_odeiv2_driver_free(odeDriver);
+	e.integrateAdaptive(f, t, e.tMax, 1e-4, e.dt);
 	watchSolve.stop();
 	
 	//Calculate carrier linewidths and effective temperature:
-	logPrintf("\nCalculating linewidths ... "); logFlush();
+	logPrintf("Calculating linewidths ... "); logFlush();
 	StopWatch watchLinewidths("Linewidths"); watchLinewidths.start();
 	std::vector<diagMatrix> lwDelta;
-	for(diagMatrix& f: fArr)
+	for(diagMatrix& f: e.fArr)
 		lwDelta.push_back(e.linewidthCorrection(f));
 	watchLinewidths.stop();
 	logPrintf("done.\n");
@@ -353,8 +348,8 @@ int main(int argc, char** argv)
 		ofs.open((e.runName+".Tl").c_str());
 		ofs.precision(10);
 		ofs << "#t[fs] Tl[K]\n";
-		for(int it=0; it<int(fArr.size()); it++)
-			ofs << ((it-1)*e.dt)/fs << '\t' << fArr[it].back()/Kelvin << '\n';
+		for(int it=0; it<int(e.tArr.size()); it++)
+			ofs << e.tArr[it]/fs << '\t' << e.fArr[it].back()/Kelvin << '\n';
 		ofs.close();
 		
 		//Distributions [dimensionless]
@@ -362,14 +357,14 @@ int main(int argc, char** argv)
 		ofs.precision(10);
 		//--- Header
 		ofs << "#E[ev]\\t[fs]";
-		for(int it=0; it<int(fArr.size()); it++)
-			ofs << '\t' << ((it-1)*e.dt)/fs;
+		for(int it=0; it<int(e.tArr.size()); it++)
+			ofs << '\t' << e.tArr[it]/fs;
 		ofs << '\n';
 		//--- Data
 		for(int ie=0; ie<e.nE; ie++)
 		{	ofs << e.Egrid(ie)/eV;
-			for(size_t it=0; it<fArr.size(); it++)
-				ofs << '\t' << fArr[it][ie];
+			for(size_t it=0; it<e.tArr.size(); it++)
+				ofs << '\t' << e.fArr[it][ie];
 			ofs << '\n';
 		}
 		ofs.close();
@@ -379,13 +374,13 @@ int main(int argc, char** argv)
 		ofs.precision(10);
 		//--- Header
 		ofs << "#E[ev]\\t[fs]";
-		for(int it=0; it<int(fArr.size()); it++)
-			ofs << '\t' << ((it-1)*e.dt)/fs;
+		for(int it=0; it<int(e.tArr.size()); it++)
+			ofs << '\t' << e.tArr[it]/fs;
 		ofs << '\n';
 		//--- Data
 		for(int ie=0; ie<e.nE; ie++)
 		{	ofs << e.Egrid(ie)/eV;
-			for(size_t it=0; it<fArr.size(); it++)
+			for(size_t it=0; it<e.tArr.size(); it++)
 				ofs << '\t' << lwDelta[it][ie]/eV;
 			ofs << '\n';
 		}
