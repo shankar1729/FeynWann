@@ -24,6 +24,7 @@ struct ePhRelax : public Integrator<diagMatrix>
 	diagMatrix hInt; //energy resolved electron-phonon coupling
 	diagMatrix Mee; //energy resolved electron-electron matrix element
 	diagMatrix gM; //elementwise dos * Mee
+	int eeStride; //coarse graining stride used to accelerate e-e calculation
 	string runName;
 	
 	double Ee0, El0; //initial electronic and lattice energies
@@ -34,7 +35,29 @@ struct ePhRelax : public Integrator<diagMatrix>
 	int nE; double Emin, dE;
 	inline double Egrid(int i) const { return dos.xGrid[i]; }
 	int ieMin, ieMax; //min and max active energy grid indices (that evolve with time)
-	int ieStart, ieStop; //min and max energy grid indices to deal with on current MPI process
+	
+	//Coarse grid for ee-scattering
+	int nEcoarse; //length of coarse grid on active energy range
+	double dEcoarse; //coarse grid spacing
+	int ieStart, ieStop; //min and max coarse energy grid indices to deal with on current MPI process
+	std::vector<double> kernel; //coarse-graining and interpolation kernel (length: 2*eeStride-1)
+	//--- Gather from fine to coarse grid: set results
+	inline void gather(const double* fine, double* coarse)
+	{	double kernelSumInv = 1./eeStride;
+		for(int i=0; i<nEcoarse; i++)
+		{	double sum = 0.;
+			for(int j=0; j<int(kernel.size()); j++)
+				sum += kernel[j] * fine[ieMin+i*eeStride+j];
+			coarse[i] = kernelSumInv * sum;
+		}
+	}
+	//--- Scatter (interpolate) from coarse to fine grid: accumulate results
+	inline void scatter(const double* coarse, double* fine)
+	{	for(int i=0; i<nEcoarse; i++)
+			for(int j=0; j<int(kernel.size()); j++)
+				fine[ieMin+i*eeStride+j] += kernel[j] * coarse[i];
+	}
+	diagMatrix Mc, gMc; //coarse-grained versions of Mee and gM
 	
 	ePhRelax(int argc, char** argv)
 	{
@@ -57,6 +80,7 @@ struct ePhRelax : public Integrator<diagMatrix>
 		pumpFWHM = inputMap.get("pumpFWHM", 0.) * fs; //Gaussian pump pulse width in fs (default: 0 => treat pump as instantaneous)
 		scatterFactor= inputMap.get("scatterFactor", 1.); //Increase the e-e and e-ph scattering rate by this factor (dafeult: 1 => no scaling)
 		const string MeeFile = inputMap.getString("MeeFile"); //energy-dependent matrix element filename (use None to disable)
+		eeStride = (int)inputMap.get("eeStride", 1.); //coarse graining stride used to accelerate e-e calculation
 		runName = inputMap.getString("runName"); //prefix to use for output files
 		const matrix3<> R = matrix3<>(0,1,1, 1,0,1, 1,1,0) * (0.5*inputMap.get("aCubic")*Angstrom);
 		detR = fabs(det(R));
@@ -74,6 +98,7 @@ struct ePhRelax : public Integrator<diagMatrix>
 		logPrintf("pumpFWHM = %lg\n", pumpFWHM);
 		logPrintf("scatterFactor = %lg\n", scatterFactor);
 		logPrintf("MeeFile = %s\n", MeeFile.c_str());
+		logPrintf("eeStride = %d\n", eeStride);
 		logPrintf("runName = %s\n", runName.c_str());
 		logPrintf("R:\n"); R.print(globalLog, " %lg ");
 		logPrintf("detR = %lg\n", detR);
@@ -168,14 +193,29 @@ struct ePhRelax : public Integrator<diagMatrix>
 		for(int ie=0; ie<nE-1; ie++)
 			hInt[ie] = hIntInterp(Egrid(ie)+0.5*dE);
 		
-		//Divide active energy grid:
+		//Divide active energy grid for e-e scattering calculation:
+		//--- make length commensurate with eeStride
 		mpiWorld->bcast(ieMin);
 		mpiWorld->bcast(ieMax);
-		int neActive = ieMax - ieMin;
-		TaskDivision(neActive, mpiWorld).myRange(ieStart, ieStop);
-		ieStart += ieMin;
-		ieStop += ieMin;
-		logPrintf("Active energy grid: [%d,%d) of total %d points, with [%d,%d) on current process.\n", ieMin, ieMax, nE, ieStart, ieStop);
+		nEcoarse = ceildiv(ieMax-ieMin+2, eeStride) - 1;
+		ieMax = ieMin-2 + (nEcoarse+1)*eeStride;
+		if(ieMax >= nE)
+		{	ieMax -= eeStride;
+			nEcoarse--;
+		}
+		assert(nEcoarse > 0);
+		logPrintf("Active energy grid: [%d,%d) of total %d points\n", ieMin, ieMax, nE);
+		//--- initialize coarse grid
+		dEcoarse = dE * eeStride;
+		TaskDivision(nEcoarse, mpiWorld).myRange(ieStart, ieStop);
+		logPrintf("Coarse grid: %d points with [%d,%d) on current process.\n", nEcoarse, ieStart, ieStop);
+		//--- initialize kernel:
+		kernel.resize(2*eeStride-1);
+		for(int i=0; i<int(kernel.size()); i++)
+			kernel[i] = 1. - fabs(i+1-eeStride)/eeStride;
+		//--- coarse grain Mee and gM:
+		Mc.resize(nEcoarse); gather(Mee.data(), Mc.data());
+		gMc.resize(nEcoarse); gather(gM.data(), gMc.data());
 		
 		if(ip.dryRun)
 		{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
@@ -221,24 +261,31 @@ struct ePhRelax : public Integrator<diagMatrix>
 		const double Tl = f.back();
 		
 		//e-e collisions:
+		//--- gather f to coarse grid:
+		diagMatrix fc(nEcoarse);
+		gather(f.data(), fc.data());
+		//--- compute fdot:
+		diagMatrix fcDot(nEcoarse);
 		for(int i=ieStart; i<ieStop; i++)
 		{	double rateSum = 0.;
-			for(int i1=ieMin; i1<ieMax; i1++)
-			{	double inOcc = f[i]*f[i1];
-				double inUnocc = (1.-f[i])*(1.-f[i1]);
-				//i2 range set by both i2 and i3 in [ieMin,ieMax)
-				int i2min = std::max(i+i1+1-ieMax, ieMin);
-				int i2max = std::min(i+i1+1-ieMin, ieMax);
+			for(int i1=0; i1<nEcoarse; i1++)
+			{	double inOcc = fc[i]*fc[i1];
+				double inUnocc = (1.-fc[i])*(1.-fc[i1]);
+				//i2 range set by both i2 and i3 in [0,nEcoarse)
+				int i2min = std::max(i+i1+1-nEcoarse, 0);
+				int i2max = std::min(i+i1+1, nEcoarse);
 				for(int i2=i2min; i2<i2max; i2++)
 				{	int i3 = i+i1-i2; //energy conservation
-					double outOcc = f[i2]*f[i3];
-					double outUnocc = (1.-f[i2])*(1.-f[i3]);
-					rateSum += (inUnocc*outOcc - inOcc*outUnocc) * gM[i1]*gM[i2]*gM[i3];
+					double outOcc = fc[i2]*fc[i3];
+					double outUnocc = (1.-fc[i2])*(1.-fc[i3]);
+					rateSum += (inUnocc*outOcc - inOcc*outUnocc) * gMc[i1]*gMc[i2]*gMc[i3];
 				}
 			}
-			fdot[i] = scatterFactor * (2*scaledDe) * (dE*dE) * rateSum * Mee[i];
+			fcDot[i] = scatterFactor * (2*scaledDe) * (dEcoarse*dEcoarse) * rateSum * Mc[i];
 		}
-		mpiWorld->allReduceData(fdot, MPIUtil::ReduceSum, true);
+		mpiWorld->allReduceData(fcDot, MPIUtil::ReduceSum);
+		//--- scatter fdot to fine grid:
+		scatter(fcDot.data(), fdot.data());
 		
 		//e-ph collisions:
 		double ElDot = 0.; //rate of energy transfer to lattice
