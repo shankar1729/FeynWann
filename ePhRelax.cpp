@@ -128,6 +128,9 @@ struct ePhRelax
 		fPert.resize(nE);
 		double Upert = 0.;
 		double dZ = 0.;
+		const double dnCut = 1e-3/Eplasmon; //number change threshold for active window
+		ieMin = std::max(0, int(floor((-Eplasmon-10*T-dos.xMin)/dE)));
+		ieMax = std::min(nE, int(ceil((Eplasmon+10*T-dos.xMin)/dE)));
 		for(int ie=0; ie<nE; ie++)
 		{	const double& Ei = Egrid(ie);
 			double dni = distribDirect.interp1(Ei, Eplasmon) + distribPhonon.interp1(Ei, Eplasmon); //induced carrier number change at given energy
@@ -138,6 +141,11 @@ struct ePhRelax
 				dni -= dniInjected;
 			}
 			fPert[ie] = dni / std::max(dos.yGrid[0][ie], 1e-3*dos0); //divide by DOS to get the effective filling change (regularize to avoid Infs)
+			//Update active range:
+			if(fabs(dni) > dnCut)
+			{	ieMin = std::min(ieMin, ie);
+				ieMax = std::max(ieMax, ie);
+			}
 		}
 		fPert *= Uabs / Upert; //normalize to match absorbed laser energy per unit volume
 		dZ *= detR * Uabs / Upert; //correspondingly normalize (but per unit cell)
@@ -151,9 +159,9 @@ struct ePhRelax
 		for(int ie=0; ie<nE-1; ie++)
 			hInt[ie] = hIntInterp(Egrid(ie)+0.5*dE);
 		
-		//Determine active energy grid:
-		ieMin = std::max(0, int(floor((-Eplasmon-10*T-dos.xMin)/dE)));
-		ieMax = std::min(nE, int(ceil((Eplasmon+10*T-dos.xMin)/dE)));
+		//Divide active energy grid:
+		mpiWorld->bcast(ieMin);
+		mpiWorld->bcast(ieMax);
 		int neActive = ieMax - ieMin;
 		TaskDivision(neActive, mpiWorld).myRange(ieStart, ieStop);
 		ieStart += ieMin;
@@ -299,7 +307,7 @@ int main(int argc, char** argv)
 	std::vector<diagMatrix> fArr;
 	StopWatch watchSolve("Solve"); watchSolve.start();
 	gsl_odeiv2_system odeSystem = {fdot_wrapper, NULL, size_t(e.nE+1), &e };
-	gsl_odeiv2_driver* odeDriver = gsl_odeiv2_driver_alloc_y_new(&odeSystem, gsl_odeiv2_step_msadams, 1e-6, 1e-6, 0.0);
+	gsl_odeiv2_driver* odeDriver = gsl_odeiv2_driver_alloc_y_new(&odeSystem, gsl_odeiv2_step_msadams, 1e-4, 1e-4, 0.0);
 	double Ee0 = e.Ee(e.f0), El0 = e.El(e.T);
 	//--- t = -dt: just before absorption
 	double t = -e.dt;
