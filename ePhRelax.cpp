@@ -163,7 +163,7 @@ struct ePhRelax : public Integrator<diagMatrix>
 		dfPert.resize(nE);
 		double Upert = 0.;
 		double dZ = 0.;
-		const double dnCut = 1e-3/Eplasmon; //number change threshold for active window
+		const double dnCut = 1e-5/Eplasmon; //number change threshold for active window
 		ieMin = std::max(0, int(floor((-Eplasmon-10*T-dos.xMin)/dE)));
 		ieMax = std::min(nE, int(ceil((Eplasmon+10*T-dos.xMin)/dE)));
 		for(int ie=0; ie<nE; ie++)
@@ -175,10 +175,10 @@ struct ePhRelax : public Integrator<diagMatrix>
 				dZ -= dniInjected * dE; //count electrons/holes removed
 				dni -= dniInjected;
 			}
-			dfPert[ie] = dni / std::max(dos.yGrid[0][ie], 1e-3*dos0); //divide by DOS to get the effective filling change (regularize to avoid Infs)
-			//Update active range:
+			//Include perturbation and update active range:
 			if(fabs(dni) > dnCut)
-			{	ieMin = std::min(ieMin, ie);
+			{	dfPert[ie] = dni / std::max(dos.yGrid[0][ie], 1e-3*dos0); //divide by DOS to get the effective filling change (regularize to avoid Infs)
+				ieMin = std::min(ieMin, ie);
 				ieMax = std::max(ieMax, ie);
 			}
 		}
