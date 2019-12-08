@@ -53,6 +53,7 @@ struct CollectImEps
 	double T, invT;
 	double GammaS;
 	double domega, omegaFull, omegaMax;
+	bool needLW;
 	double dv, vMax;
 	std::vector<Histogram> ImEps, breadth, breadthDen;
 	Histogram2D ImEps_E; //ImEpsDelta resolved by carrier energy; collected only for first mu
@@ -63,8 +64,8 @@ struct CollectImEps
 	double EvMax, EcMin;
 	
 	
-	CollectImEps(const std::vector<double>& dmu, double T, double domega, double omegaFull, double omegaMax, double dv, double vMax)
-	: dmu(dmu), T(T), invT(1./T), domega(domega), omegaFull(omegaFull), omegaMax(omegaMax), dv(dv), vMax(vMax),
+	CollectImEps(const std::vector<double>& dmu, double T, double domega, double omegaFull, double omegaMax, bool needLW, double dv, double vMax)
+	: dmu(dmu), T(T), invT(1./T), domega(domega), omegaFull(omegaFull), omegaMax(omegaMax), needLW(needLW), dv(dv), vMax(vMax),
 		ImEps(dmu.size(), Histogram(0, domega, omegaFull)),
 		breadth(dmu.size(), Histogram(0, domega, omegaFull)),
 		breadthDen(dmu.size(), Histogram(0, domega, omegaFull)),
@@ -78,11 +79,11 @@ struct CollectImEps
 	void calcStateRelated(const FeynWann::StateE& state, std::vector<diagMatrix>& F, std::vector<diagMatrix>& ImE)
 	{	int nBands = state.E.nRows();
 		F.assign(dmu.size(), diagMatrix(nBands));
-		ImE.assign(dmu.size(), state.ImSigma_ee); //e-e part
+		if(needLW) ImE.assign(dmu.size(), state.ImSigma_ee); //e-e part
 		for(unsigned iMu=0; iMu<dmu.size(); iMu++)
 		{	for(int b=0; b<nBands; b++)
 			{	F[iMu][b] = fermi((state.E[b]-dmu[iMu])*invT);
-				ImE[iMu][b] += state.ImSigma_ePh(b, F[iMu][b]);
+				if(needLW) ImE[iMu][b] += state.ImSigma_ePh(b, F[iMu][b]);
 			}
 		}
 	}
@@ -107,7 +108,7 @@ struct CollectImEps
 				for(unsigned iMu=0; iMu<dmu.size(); iMu++)
 				{	double weight = weight_F * (F[iMu][v]-F[iMu][c]);
 					ImEps[iMu].addEvent(omega, weight);
-					breadth[iMu].addEvent(omega, weight*(ImE[iMu][c]+ImE[iMu][v]+GammaS));
+					if(needLW) breadth[iMu].addEvent(omega, weight*(ImE[iMu][c]+ImE[iMu][v]+GammaS));
 					if(iMu==0)
 					{	ImEps_E.addEvent(E[v], omega, -weight); //hole
 						ImEps_E.addEvent(E[c], omega, +weight); //electron
@@ -172,8 +173,10 @@ struct CollectImEps
 						for(unsigned iMu=0; iMu<dmu.size(); iMu++)
 						{	double weight = weight_F * (F1[iMu][v]-F2[iMu][c]);
 							ImEps[iMu].addEvent(omega, weight);
-							breadth[iMu].addEvent(omega, fabs(weight)*(ImE2[iMu][c]+ImE1[iMu][v]+GammaS));
-							breadthDen[iMu].addEvent(omega, fabs(weight));
+							if(needLW)
+							{	breadth[iMu].addEvent(omega, fabs(weight)*(ImE2[iMu][c]+ImE1[iMu][v]+GammaS));
+								breadthDen[iMu].addEvent(omega, fabs(weight));
+							}
 							if(iMu==0)
 							{	ImEps_E.addEvent(E1[v], omega, -weight); //hole
 								ImEps_E.addEvent(E2[c], omega, +weight); //electron
@@ -217,6 +220,7 @@ int main(int argc, char** argv)
 	const double dmuMin = inputMap.get("dmuMin", 0.) * eV; //optional shift in chemical potential from neutral value; start of range (default to 0)
 	const double dmuMax = inputMap.get("dmuMax", 0.) * eV; //optional shift in chemical potential from neutral value; end of range (default to 0)
 	const int dmuCount = inputMap.get("dmuCount", 1); assert(dmuCount>0); //number of chemical potential shifts
+	const double broadening = inputMap.get("broadening", 0)*eV; //if non-zero, override broadening with this value in eV
 	string contribution = inputMap.getString("contribution"); //direct / phonon
 
 	//Check contribution:
@@ -239,14 +243,16 @@ int main(int argc, char** argv)
 	logPrintf("dmuMin = %lg\n", dmuMin);
 	logPrintf("dmuMax = %lg\n", dmuMax);
 	logPrintf("dmuCount = %d\n", dmuCount);
+	logPrintf("broadening = %lg\n", broadening);
 	logPrintf("contribution = %s\n", contribMap.getString(contribType));
 
 	//Initialize FeynWann:
+	bool needLW = (broadening==0.);
 	FeynWannParams fwp;
 	fwp.needPhonons = (contribType==Phonon);
 	fwp.needVelocity = true;
-	fwp.needLinewidth_ee = true;
-	fwp.needLinewidth_ePh = true;
+	fwp.needLinewidth_ee = needLW;
+	fwp.needLinewidth_ePh = needLW;
 	std::shared_ptr<FeynWann> fw = std::make_shared<FeynWann>(fwp);
 	size_t nKeff = nOffsets * (contribType==Direct ? fw->eCountPerOffset() : fw->ePhCountPerOffset());
 	logPrintf("Effectively sampled %s: %lu\n", (contribType==Direct ? "nKpts" : "nKpairs"), nKeff);
@@ -291,7 +297,7 @@ int main(int argc, char** argv)
 		dmu[iMu] = dmuMin + iMu*(dmuMax-dmuMin)/(dmuCount-1);
 	
 	//Calculate delta-function resolved versions (no broadening yet):
-	CollectImEps cie(dmu, T, domega, omegaFull, omegaMax, dv, vMax);
+	CollectImEps cie(dmu, T, domega, omegaFull, omegaMax, needLW, dv, vMax);
 	cie.prefac = 4. * std::pow(M_PI,2) * fw->spinWeight / (nKeff*fabs(det(fw->R))); //frequency independent part of prefactor
 	cie.eta = eta;
 	cie.GammaS = GammaS;
@@ -328,11 +334,13 @@ int main(int argc, char** argv)
 	}
 	for(int iMu=0; iMu<dmuCount; iMu++)
 	{	cie.ImEps[iMu].allReduce(MPIUtil::ReduceSum);
-		cie.breadth[iMu].allReduce(MPIUtil::ReduceSum);
-		if(contribType==Direct)
-			cie.breadthDen[iMu] = cie.ImEps[iMu]; //normalization weight is just ImEps
-		else
-			cie.breadthDen[iMu].allReduce(MPIUtil::ReduceSum); //collected separately due to extrapolation sign
+		if(needLW)
+		{	cie.breadth[iMu].allReduce(MPIUtil::ReduceSum);
+			if(contribType==Direct)
+				cie.breadthDen[iMu] = cie.ImEps[iMu]; //normalization weight is just ImEps
+			else
+				cie.breadthDen[iMu].allReduce(MPIUtil::ReduceSum); //collected separately due to extrapolation sign
+		}
 	}
 	cie.ImEps_E.allReduce(MPIUtil::ReduceSum);
 	cie.ImEps_v.allReduce(MPIUtil::ReduceSum);
@@ -342,10 +350,11 @@ int main(int argc, char** argv)
 	int nomega = cie.breadth[0].nE;
 	for(int iomega=0; iomega<nomega; iomega++)
 		for(int iMu=0; iMu<dmuCount; iMu++)
-		{	cie.breadth[iMu].out[iomega] = std::max(T, 
-				cie.breadthDen[iMu].out[iomega]
+		{	cie.breadth[iMu].out[iomega] = needLW
+				? std::max(T, cie.breadthDen[iMu].out[iomega]
 					? cie.breadth[iMu].out[iomega]/cie.breadthDen[iMu].out[iomega]
-					: 0.);
+					: 0.)
+				: broadening; //use input value
 		}
 	cie.breadth[0].print("breadth"+fileSuffix+".dat", 1./eV, 1./eV);
 	
