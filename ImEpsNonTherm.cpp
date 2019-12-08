@@ -226,7 +226,6 @@ int main(int argc, char** argv)
 	//Get the system parameters (mu, T, lattice vectors etc.)
 	InputMap inputMap(ip.inputFilename);
 	const int nOffsets = inputMap.get("nOffsets"); assert(nOffsets>0);
-	const double Z = inputMap.get("Z"); //number of electrons per unit cell
 	const double dE = inputMap.get("dE") * eV; //energy resolution used for output and energy conservation
 	const double GammaS = inputMap.get("GammaS") * eV;
 	string runName = inputMap.getString("runName");
@@ -242,9 +241,9 @@ int main(int argc, char** argv)
 	
 	logPrintf("\nInputs after conversion to atomic units:\n");
 	logPrintf("nOffsets = %d\n", nOffsets);
-	logPrintf("Z = %lg\n", Z);
 	logPrintf("dE = %lg\n", dE);
 	logPrintf("GammaS = %lg\n", GammaS);
+	logPrintf("runName = %s\n", runName.c_str());
 	logPrintf("contribution = %s\n", contribMap.getString(contribType));
 
 	//Initialize FeynWann:
