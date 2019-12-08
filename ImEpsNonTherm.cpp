@@ -227,7 +227,7 @@ int main(int argc, char** argv)
 	InputMap inputMap(ip.inputFilename);
 	const int nOffsets = inputMap.get("nOffsets"); assert(nOffsets>0);
 	const double dE = inputMap.get("dE") * eV; //energy resolution used for output and energy conservation
-	const double GammaS = inputMap.get("GammaS") * eV;
+	const double GammaS = inputMap.get("GammaS", 0.) * eV; //extra broadening due to surface scattering (default: none)
 	string runName = inputMap.getString("runName");
 	string contribution = inputMap.getString("contribution"); //direct / phonon
 
