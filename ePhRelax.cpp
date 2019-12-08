@@ -168,7 +168,11 @@ struct ePhRelax : public Integrator<diagMatrix>
 		ieMax = std::min(nE, int(ceil((Eplasmon+10*T-dos.xMin)/dE)));
 		for(int ie=0; ie<nE; ie++)
 		{	const double& Ei = Egrid(ie);
-			double dni = distribDirect.interp1(Ei, Eplasmon) + distribPhonon.interp1(Ei, Eplasmon); //induced carrier number change at given energy
+			double dni = 0.; //induced carrier number change at given energy
+			for(int jE = -10; jE<=+10; jE++)
+			{	double w = exp(-(jE*jE)/18.) / (sqrt(2*M_PI)*3); //gauss smoothing kernel with width 3*dE
+				dni += w * (distribDirect.interp1(Ei+jE*dE, Eplasmon) + distribPhonon.interp1(Ei+jE*dE, Eplasmon));
+			}
 			Upert += dni * Ei * dE; //calculate energy of perturbation
 			if (Ei < minEcut || Ei > maxEcut)
 			{	double dniInjected = dni * pInject;
