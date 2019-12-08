@@ -202,6 +202,13 @@ inline double lorentzianOdd(double omega, double omega0, double breadth)
 		( 1./(breadthSq + std::pow(omega-omega0, 2))
 		- 1./(breadthSq + std::pow(omega+omega0, 2)) );
 }
+//Gaussian kernel for an odd function stored on postive frequencies alone:
+inline double gaussianOdd(double omega, double omega0, double sigma)
+{	double sigmaInvSq = 1./(sigma*sigma);
+	return 1./(sqrt(2*M_PI)*sigma) *
+		( exp(-0.5*sigmaInvSq*std::pow(omega-omega0, 2))
+		- exp(-0.5*sigmaInvSq*std::pow(omega+omega0, 2)) );
+}
 
 int main(int argc, char** argv)
 {	
@@ -370,7 +377,7 @@ int main(int argc, char** argv)
 			double b = cie.breadth[iMu].out[iomega];
 			for(size_t jomega=0; jomega<ImEps[iMu].out.size(); jomega++) //output frequency grid
 			{	double omega = jomega*domega;
-				double kernel = lorentzianOdd(omega, omegaCur, b) * domega;
+				double kernel = (needLW ? lorentzianOdd(omega, omegaCur, b) : gaussianOdd(omega, omegaCur, b)) * domega;
 				ImEps[iMu].out[jomega] += kernel * cie.ImEps[iMu].out[iomega];
 				//Carrier energy / speed distributions:
 				if(iMu==0 && int(jomega)<ImEps_E.nomega)
