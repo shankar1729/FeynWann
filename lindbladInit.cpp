@@ -38,7 +38,6 @@ static const double nEphDelta = 4.; //number of ePhDelta to include in output
 struct LindbladInit
 {	
 	FeynWann& fw;
-	const std::vector<vector3<>>& k0; //!< k-point offsets
 	const vector3<int>& NkFine; //!< effective k-point mesh sampled
 	const size_t nkTot; //!< total k-points effectively used in BZ sampling
 	
@@ -48,25 +47,14 @@ struct LindbladInit
 	const bool ePhEnabled; //!< whether e-ph coupling is enabled
 	const double ePhDelta; //!< Gaussian energy conservation width
 	
-	size_t oStart, oStop; //!< range of offstes handled by this process group
-	size_t noMine, oInterval; //!< number of offsets on this process group and reporting interval
-	
-	
-	LindbladInit(FeynWann& fw, const std::vector<vector3<>>& k0, const vector3<int>& NkFine,
+	LindbladInit(FeynWann& fw, const vector3<int>& NkFine,
 		double dmuMin, double dmuMax, double Tmax, double pumpOmegaMax, double probeOmegaMax,
 		bool ePhEnabled, double ePhDelta)
-	: fw(fw), k0(k0), NkFine(NkFine), nkTot(fw.eCountPerOffset()*k0.size()),
+	: fw(fw), NkFine(NkFine), nkTot(NkFine[0]*NkFine[1]*NkFine[2]),
 		dmuMin(dmuMin), dmuMax(dmuMax), Tmax(Tmax),
 		pumpOmegaMax(pumpOmegaMax), probeOmegaMax(probeOmegaMax),
 		ePhEnabled(ePhEnabled), ePhDelta(ePhDelta)
 	{
-		//Initialize sampling parameters:
-		if(mpiGroup->isHead())
-			TaskDivision(k0.size(), mpiGroupHead).myRange(oStart, oStop);
-		mpiGroup->bcast(oStart);
-		mpiGroup->bcast(oStop);
-		noMine = oStop-oStart;
-		oInterval = std::max(1, int(round(noMine/50.))); //interval for reporting progress
 	}
 	
 	//--------- k-point selection -------------
@@ -100,7 +88,7 @@ struct LindbladInit
 	static void kSelect(const FeynWann::StateE& state, void* params)
 	{	((LindbladInit*)params)->kSelect(state);
 	}
-	void kpointSelect()
+	void kpointSelect(const std::vector<vector3<>>& k0)
 	{
 		//Determine energy range:
 		EvMax = -DBL_MAX;
@@ -114,6 +102,15 @@ struct LindbladInit
 		Estop = std::max(EvMax + pumpOmegaMax, EcMin) + Emargin;
 		logPrintf("Active energy range: %.3lf to %.3lf eV\n", Estart/eV, Estop/eV);
 		
+		//Initialize sampling parameters:
+		size_t oStart, oStop; //range of offstes handled by this process group
+		if(mpiGroup->isHead())
+			TaskDivision(k0.size(), mpiGroupHead).myRange(oStart, oStop);
+		mpiGroup->bcast(oStart);
+		mpiGroup->bcast(oStop);
+		size_t noMine = oStop-oStart;
+		size_t oInterval = std::max(1, int(round(noMine/50.))); //interval for reporting progress
+
 		//Select k-points:
 		logPrintf("Scanning k-points with active states: "); logFlush();
 		for(size_t o=oStart; o<oStop; o++)
@@ -205,16 +202,25 @@ struct LindbladInit
 	static void kpSelect(const FeynWann::StatePh& state, void* params)
 	{	((LindbladInit*)params)->kpSelect(state);
 	}
-	void kpairSelect()
+	void kpairSelect(const std::vector<vector3<>>& q0)
 	{	
 		//Initialize kIndexMap for searching selected k-points:
 		for(size_t ik=0; ik<k.size(); ik++)
 			kIndexMap[kIndex(k[ik])] = ik;
 		
+		//Initialize sampling parameters:
+		size_t oStart, oStop; //!< range of offstes handled by this process groups
+		if(mpiGroup->isHead())
+			TaskDivision(q0.size(), mpiGroupHead).myRange(oStart, oStop);
+		mpiGroup->bcast(oStart);
+		mpiGroup->bcast(oStop);
+		size_t noMine = oStop-oStart;
+		size_t oInterval = std::max(1, int(round(noMine/50.))); //interval for reporting progress
+
 		//Find momentum-conserving k-pairs for which energy conservation is also possible for some bands:
 		logPrintf("Scanning k-pairs with e-ph coupling: "); logFlush();
 		for(size_t o=oStart; o<oStop; o++)
-		{	fw.phLoop(k0[o], LindbladInit::kpSelect, this);
+		{	fw.phLoop(q0[o], LindbladInit::kpSelect, this);
 			//Print progress:
 			if((o-oStart+1)%oInterval==0) { logPrintf("%d%% ", int(round((o-oStart+1)*100./noMine))); logFlush(); }
 		}
@@ -534,6 +540,19 @@ int main(int argc, char** argv)
 	size_t nKeff = nOffsets * fw.eCountPerOffset();
 	logPrintf("Effectively sampled %s: %lu\n", "nKpts", nKeff);
 	
+	//Construct mesh of q-offsets:
+	std::vector<vector3<>> q0;
+	if(ePhEnabled)
+	{	vector3<int> NqMult;
+		for(int iDir=0; iDir<3; iDir++)
+			NqMult[iDir] = NkFine[iDir] / fw.phononSup[iDir];
+		vector3<int> iqMult;
+		for(iqMult[0]=0; iqMult[0]<NqMult[0]; iqMult[0]++)
+		for(iqMult[1]=0; iqMult[1]<NqMult[1]; iqMult[1]++)
+		for(iqMult[2]=0; iqMult[2]<NqMult[2]; iqMult[2]++)
+			q0.push_back(NkFineInv * iqMult);
+	}
+	
 	if(ip.dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
 		fw.free();
@@ -543,14 +562,14 @@ int main(int argc, char** argv)
 	logPrintf("\n");
 	
 	//Create and initialize lindblad calculator:
-	LindbladInit lb(fw, k0, NkFine, dmuMin, dmuMax, Tmax, pumpOmegaMax, probeOmegaMax, ePhEnabled, ePhDelta);
+	LindbladInit lb(fw, NkFine, dmuMin, dmuMax, Tmax, pumpOmegaMax, probeOmegaMax, ePhEnabled, ePhDelta);
 	
 	//First pass (e only): select k-points
-	lb.kpointSelect();
+	lb.kpointSelect(k0);
 	
 	//Second pass (ph only): select k pairs
 	if(ePhEnabled)
-		lb.kpairSelect();
+		lb.kpairSelect(q0);
 	
 	//Final pass: output electronic and e-ph quantities
 	lb.saveData();
