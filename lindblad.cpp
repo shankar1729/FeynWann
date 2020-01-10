@@ -284,7 +284,7 @@ struct Lindblad : public Integrator<DM1>
 			//Probe response:
 			for(int iomega=0; iomega<nomega; iomega++)
 			{	double omega = omegaMin + iomega*domega;
-				double prefac = (4*M_PI*spinWeight)/(nkTot * Omega * std::pow(std::max(omega, 1./tau), 3));
+				double prefac = (4*std::pow(M_PI,2)*spinWeight)/(nkTot * Omega * std::pow(std::max(omega, 1./tau), 3));
 				//Energy conservation factors for all pair of bands at this frequency:
 				std::vector<double> delta(s.nOuter*s.nOuter);
 				double* deltaData = delta.data();
