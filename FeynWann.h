@@ -37,7 +37,12 @@ struct FeynWannParams
 	bool needLinewidthP_ePh; //!< whether to provide momentum-relaxation e-ph line-width (default: false)
 	bool ePhHeadOnly; //!< if true, only evaluate ePh callback function at head of each offset for debugging (default: false)
 	static const std::vector<double> fGrid_ePh; //!< fillings grid used for e-ph linewidths
-	FeynWannParams();
+	
+	vector3<> Bext; //!< external magentic field (added as a Zeeman perturbation to hamiltonian in FeynWann:setState)
+	double EzExt; //!< external electric field (added as a Stark perturbation to hamiltonian in FeynWann:setState)
+	
+	FeynWannParams(class InputMap* inputMap=0); //!< If specified, look for optional parameters Bext (in Tesla) and EzExt (in eV/nm) from in inputMap
+	void printParams() const; //!< Print the parameters read from inputMap (in atomic units)
 };
 
 //! Wannier interpolator for electrons and phonons
@@ -134,12 +139,11 @@ public:
 	double nElectrons; //!< number of electrons per unit cell in DFT calculation
 	double eMinMain, eMaxMain; //!< energy range for main window (within which eigenvalues should be exact compared to DFT)
 	int nModes; //!< number of phonon modes (polarizations)
-	vector3<> Bext; //!< external magentic field (added as a Zeeman perturbation to hamiltonian in setState)
 	
 	//Electrons:
 	std::vector< vector3<int> > cellMap; //electron Wannier cell map
 	matrix cellWeights; //corresponding weights (nBands*nBands x nCells)
-	std::shared_ptr<DistributedMatrix> Hw, Pw, Sw; //Wannier hamiltonian, dipole matrix elements and spin matrix elements 
+	std::shared_ptr<DistributedMatrix> Hw, Pw, Sw, Zw; //Wannier hamiltonian, momentum, spin and z matrix elements
 	std::shared_ptr<DistributedMatrix> ImSigma_eeW, ImSigma_ePhW, ImSigmaP_ePhW; //linewidths in wannier basis
 	void setState(StateE& state); //!< set requested properties for ik in state
 	void bcastState(StateE& state, MPIUtil* mpiUtil, int root); //!< broadcast specified state on specified MPI instance

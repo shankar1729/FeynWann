@@ -91,7 +91,7 @@ struct CollectImEps
 		const diagMatrix& E = state.E;
 		std::vector<diagMatrix> F, ImE;
 		calcStateRelated(state, F, ImE);
-		//Project dipole matrix elements on field:
+		//Project momentum matrix elements on field:
 		matrix P;
 		for(int iDir=0; iDir<3; iDir++)
 			P += Ehat[iDir] * state.v[iDir];
@@ -126,7 +126,7 @@ struct CollectImEps
 		std::vector<diagMatrix> F1, F2, ImE1, ImE2;
 		calcStateRelated(*mat.e1, F1, ImE1);
 		calcStateRelated(*mat.e2, F2, ImE2);
-		//Project dipole matrix elements on field:
+		//Project momentum matrix elements on field:
 		matrix P1, P2;
 		for(int iDir=0; iDir<3; iDir++)
 		{	P1 += Ehat[iDir] * mat.e1->v[iDir];
@@ -230,7 +230,8 @@ int main(int argc, char** argv)
 	const double GammaS = inputMap.get("GammaS", 0.) * eV; //extra broadening due to surface scattering (default: none)
 	string runName = inputMap.getString("runName");
 	string contribution = inputMap.getString("contribution"); //direct / phonon
-
+	FeynWannParams fwp(&inputMap);
+	
 	//Check contribution:
 	enum ContribType { Direct, Phonon };
 	EnumStringMap<ContribType> contribMap(Direct, "Direct", Phonon, "Phonon");
@@ -245,9 +246,9 @@ int main(int argc, char** argv)
 	logPrintf("GammaS = %lg\n", GammaS);
 	logPrintf("runName = %s\n", runName.c_str());
 	logPrintf("contribution = %s\n", contribMap.getString(contribType));
-
+	fwp.printParams();
+	
 	//Initialize FeynWann:
-	FeynWannParams fwp;
 	fwp.needPhonons = (contribType==Phonon);
 	fwp.needVelocity = true;
 	fwp.needLinewidth_ee = true;

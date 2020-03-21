@@ -55,16 +55,17 @@ int main(int argc, char** argv)
 	const double Tmin = inputMap.get("Tmin") * Kelvin; //electron temperature grid start
 	const double Tmax = inputMap.get("Tmax") * Kelvin; //electron temperature grid stop
 	const double Tstep = inputMap.get("Tstep") * Kelvin; //electron temperature grid spacing
-
+	FeynWannParams fwp(&inputMap);
+	
 	logPrintf("\nInputs after conversion to atomic units:\n");
 	logPrintf("nOffsets = %lu\n", nOffsets);
 	logPrintf("dE = %lg\n", dE);
 	logPrintf("Tmin = %lg\n", Tmin);
 	logPrintf("Tmax = %lg\n", Tmax);
 	logPrintf("Tstep = %lg\n", Tstep);
-
+	fwp.printParams();
+	
 	//Initialize FeynWann:
-	FeynWannParams fwp; //default parametres suffice
 	std::shared_ptr<FeynWann> fw = std::make_shared<FeynWann>(fwp);
 	size_t nKpts = nOffsets * fw->eCountPerOffset();  
 	logPrintf("Effectively sampled nKpts: %lu\n", nKpts);

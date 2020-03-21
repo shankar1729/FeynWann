@@ -18,18 +18,32 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 -------------------------------------------------------------------*/
 
 #include "FeynWann.h"
+#include "InputMap.h"
 #include <core/BlasExtra.h>
 #include <core/Random.h>
 #include <wannier/WannierMinimizer.h>
 #include <fftw3-mpi.h>
 #include "config.h"
 
-FeynWannParams::FeynWannParams()
+FeynWannParams::FeynWannParams(InputMap* inputMap)
 : iSpin(0), totalEprefix("Wannier/totalE"), phononPrefix("Wannier/phonon"), wannierPrefix("Wannier/wannier"),
 needSymmetries(false), needPhonons(false), needVelocity(false), needSpin(false),
-needLinewidth_ee(false), needLinewidth_ePh(false), needLinewidthP_ePh(false), ePhHeadOnly(false)
+needLinewidth_ee(false), needLinewidth_ePh(false), needLinewidthP_ePh(false), ePhHeadOnly(false),
+EzExt(0.)
 {
+	if(inputMap)
+	{	const double nm = 10*Angstrom;
+		const double Tesla = eV*sec/(meter*meter);
+		Bext = inputMap->getVector("Bext", vector3<>(0.,0.,0.)) * Tesla;
+		EzExt = inputMap->get("EzExt", 0.) * eV/nm;
+	}
 }
+
+void FeynWannParams::printParams() const
+{	logPrintf("Bext = "); Bext.print(globalLog, " %lg ");
+	logPrintf("EzExt = %lg\n", EzExt);
+}
+
 
 //Fillings grid on [0,1] for which to calculate e-ph linewidths
 inline std::vector<double> getFgrid(int nInterp)
@@ -459,6 +473,12 @@ FeynWann::FeynWann(FeynWannParams& fwp)
 		Sw = std::make_shared<DistributedMatrix>(fname, realPartOnly,
 			mpiGroup, 3*nBands*nBands, cellMap, kfold, false, mpiInterGroup, &cellWeightsVec);
 	}
+	//z position matrix elements
+	if(fwp.EzExt)
+	{	fname = fwp.wannierPrefix + ".mlwfZ" + spinSuffix;
+		Zw = std::make_shared<DistributedMatrix>(fname, realPartOnly,
+			mpiGroup, nBands*nBands, cellMap, kfold, false, mpiInterGroup, &cellWeightsVec);
+	}
 	//Linewidths:
 	if(fwp.needLinewidth_ee)
 	{	//e-e:
@@ -486,6 +506,7 @@ void FeynWann::free()
 {	Hw = 0;
 	Pw = 0;
 	Sw = 0;
+	Zw = 0;
 	ImSigma_eeW = 0;
 	ImSigma_ePhW = 0;
 	ImSigmaP_ePhW = 0;
@@ -545,10 +566,9 @@ void FeynWann::eLoop(const vector3<>& k0, FeynWann::eProcessFunc eProcess, void*
 {	static StopWatch watchCallback("FeynWann::eLoop:callback");
 	//Run Fourier transforms with this offset:
 	Hw->transform(k0);
-	if(fwp.needVelocity)
-		Pw->transform(k0);
-	if(fwp.needSpin)
-		Sw->transform(k0);
+	if(fwp.needVelocity) Pw->transform(k0);
+	if(fwp.needSpin) Sw->transform(k0);
+	if(fwp.EzExt) Zw->transform(k0);
 	if(fwp.needLinewidth_ee) ImSigma_eeW->transform(k0);
 	if(fwp.needLinewidth_ePh) ImSigma_ePhW->transform(k0);
 	if(fwp.needLinewidthP_ePh) ImSigmaP_ePhW->transform(k0);
@@ -567,10 +587,9 @@ void FeynWann::eLoop(const vector3<>& k0, FeynWann::eProcessFunc eProcess, void*
 void FeynWann::eCalc(const vector3<>& k, FeynWann::StateE& e)
 {	//Compute Fourier versions for this k:
 	Hw->compute(k);
-	if(fwp.needVelocity)
-		Pw->compute(k);
-	if(fwp.needSpin)
-		Sw->compute(k);
+	if(fwp.needVelocity) Pw->compute(k);
+	if(fwp.needSpin) Sw->compute(k);
+	if(fwp.EzExt) Zw->compute(k);
 	if(fwp.needLinewidth_ee) ImSigma_eeW->compute(k);
 	if(fwp.needLinewidth_ePh) ImSigma_ePhW->compute(k);
 	if(fwp.needLinewidthP_ePh) ImSigmaP_ePhW->compute(k);
@@ -629,10 +648,9 @@ void FeynWann::ePhLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::ePh
 	#define PrepareElecStates(i) \
 		std::vector<StateE> e##i(prodKfold); /* States */ \
 		{	Hw->transform(k0##i); \
-			if(fwp.needVelocity) \
-				Pw->transform(k0##i); \
-			if(fwp.needSpin) \
-				Sw->transform(k0##i); \
+			if(fwp.needVelocity) Pw->transform(k0##i); \
+			if(fwp.needSpin) Sw->transform(k0##i); \
+			if(fwp.EzExt) Zw->transform(k0##i); \
 			if(fwp.needLinewidth_ee) ImSigma_eeW->transform(k0##i); \
 			if(fwp.needLinewidth_ePh) ImSigma_ePhW->transform(k0##i); \
 			if(fwp.needLinewidthP_ePh) ImSigmaP_ePhW->transform(k0##i); \
@@ -752,11 +770,13 @@ void FeynWann::setState(FeynWann::StateE& state)
 {	static StopWatch watchRotations("FeynWann::setState:rotations");
 	//Get and diagonalize Hamiltonian:
 	matrix Hk = getMatrix(Hw->getResult(state.ik), nBands, nBands);
-	if(fwp.needSpin and Bext.length_squared())
+	if(fwp.needSpin and fwp.Bext.length_squared())
 	{	//Add Zeeman perturbation:
 		for(int iDir=0; iDir<3; iDir++)
-			if(Bext[iDir]) Hk += Bext[iDir]*getMatrix(Sw->getResult(state.ik), nBands, nBands, iDir);
+			if(fwp.Bext[iDir]) Hk += fwp.Bext[iDir] * getMatrix(Sw->getResult(state.ik), nBands, nBands, iDir);
 	}
+	if(fwp.EzExt) //Add Stark perturbation:
+		Hk += fwp.EzExt * getMatrix(Zw->getResult(state.ik), nBands, nBands);
 	Hk.diagonalize(state.U, state.E);
 	for(double& E: state.E) E -= mu; //reference to Fermi level
 	watchRotations.start();

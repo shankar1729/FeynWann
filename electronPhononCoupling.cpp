@@ -87,6 +87,7 @@ int main(int argc, char** argv)
 	const double Tstep = inputMap.get("Tstep") * Kelvin; //electron temperature grid spacing
 	bool useLinewidths = false;
 	boolMap.getEnum(inputMap.getString("useLinewidths").c_str(), useLinewidths); //whether to use linewidths for broadening
+	FeynWannParams fwp(&inputMap);
 	
 	logPrintf("\nInputs after conversion to atomic units:\n");
 	logPrintf("nOffsets = %d\n", nOffsets);
@@ -95,9 +96,9 @@ int main(int argc, char** argv)
 	logPrintf("Tmax = %lg\n", Tmax);
 	logPrintf("Tstep = %lg\n", Tstep);
 	logPrintf("useLinewidths = %s\n", boolMap.getString(useLinewidths));
+	fwp.printParams();
 	
 	//Initialize FeynWann:
-	FeynWannParams fwp;
 	fwp.needPhonons = true;
 	fwp.needLinewidth_ee = useLinewidths;
 	fwp.needLinewidth_ePh = useLinewidths;

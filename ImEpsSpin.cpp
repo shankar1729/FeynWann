@@ -97,7 +97,7 @@ struct CollectImEps
 		const diagMatrix& E = state.E;
 		std::vector<diagMatrix> F;
 		calcStateRelated(state, F);
-		//Project dipole matrix elements on field:
+		//Project momentum matrix elements on field:
 		matrix P;
 		for(int iDir=0; iDir<3; iDir++)
 			P += Ehat[iDir] * state.v[iDir];
@@ -137,7 +137,7 @@ struct CollectImEps
 		std::vector<diagMatrix> F1, F2;
 		calcStateRelated(*mat.e1, F1);
 		calcStateRelated(*mat.e2, F2);
-		//Project dipole matrix elements on field:
+		//Project momentum matrix elements on field:
 		matrix P1, P2;
 		for(int iDir=0; iDir<3; iDir++)
 		{	P1 += Ehat[iDir] * mat.e1->v[iDir];
@@ -236,6 +236,7 @@ int main(int argc, char** argv)
 	const double pumpUabs = inputMap.get("pumpUabs", 0.) * Joule/std::pow(meter,3); //absorbed laser energy per unit volume in Joule/meter^3
 	const double pumpOmega = inputMap.get("pumpOmega", 0.) * eV; //pump photon energy in eV (pump pol is what was used in the phase 1 calc)
 	const string pumpRunName = pumpUabs ? inputMap.getString("pumpRunName") : string(); //run name to read carrier distribution of pump from
+	FeynWannParams fwp(&inputMap);
 	
 	//Check contribution:
 	enum ContribType { Direct, Phonon };
@@ -263,9 +264,9 @@ int main(int argc, char** argv)
 		logPrintf("pumpOmega = %lg\n", pumpOmega);
 		logPrintf("pumpRunName = %s\n", pumpRunName.c_str());
 	}
-
+	fwp.printParams();
+	
 	//Initialize FeynWann:
-	FeynWannParams fwp;
 	fwp.needPhonons = (contribType==Phonon);
 	fwp.needVelocity = true;
 	fwp.needSpin = true;

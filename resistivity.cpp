@@ -91,6 +91,7 @@ int main(int argc, char** argv)
 	const double dmuMax = inputMap.get("dmuMax", 0.) * eV; //optional shift in chemical potential from neutral value; end of range (default to 0)
 	const int dmuCount = inputMap.get("dmuCount", 1); assert(dmuCount>0); //number of chemical potential shifts
 	const int slabDir = inputMap.get("slabDir", -1); assert(slabDir<3); //0-based index of direction to eliminate; default -1 => don't eliminate any (keep 3D)
+	FeynWannParams fwp(&inputMap);
 	
 	logPrintf("\nInputs after conversion to atomic units:\n");
 	logPrintf("nOffsets = %d\n", nOffsets);
@@ -101,9 +102,9 @@ int main(int argc, char** argv)
 	logPrintf("dmuMax = %lg\n", dmuMax);
 	logPrintf("dmuCount = %d\n", dmuCount);
 	logPrintf("slabDir = %d\n", slabDir);
+	fwp.printParams();
 	
 	//Initialize FeynWann:
-	FeynWannParams fwp;
 	fwp.needSymmetries = true;
 	fwp.needVelocity = true;
 	fwp.needLinewidth_ePh = true;

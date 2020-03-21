@@ -224,6 +224,7 @@ int main(int argc, char** argv)
 	int bandStop = inputMap.get("bandStop", 0); //replaced with nBands below if 0
 	int modeStart = inputMap.get("modeStart", 0);
 	int modeStop = inputMap.get("modeStop", 0); //replaced with nModes below if 0
+	FeynWannParams fwp(&inputMap);
 	
 	logPrintf("\nInputs after conversion to atomic units:\n");
 	logPrintf("k1 = "); k1.print(globalLog, " %lg ");
@@ -232,18 +233,17 @@ int main(int argc, char** argv)
 	logPrintf("bandStop = %d\n", bandStop);
 	logPrintf("modeStart = %d\n", modeStart);
 	logPrintf("modeStop = %d\n", modeStop);
+	fwp.printParams();
 	
 	//Read k-points:
 	std::vector<vector3<>> k2arr = readKpointsFile(k2file);
 	logPrintf("Read %lu k-points from '%s'\n", k2arr.size(), k2file.c_str());
 	
 	//Initialize FeynWann:
-	FeynWannParams fwp;
 	fwp.needPhonons = true;
 	fwp.ePhHeadOnly = true; //so as to debug k-path alone
 	fwp.needSpin = true;
 	FeynWann fw(fwp);
-	//fw.Bext = vector3<>(1.3,-2.2,0.6)*1e-3; //random B field to break symmetry (to fix unitary rotations for S testing)
 	if(!bandStop) bandStop = fw.nBands;
 	if(!modeStop) modeStop = fw.nModes;
 	
@@ -262,10 +262,13 @@ int main(int argc, char** argv)
 	Mtot *= 1./3;
 	DebugEph src(bandStart, bandStop, modeStart, modeStop);
 	src.Mtot = Mtot;
+	fw.eCalc(k1, src.e1);
+	if(mpiGroup->isHead())
+	{	logPrintf("E1[eV]: ");
+		(src.e1.E*(1./eV)).print(globalLog);
+	}
 	for(vector3<> k2: k2arr)
-	{	
-		//Compute single k quantities:
-		fw.eCalc(k1, src.e1);
+	{	//Compute single k quantities:
 		fw.eCalc(k2, src.e2);
 		fw.phCalc(k1-k2, src.ph);
 		fw.ePhCalc(src.e1, src.e2, src.ph, src.m);

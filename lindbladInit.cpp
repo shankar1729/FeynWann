@@ -500,6 +500,7 @@ int main(int argc, char** argv)
 	const string ePhMode = inputMap.getString("ePhMode"); //must be Off or DiagK (add FullK in future)
 	const bool ePhEnabled = (ePhMode != "Off");
 	const double ePhDelta = inputMap.get("ePhDelta") * eV; //energy conservation width for e-ph coupling
+	FeynWannParams fwp(&inputMap);
 	
 	logPrintf("\nInputs after conversion to atomic units:\n");
 	logPrintf("NkMult = "); NkMult.print(globalLog, " %d ");
@@ -510,9 +511,9 @@ int main(int argc, char** argv)
 	logPrintf("probeOmegaMax = %lg\n", probeOmegaMax);
 	logPrintf("ePhMode = %s\n", ePhMode.c_str());
 	logPrintf("ePhDelta = %lg\n", ePhDelta);
+	fwp.printParams();
 	
 	//Initialize FeynWann:
-	FeynWannParams fwp;
 	fwp.needVelocity = true;
 	fwp.needSpin = true;
 	fwp.needPhonons = ePhEnabled;

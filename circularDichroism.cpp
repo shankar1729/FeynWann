@@ -56,7 +56,7 @@ inline matrix3<> Real(const matrix3<complex>& M)
 struct CollectCD
 {	double dmu, T, invT;
 	double domega, omegaMax, EemptyMax;
-	std::vector<Histogram> CD, CDmd; //Total circular dichorism and magnetic dipole contributions alone (xx,yy,zz,yz,zx,xy components)
+	std::vector<Histogram> CD, CDmd; //Total circular dichorism and magnetic momentum contributions alone (xx,yy,zz,yz,zx,xy components)
 	double prefac;
 	
 	CollectCD(double dmu, double T, double domega, double omegaMax, double EemptyMax)
@@ -80,7 +80,7 @@ struct CollectCD
 		{	for(int b1=0; b1<nBands; b1++)
 			{	double omega = E[b1] - E[b2]; //energy conservation
 				if(omega<domega || omega>=omegaMax) continue; //irrelevant event
-				//Get dipole matrix element:
+				//Get momentum matrix element:
 				vector3<complex> P21;
 				for(int iDir=0; iDir<3; iDir++)
 					P21[iDir] = state.v[iDir](b1,b2);

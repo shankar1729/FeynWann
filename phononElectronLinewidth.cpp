@@ -121,15 +121,16 @@ int main(int argc, char** argv)
 	NkMult[0] = inputMap.get("NkxMult", NkMultAll); //override increase in x direction
 	NkMult[1] = inputMap.get("NkyMult", NkMultAll); //override increase in y direction
 	NkMult[2] = inputMap.get("NkzMult", NkMultAll); //override increase in z direction
+	FeynWannParams fwp(&inputMap);
 	
 	logPrintf("\nInputs after conversion to atomic units:\n");
 	logPrintf("EconserveWidth = %lg\n", EconserveWidth);
 	logPrintf("dmu = %lg\n", dmu);
 	logPrintf("iSpin = %d\n", iSpin);
 	logPrintf("NkMult = "); NkMult.print(globalLog, " %d ");
+	fwp.printParams();
 	
 	//Initialize FeynWann:
-	FeynWannParams fwp;
 	fwp.iSpin = iSpin;
 	fwp.needSymmetries = true;
 	fwp.needPhonons = true;

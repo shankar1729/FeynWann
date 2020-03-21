@@ -218,7 +218,7 @@ int main(int argc, char** argv)
 	if(valleyMode!="yes" and valleyMode!="no") //HACK Valley contrib
 		die("\nvalleyMode must be 'yes' or 'no'\n");
 	const bool valley = (valleyMode=="no");
-	
+	FeynWannParams fwp(&inputMap);
 	
 	vector3<int> NkMult;
 	NkMult[0] = inputMap.get("NkxMult", NkMultAll); //override increase in x direction
@@ -231,9 +231,9 @@ int main(int argc, char** argv)
 	logPrintf("iSpin = %d\n", iSpin);
 	logPrintf("NkMult = "); NkMult.print(globalLog, " %d ");
 	logPrintf("valley = %s\n", valleyMode.c_str()); //HACK Valley contrib
+	fwp.printParams();
 	
 	//Initialize FeynWann:
-	FeynWannParams fwp;
 	fwp.iSpin = iSpin;
 	fwp.needSymmetries = true;
 	fwp.needPhonons = true;

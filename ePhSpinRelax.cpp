@@ -36,9 +36,8 @@ struct SpinRelaxCollect
 	std::vector<matrix3<>> Gamma, chi; //numerator and denominator in T1^-1, for each T and dmu 
 	
 	//HACK for valley contrib
-	const matrix3<> G; 
-	matrix3<> GGT;
-	vector3<> K, Kp;
+	const matrix3<> G, GGT;
+	const vector3<> K, Kp;
 	
 	SpinRelaxCollect(const std::vector<double>& dmu, const std::vector<double>& T, double omegaPhByTmin, int nModes,
 		double EconserveWidth, size_t nKpairs, double Estart, double Estop, matrix3<> G)
@@ -46,12 +45,12 @@ struct SpinRelaxCollect
 		EconserveExpFac(-0.5/std::pow(EconserveWidth, 2)),
 		prefacGamma(2*M_PI/ (nKpairs * sqrt(2.*M_PI)*EconserveWidth)), //include prefactor of Gaussian energy conservation
 		prefacChi(0.5/nKpairs), //collected over both k in each k-pair for consistency
-		Estart(Estart), Estop(Estop), G(G),
+		Estart(Estart), Estop(Estop),
 		Gamma(T.size()*dmu.size()), chi(T.size()*dmu.size()),
+		G(G), GGT(G * (~G)), //HACK for valley contrib
 		K(1./3, 1./3, 0), //HACK for valley contrib
 		Kp(-1./3, -1./3, 0) //HACK for valley contrib
 	{
-		GGT = G * (~G); //HACK for valley contrib
 	}
 	
 	inline SparseMatrix degenerateProject(const matrix& M, const diagMatrix& E, int bStart, int bStop)
@@ -72,6 +71,7 @@ struct SpinRelaxCollect
 		}
 		return result;
 	}
+	
 	//HACK block valley contrib
 	static inline vector3<> wrap(const vector3<>& x)
 	{	vector3<> result = x;
@@ -81,7 +81,7 @@ struct SpinRelaxCollect
 	}
 	inline bool isKvalley(vector3<> k) const
 	{	return GGT.metric_length_squared(wrap(K-k))
-				< GGT.metric_length_squared(wrap(Kp-k));
+			< GGT.metric_length_squared(wrap(Kp-k));
 	}
 	
 	void process(const FeynWann::MatrixEph& mEph)
@@ -259,6 +259,7 @@ int main(int argc, char** argv)
 	const size_t dmuCount = inputMap.get("dmuCount", 1); assert(dmuCount>0); //number of chemical potential shifts (default 1)
 	const double omegaPhByTmin = inputMap.get("omegaPhByTmin", 1e-3); //lower cutoff in phonon frequency (relative to temperature)
 	const int nModesOverride = inputMap.get("nModesOverride", 0); //if non-zero, use only these many lowest phonon modes (eg. set to 3 for acoustic only in 3D)
+	FeynWannParams fwp(&inputMap);
 	
 	logPrintf("\nInputs after conversion to atomic units:\n");
 	logPrintf("nOffsets = %d\n", nOffsets);
@@ -272,9 +273,9 @@ int main(int argc, char** argv)
 	logPrintf("dmuCount = %lu\n", dmuCount);
 	logPrintf("omegaPhByTmin = %lg\n", omegaPhByTmin);
 	logPrintf("nModesOverride = %d\n", nModesOverride);
+	fwp.printParams();
 	
 	//Initialize FeynWann:
-	FeynWannParams fwp;
 	fwp.needSymmetries = true;
 	fwp.needPhonons = true;
 	fwp.needSpin = true;
