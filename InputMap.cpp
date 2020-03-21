@@ -44,6 +44,10 @@ InputMap::InputMap(string filename)
 	ifs.close();
 }
 
+bool InputMap::has(string key) const
+{	return (find(key) != end());
+}
+
 double InputMap::get(string key, double defaultVal) const
 {	auto iter = find(key);
 	if(iter == end()) //not found
