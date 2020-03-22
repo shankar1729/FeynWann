@@ -22,6 +22,7 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 #include "SparseMatrix.h"
 #include <core/Units.h>
 #include <core/Random.h>
+#include <core/LatticeUtils.h>
 #include <algorithm>
 
 struct SpinRelaxCollect
@@ -35,21 +36,21 @@ struct SpinRelaxCollect
 	const double Estart, Estop; //energy range close enough to band edges or mu's to be relevant
 	std::vector<matrix3<>> Gamma, chi; //numerator and denominator in T1^-1, for each T and dmu 
 	
-	//HACK for valley contrib
+	//Quantities for evaluating inter-valley contributions
+	const bool valley; //whether to evaluate inter-valley contributions
 	const matrix3<> G, GGT;
 	const vector3<> K, Kp;
+	std::vector<matrix3<>> GammaV; //valley-weighted numerator of T1^-1
 	
 	SpinRelaxCollect(const std::vector<double>& dmu, const std::vector<double>& T, double omegaPhByTmin, int nModes,
-		double EconserveWidth, size_t nKpairs, double Estart, double Estop, matrix3<> G)
+		double EconserveWidth, size_t nKpairs, double Estart, double Estop, bool valley, matrix3<> R)
 	: dmu(dmu), T(T), omegaPhByTmin(std::max(1e-3,omegaPhByTmin)), nModes(nModes),
 		EconserveExpFac(-0.5/std::pow(EconserveWidth, 2)),
 		prefacGamma(2*M_PI/ (nKpairs * sqrt(2.*M_PI)*EconserveWidth)), //include prefactor of Gaussian energy conservation
 		prefacChi(0.5/nKpairs), //collected over both k in each k-pair for consistency
 		Estart(Estart), Estop(Estop),
 		Gamma(T.size()*dmu.size()), chi(T.size()*dmu.size()),
-		G(G), GGT(G * (~G)), //HACK for valley contrib
-		K(1./3, 1./3, 0), //HACK for valley contrib
-		Kp(-1./3, -1./3, 0) //HACK for valley contrib
+		valley(valley), G(2*M_PI * inv(R)), GGT(G * (~G)), K(1./3, 1./3, 0), Kp(-1./3, -1./3, 0), GammaV(Gamma)
 	{
 	}
 	
@@ -72,7 +73,7 @@ struct SpinRelaxCollect
 		return result;
 	}
 	
-	//HACK block valley contrib
+	//Helper functions for evaluating inter-valley weights (Hex crystals only):
 	static inline vector3<> wrap(const vector3<>& x)
 	{	vector3<> result = x;
 		for(int dir=0; dir<3; dir++)
@@ -125,13 +126,12 @@ struct SpinRelaxCollect
 		CONTRIB_chi(2)
 		#undef CONTRIB_chi
 		
-		//HACK block for valley contrib
-		bool isK1 = isKvalley(e1.k);
-		bool isK2 = isKvalley(e2.k);
-		double wValley = (isK1 xor isK2) ? 1. : 0.;
+		//Weight for valley contrib
+		double wValley = (valley and (isKvalley(e1.k) xor isKvalley(e2.k))) ? 1. : 0.;
 		
 		//Compute Gamma contributions by band pair and T, except for electron occupation factors:
 		std::vector<std::vector<matrix3<>>> contribGamma(T.size(), std::vector<matrix3<>>(nBandsSelSq));
+		std::vector<std::vector<matrix3<>>> contribGammaV(contribGamma); //for valley contributions
 		for(int alpha=0; alpha<nModes; alpha++)
 		{	//Phonon occupation (nPh/T and prefactors) for each T:
 			const double& omegaPh = ph.omega[alpha];
@@ -168,7 +168,10 @@ struct SpinRelaxCollect
 			{	vector3<complex> SGcommCur = loadVector(SGcommData, bIndex);
 				matrix3<> SGcommOuter = realOuter(SGcommCur, SGcommCur);
 				for(size_t iT=0; iT<T.size(); iT++)
-				{	contribGamma[iT][bIndex] += (prefac_nPhByT[iT] * Econserve[bIndex]) * SGcommOuter; //* wValley; add for wValley contrib //HACK
+				{	matrix3<> contrib = (prefac_nPhByT[iT] * Econserve[bIndex]) * SGcommOuter;
+					contribGamma[iT][bIndex] += contrib;
+					if(valley) //inter-valley weighted contributions
+						contribGammaV[iT][bIndex] += contrib * wValley;
 				}
 			}
 		}
@@ -194,6 +197,8 @@ struct SpinRelaxCollect
 				for(int b2=bStart; b2<bStop; b2++)
 				for(int b1=bStart; b1<bStop; b1++)
 				{	Gamma[iMuT] += contribGamma[iT][bIndex] * (F2[b2] * Fbar1[b1]);
+					if(valley) //inter-valley weighted result
+						GammaV[iMuT] += contribGammaV[iT][bIndex] * (F2[b2] * Fbar1[b1]);
 					bIndex++;
 				}
 			}
@@ -281,6 +286,15 @@ int main(int argc, char** argv)
 	fwp.needSpin = true;
 	FeynWann fw(fwp);
 
+	//Determine whether to compute valley contributions (enable if hexagonal lattice):
+	double cosTheta12 = dot(fw.R.column(0),fw.R.column(1))/(fw.R.column(0).length()*fw.R.column(1).length());
+	double cosTheta13 = dot(fw.R.column(0),fw.R.column(2))/(fw.R.column(0).length()*fw.R.column(2).length());
+	double cosTheta23 = dot(fw.R.column(1),fw.R.column(2))/(fw.R.column(1).length()*fw.R.column(2).length());
+	bool valley = (fabs(cosTheta12+0.5)<symmThreshold) //120 degrees
+		and (fabs(cosTheta13)<symmThreshold) //90 degrees
+		and (fabs(cosTheta23)<symmThreshold); //90 degrees
+	if(valley) logPrintf("Enabling additional inter-valley weighted calculation for hexagonal lattice.\n\n");
+	
 	//T array:
 	std::vector<double> T(Tcount, Tmin); //set first value here
 	for(size_t iT=1; iT<Tcount; iT++) //set remaining values (if any)
@@ -323,12 +337,11 @@ int main(int argc, char** argv)
 	double Emargin = erc.omegaPhMax + 6.*EconserveWidth + 20.*T.back();
 	double Estart = erc.EvMax - Emargin;
 	double Estop = erc.EcMin + Emargin;
-	matrix3<> G = 2*M_PI * inv(fw.R); //HACK for valley contrib
 	//Collect integrals involved in T1 calculation:
 	std::vector<std::shared_ptr<SpinRelaxCollect>> srcArr(nBlocks);
 	for(int block=0; block<nBlocks; block++)
 	{	logPrintf("Working on block %d of %d: ", block+1, nBlocks); logFlush();
-		srcArr[block] = std::make_shared<SpinRelaxCollect>(dmu, T, omegaPhByTmin, nModes, EconserveWidth, nKpairsPerBlock, Estart, Estop, G);
+		srcArr[block] = std::make_shared<SpinRelaxCollect>(dmu, T, omegaPhByTmin, nModes, EconserveWidth, nKpairsPerBlock, Estart, Estop, valley, fw.R);
 		SpinRelaxCollect& src = *(srcArr[block]);
 		for(int o=0; o<noMine; o++)
 		{	Random::seed(block*nOffsetsPerBlock+o+oStart); //to make results independent of MPI division
@@ -342,6 +355,7 @@ int main(int argc, char** argv)
 		//Accumulate over MPI:
 		mpiWorld->allReduceData(src.Gamma, MPIUtil::ReduceSum);
 		mpiWorld->allReduceData(src.chi, MPIUtil::ReduceSum);
+		if(valley) mpiWorld->allReduceData(src.GammaV, MPIUtil::ReduceSum);
 		logPrintf("done.\n"); logFlush();
 	}
 	
@@ -351,8 +365,8 @@ int main(int argc, char** argv)
 	for(size_t iMu=0; iMu<dmuCount; iMu++)
 	{	size_t iMuT = iT*dmuCount + iMu; //combined index
 		logPrintf("\nResults for T = %lg K and dmu = %lg eV:\n", T[iT]/Kelvin, dmu[iMu]/eV);
-		std::vector<matrix3<>> Gamma(nBlocks), chi(nBlocks), T1bar(nBlocks);
-		std::vector<double> T1(nBlocks);
+		std::vector<matrix3<>> Gamma(nBlocks), chi(nBlocks), T1bar(nBlocks), T1Vbar(nBlocks);
+		std::vector<double> T1(nBlocks), T1V(nBlocks);
 		for(int block=0; block<nBlocks; block++)
 		{	SpinRelaxCollect& src = *(srcArr[block]);
 			fw.symmetrize(src.Gamma[iMuT]);
@@ -361,11 +375,20 @@ int main(int argc, char** argv)
 			chi[block] = src.chi[iMuT];
 			T1bar[block] = chi[block] * inv(Gamma[block]);
 			T1[block] = (1./3)*trace(T1bar[block]);
+			if(valley)
+			{	fw.symmetrize(src.GammaV[iMuT]);
+				T1Vbar[block] = chi[block] * inv(src.GammaV[iMuT]);
+				T1V[block] = (1./3)*trace(T1Vbar[block]);
+			}
 		}
 		reportResult(Gamma, "Gamma", 1./(eV*ps), "1/(eV.ps)");
 		reportResult(chi, "chi", 1./eV, "1/eV");
 		reportResult(T1bar, "T1", ps, "ps"); //tensor version
-		reportResult(T1, "T1", ps, "ps"); //tensor version
+		reportResult(T1, "T1", ps, "ps");
+		if(valley)
+		{	reportResult(T1Vbar, "T1valley", ps, "ps"); //tensor version
+			reportResult(T1V, "T1valley", ps, "ps");
+		}
 	}
 	
 	fw.free();

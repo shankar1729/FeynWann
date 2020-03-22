@@ -69,7 +69,7 @@ struct CollectEph
 		}
 	}
 	
-	//Helper functions for vallery contributions:
+	//Helper functions for evaluating inter-valley weights (Hex crystals only):
 	static inline vector3<> wrap(const vector3<>& x)
 	{	vector3<> result = x;
 		for(int dir=0; dir<3; dir++)
