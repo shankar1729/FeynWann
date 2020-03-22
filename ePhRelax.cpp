@@ -216,7 +216,7 @@ struct ePhRelax : public Integrator<diagMatrix>
 		//--- initialize kernel:
 		kernel.resize(2*eeStride-1);
 		for(int i=0; i<int(kernel.size()); i++)
-			kernel[i] = 1. - fabs(i+1-eeStride)/eeStride;
+			kernel[i] = 1. - std::abs(i+1-eeStride)/eeStride;
 		//--- coarse grain Mee and gM:
 		Mc.resize(nEcoarse); gather(Mee.data(), Mc.data());
 		gMc.resize(nEcoarse); gather(gM.data(), gMc.data());

@@ -238,7 +238,7 @@ FeynWann::FeynWann(FeynWannParams& fwp)
 	if(std::isnan(mu))
 	{	logPrintf("NOTE: mu unavailable; assuming semiconductor/insulator and setting to VBM.\n");
 		int nValence = int(round(nElectrons/(nSpins*spinWeight))); //number of valence bands
-		if(fabs(nValence*nSpins*spinWeight-nElectrons > 1e-6))
+		if(fabs(nValence*nSpins*spinWeight-nElectrons) > 1e-6)
 			die("Number of electrons incompatible with semiconductor / insulator.\n");
 		//Read DFT eigenvalues file:
 		ManagedArray<double> Edft; Edft.init(nBandsDFT*nStatesDFT);
