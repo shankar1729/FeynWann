@@ -753,11 +753,23 @@ void FeynWann::ePhCalc(const FeynWann::StateE& e1, const FeynWann::StateE& e2, c
 void FeynWann::symmetrize(matrix3<>& m) const
 {	matrix3<> mOut;
 	matrix3<> invR = inv(R);
+	int nSym = 0;
 	for(const SpaceGroupOp& op: sym)
 	{	matrix3<> rot = R * op.rot * invR; //convert to Cartesian
+		//Exclude rotations that don't leave fields invariant
+		if(fwp.Bext.length_squared())
+		{	if((fwp.Bext - rot*fwp.Bext).length() > symmThreshold)
+				continue;
+		}
+		if(fwp.EzExt)
+		{	vector3<> Eext(0., 0., fwp.EzExt);
+			if((Eext - rot*Eext).length() > symmThreshold)
+				continue;
+		}
 		mOut += rot * m * (~rot);
+		nSym++;
 	}
-	m = mOut *(1./sym.size());
+	m = mOut * (1./nSym);
 	//Set near-zero to exact zero:
 	double mCut = 1e-14*sqrt(trace((~m)*m));
 	for(int i=0; i<3; i++)
