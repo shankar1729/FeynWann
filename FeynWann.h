@@ -76,6 +76,7 @@ public:
 		std::vector<diagMatrix> logImSigma_ePhArr; //!< e-ph linewidth for each f in fGrid_ePh
 		std::vector<diagMatrix> logImSigmaP_ePhArr; //!< e-ph momentum-relaxation linewidth for each f in fGrid_ePh
 		matrix dHePhSum; //!< nBands*nBands x 3 matrix used internally to enforce e-ph matrix element sum rule at all k's
+		bool withinRange; //!< whether any bands in E are within ePhEstart and ePhEstop (used to filter ePhLoop)
 		friend class FeynWann;
 	};
 	
@@ -171,6 +172,7 @@ public:
 	std::shared_ptr<DistributedMatrix> HePhW; //electron-phonon matrix elements in Wannier basis
 	std::shared_ptr<DistributedMatrix> HePhSumW; //electron-phonon matrix element sum rule in Wannier basis
 	std::shared_ptr<DistributedMatrix> Dw; //gradient matrix elements for sum rule enforcement
+	double ePhEstart, ePhEstop; //energy range restriction of ePhloop, enabled if ePhEstart < ePhEstop
 	void setMatrix(const StateE& e1, const StateE& e2, const StatePh& ph, int ikPair, MatrixEph& m); //set e-ph properties for e1.ik, e2.ik and ph.iq in m
 	
 private:

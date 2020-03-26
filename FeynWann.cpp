@@ -119,7 +119,7 @@ std::vector<vector3<>> readArrayVec3(string fname); //Read an array of vector3<>
 
 
 FeynWann::FeynWann(FeynWannParams& fwp)
-: fwp(fwp), nAtoms(0), nSpins(0), nSpinor(0), spinWeight(0), mu(NAN), nElectrons(0), polar(false), inEphLoop(false)
+: fwp(fwp), nAtoms(0), nSpins(0), nSpinor(0), spinWeight(0), mu(NAN), nElectrons(0), polar(false), ePhEstart(0.), ePhEstop(0.), inEphLoop(false)
 {	
 	//Create inter-group communicator if requested:
 	std::shared_ptr<MPIUtil> mpiInterGroup;
@@ -714,6 +714,25 @@ void FeynWann::ePhLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::ePh
 			vector3<int> ik1sup = iqSup + ik2sup; //momentum conservation
 			vector3<> k01cur = q0 + k02cur; //momentum conservation
 			if(fwp.ePhHeadOnly and ik2sup.length_squared()) continue; //k-path debug mode
+			//Check whether any electronic state for current ik1sup and ik2sup are within ePh energy range
+			if(ePhEstart < ePhEstop)
+			{	
+				#define CheckElecRange(i) \
+				{	bool withinRange = false; \
+					int ik##i = 0; vector3<> k##i; \
+					PartialLoop3D(phononSup, ik##i, prodSup, k##i, k0##i##cur, \
+						int ik##i##net = calculateIndex(ik##i##sup + elemwiseProd(kfoldSup, ik##i##v), kfold); \
+						if(e1[ik##i##net].withinRange) \
+						{	withinRange = true; \
+							break; \
+						} \
+					) \
+					if(not withinRange) continue; \
+				}
+				CheckElecRange(1) //continue if no states within range in ik1sup
+				CheckElecRange(2) //continue if no states within range in ik2sup
+				#undef CheckElecRange
+			}
 			//Calculate electron-phonon matrix elements:
 			HePhW->transform(k01cur, k02cur);
 			int ikPair = 0;
@@ -721,24 +740,28 @@ void FeynWann::ePhLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::ePh
 			int ikPairStop = ikPairStart + HePhW->nk;
 			int ik1 = 0; vector3<> k1;
 			PartialLoop3D(phononSup, ik1, prodSup, k1, k01cur,
-				int ik2 = 0; vector3<> k2;
-				PartialLoop3D(phononSup, ik2, prodSup, k2, k02cur,
-					if(ikPair>=ikPairStart and ikPair<ikPairStop //subset to be evaluated on this process
-						and (not (fwp.ePhHeadOnly and ikPair)) ) //overridden in k-path debug mode to be ikPair==0 alone
-					{	//Identify associated electronic and phonon states:
-						int ik1net = calculateIndex(ik1sup + elemwiseProd(kfoldSup, ik1v), kfold);
+				int ik1net = calculateIndex(ik1sup + elemwiseProd(kfoldSup, ik1v), kfold);
+				if(e1[ik1net].withinRange)
+				{	int ik2 = 0; vector3<> k2;
+					PartialLoop3D(phononSup, ik2, prodSup, k2, k02cur,
 						int ik2net = calculateIndex(ik2sup + elemwiseProd(kfoldSup, ik2v), kfold);
-						int iqIndex = calculateIndex(ik1v - ik2v, phononSup);
-						//Set e-ph matrix elements:
-						MatrixEph m;
-						setMatrix(e1[ik1net], e2[ik2net], ph[iqIndex], ikPair, m);
-						//Invoke call-back function:
-						watchCallback.start();
-						ePhProcess(m, params);
-						watchCallback.stop();
-					}
-					ikPair++;
-				)
+						if(ikPair>=ikPairStart and ikPair<ikPairStop //subset to be evaluated on this process
+							and (not (fwp.ePhHeadOnly and ikPair)) //overridden in k-path debug mode to be ikPair==0 alone
+							and e2[ik2net].withinRange ) //k2 has at least one state within active energy range
+						{	//Identify associated phonon states:
+							int iqIndex = calculateIndex(ik1v - ik2v, phononSup);
+							//Set e-ph matrix elements:
+							MatrixEph m;
+							setMatrix(e1[ik1net], e2[ik2net], ph[iqIndex], ikPair, m);
+							//Invoke call-back function:
+							watchCallback.start();
+							ePhProcess(m, params);
+							watchCallback.stop();
+						}
+						ikPair++;
+					)
+				}
+				else ikPair += prodSup; //no states within range at current k1
 			)
 		}
 	}
@@ -799,8 +822,19 @@ void FeynWann::setState(FeynWann::StateE& state)
 			if(E > symmThreshold)
 				E += fwp.scissor;
 	}
+	//Check whether any states in range:
+	state.withinRange = true;
+	if(inEphLoop and (ePhEstart<ePhEstop))
+	{	state.withinRange = false;
+		for (double& E : state.E)
+			if(E >= ePhEstart and E <= ePhEstop)
+			{	state.withinRange = true;
+				break;
+			}
+		if(not state.withinRange) return; //Remaining quantities will never be used
+	}
 	watchRotations.start();
-	//Velcoity matrix, if needed:
+	//Velocity matrix, if needed:
 	if(fwp.needVelocity)
 	{	state.vVec.resize(nBands);
 		for(int iDir=0; iDir<3; iDir++)
@@ -867,6 +901,8 @@ void FeynWann::bcastState(FeynWann::StateE& state, MPIUtil* mpiUtil, int root)
 	mpiUtil->bcast(&state.k[0], 3, root);
 	//Energy and eigenvectors:
 	bcast(state.E, nBands, mpiUtil, root);
+	mpiUtil->bcast(state.withinRange, root);
+	if(not state.withinRange) return; //Remaining quantities will never be used
 	bcast(state.U, nBands, nBands, mpiUtil, root);
 	//Velocity matrix, if needed:
 	if(fwp.needVelocity)
