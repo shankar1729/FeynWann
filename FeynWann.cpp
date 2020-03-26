@@ -29,19 +29,21 @@ FeynWannParams::FeynWannParams(InputMap* inputMap)
 : iSpin(0), totalEprefix("Wannier/totalE"), phononPrefix("Wannier/phonon"), wannierPrefix("Wannier/wannier"),
 needSymmetries(false), needPhonons(false), needVelocity(false), needSpin(false),
 needLinewidth_ee(false), needLinewidth_ePh(false), needLinewidthP_ePh(false), ePhHeadOnly(false),
-EzExt(0.)
+EzExt(0.), scissor(0.)
 {
 	if(inputMap)
 	{	const double nm = 10*Angstrom;
 		const double Tesla = eV*sec/(meter*meter);
 		Bext = inputMap->getVector("Bext", vector3<>(0.,0.,0.)) * Tesla;
 		EzExt = inputMap->get("EzExt", 0.) * eV/nm;
+		scissor = inputMap->get("scissor", 0.) * eV;
 	}
 }
 
 void FeynWannParams::printParams() const
 {	logPrintf("Bext = "); Bext.print(globalLog, " %lg ");
 	logPrintf("EzExt = %lg\n", EzExt);
+	logPrintf("scissor = %lg\n", scissor);
 }
 
 
@@ -791,6 +793,12 @@ void FeynWann::setState(FeynWann::StateE& state)
 		Hk += fwp.EzExt * getMatrix(Zw->getResult(state.ik), nBands, nBands);
 	Hk.diagonalize(state.U, state.E);
 	for(double& E: state.E) E -= mu; //reference to Fermi level
+	if(fwp.scissor)
+	{	//Apply scissor operator (move up unoccupied states):
+		for(double& E: state.E)
+			if(E > symmThreshold)
+				E += fwp.scissor;
+	}
 	watchRotations.start();
 	//Velcoity matrix, if needed:
 	if(fwp.needVelocity)
