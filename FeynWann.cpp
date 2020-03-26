@@ -1038,39 +1038,56 @@ double FeynWann::StateE::ImSigmaP_ePh(int n, double f) const
 {	return exp(interpQuartic(logImSigmaP_ePhArr, n, f));
 }
 
-//Report a tensor with error estimates
-void reportResult(const std::vector<matrix3<>>& result, string resultName, double unit, string unitName)
-{	matrix3<> resultMean, resultStd;
+//Elementwise std::pow of a matrix
+template<typename PowType> matrix3<> powElemWise(const matrix3<>& m, PowType n)
+{	matrix3<> result;
 	for(int i=0; i<3; i++)
-	{	for(int j=0; j<3; j++)
-		{	double sum = 0., sumSq = 0.; int N = 0;
-			for(size_t block=0; block<result.size(); block++)
-			{	N++;
-				sum += result[block](i,j);
-				sumSq += std::pow(result[block](i,j), 2);
-			}
-			resultMean(i,j) = sum/N;
-			resultStd(i,j) = sqrt(sumSq/N - std::pow(sum/N,2));
-		}
-		char mOpen[] = "/|\\", mClose[] = "\\|/";
-		logPrintf("%20s%c", i==1 ? (resultName + " = ").c_str() : "", mOpen[i]);
-		for(int j=0; j<3; j++) logPrintf(" %12lg", resultMean(i,j)/unit);
-		logPrintf(" %c%5s%c", mClose[i], i==1 ? " +/- " : "", mOpen[i]);
-		for(int j=0; j<3; j++) logPrintf(" %12lg", resultStd(i,j)/unit);
-		logPrintf(" %c %s\n", mClose[i], i==1 ? unitName.c_str() : "");
+		for(int j=0; j<3; j++)
+			result(i,j) = std::pow(m(i,j), n);
+	return result;
+}
+
+//Report a tensor with error estimates
+void reportResult(const std::vector<matrix3<>>& result, string resultName, double unit, string unitName, FILE* fp, bool invAvg)
+{	matrix3<> sum, sumSq; int N = 0;
+	for(size_t block=0; block<result.size(); block++)
+	{	N++;
+		matrix3<> term = invAvg ? inv(result[block]) : result[block];
+		sum += term;
+		sumSq += powElemWise(term, 2);
 	}
-	logPrintf("\n");
+	matrix3<> resultMean = (1./N)*sum;
+	matrix3<> resultStd = powElemWise((1./N)*sumSq - powElemWise(resultMean,2), 0.5); //element-wise std. deviation
+	if(invAvg)
+	{	resultMean = inv(resultMean); //harmonic matrix mean (inverse of mean matrix inverse)
+		resultStd = resultMean * resultStd * resultMean; //propagate error in reciprocal
+	}
+	//Print result:
+	for(int i=0; i<3; i++)
+	{	char mOpen[] = "/|\\", mClose[] = "\\|/";
+		fprintf(fp, "%20s%c", i==1 ? (resultName + " = ").c_str() : "", mOpen[i]);
+		for(int j=0; j<3; j++) fprintf(fp, " %12lg", resultMean(i,j)/unit);
+		fprintf(fp, " %c%5s%c", mClose[i], i==1 ? " +/- " : "", mOpen[i]);
+		for(int j=0; j<3; j++) fprintf(fp, " %12lg", fabs(resultStd(i,j))/unit);
+		fprintf(fp, " %c %s\n", mClose[i], i==1 ? unitName.c_str() : "");
+	}
+	fprintf(fp, "\n");
 }
 
 //Report a scalar with error estimates:
-void reportResult(const std::vector<double>& result, string resultName, double unit, string unitName)
+void reportResult(const std::vector<double>& result, string resultName, double unit, string unitName, FILE* fp, bool invAvg)
 {	double sum = 0., sumSq = 0.; int N = 0;
 	for(size_t block=0; block<result.size(); block++)
 	{	N++;
-		sum += result[block];
-		sumSq += std::pow(result[block], 2);
+		double term = invAvg ? 1./result[block] : result[block];
+		sum += term;
+		sumSq += term*term;
 	}
 	double resultMean = sum/N;
-	double resultStd = sqrt(sumSq/N - std::pow(sum/N,2));
-	logPrintf("%17s = %12lg +/- %12lg %s\n", resultName.c_str(), resultMean/unit, resultStd/unit, unitName.c_str());
+	double resultStd = sqrt(sumSq/N - std::pow(resultMean,2));
+	if(invAvg)
+	{	resultMean = 1./resultMean; //harmonic mean
+		resultStd *= std::pow(resultMean,2); //propagate error in reciprocal
+	}
+	fprintf(fp, "%17s = %12lg +/- %12lg %s\n", resultName.c_str(), resultMean/unit, fabs(resultStd)/unit, unitName.c_str());
 }

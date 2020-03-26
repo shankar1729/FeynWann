@@ -178,8 +178,8 @@ private:
 };
 
 //Utility functions for printing with error estimates:
-void reportResult(const std::vector<matrix3<>>& result, string resultName, double unit, string unitName); //!< report a tensor result with error bars
-void reportResult(const std::vector<double>& result, string resultName, double unit, string unitName); //!< report a scalar result with error bars
+void reportResult(const std::vector<matrix3<>>& result, string resultName, double unit, string unitName, FILE* fp=globalLog, bool invAvg=false); //!< report a tensor result with error bars
+void reportResult(const std::vector<double>& result, string resultName, double unit, string unitName, FILE* fp=globalLog, bool invAvg=false); //!< report a scalar result with error bars
 
 //Fermi and Bose functions with overflow/underflow handling:
 inline double fermi(double EminusMuByT) //!< Fermi function with overflow/underflow handling
