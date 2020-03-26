@@ -43,11 +43,11 @@ struct SpinRelaxCollect
 	std::vector<matrix3<>> GammaV; //valley-weighted numerator of T1^-1
 	
 	SpinRelaxCollect(const std::vector<double>& dmu, const std::vector<double>& T, double omegaPhByTmin, int nModes,
-		double EconserveWidth, size_t nKpairs, double Estart, double Estop, bool valley, matrix3<> R)
+		double EconserveWidth, size_t nKpairs, size_t nKtot, double Estart, double Estop, bool valley, matrix3<> R)
 	: dmu(dmu), T(T), omegaPhByTmin(std::max(1e-3,omegaPhByTmin)), nModes(nModes),
 		EconserveExpFac(-0.5/std::pow(EconserveWidth, 2)),
 		prefacGamma(2*M_PI/ (nKpairs * sqrt(2.*M_PI)*EconserveWidth)), //include prefactor of Gaussian energy conservation
-		prefacChi(0.5/nKpairs), //collected over both k in each k-pair for consistency
+		prefacChi(0.5/nKtot), //collected over both k1 and k2 arrays
 		Estart(Estart), Estop(Estop),
 		Gamma(T.size()*dmu.size()), chi(T.size()*dmu.size()),
 		valley(valley), G(2*M_PI * inv(R)), GGT(G * (~G)), K(1./3, 1./3, 0), Kp(-1./3, -1./3, 0), GammaV(Gamma)
@@ -85,6 +85,7 @@ struct SpinRelaxCollect
 			< GGT.metric_length_squared(wrap(Kp-k));
 	}
 	
+	//Calculate spin relaxation rate numerator (Gamma):
 	void process(const FeynWann::MatrixEph& mEph)
 	{	const FeynWann::StateE& e1 = *(mEph.e1);
 		const FeynWann::StateE& e2 = *(mEph.e2);
@@ -112,19 +113,6 @@ struct SpinRelaxCollect
 		{	Sdeg1[iDir] = degenerateProject(e1.S[iDir], e1.E, bStart, bStop);
 			Sdeg2[iDir] = degenerateProject(e2.S[iDir], e2.E, bStart, bStop);
 		}
-		
-		//Compute chi contributions by band except for electron occupation factors:
-		#define CONTRIB_chi(s) \
-			std::vector<matrix3<>> contribChi##s(nBands); \
-			for(int iDir=0; iDir<3; iDir++) \
-			for(int jDir=0; jDir<3; jDir++) \
-			{	diagMatrix SiSj = diagSS(Sdeg##s[iDir], Sdeg##s[jDir], nBandsSel); \
-				for(int b=bStart; b<bStop; b++) \
-					contribChi##s[b](iDir,jDir) = prefacChi * SiSj[b-bStart]; \
-			}
-		CONTRIB_chi(1)
-		CONTRIB_chi(2)
-		#undef CONTRIB_chi
 		
 		//Weight for valley contrib
 		double wValley = (valley and (isKvalley(e1.k) xor isKvalley(e2.k))) ? 1. : 0.;
@@ -181,16 +169,14 @@ struct SpinRelaxCollect
 		{	double invT = 1./T[iT];
 			for(size_t iMu=0; iMu<dmu.size(); iMu++)
 			{	size_t iMuT = iT*dmu.size() + iMu; //combined index
-				//Compute Fermi occupations and accumulate chi contributions:
-				#define CALC_F_ACCUM_CHI(s) \
+				//Compute Fermi occupations:
+				#define CALC_F(s) \
 					diagMatrix F##s(nBands), Fbar##s(nBands); \
 					for(int b=bStart; b<bStop; b++) \
-					{	fermi(invT*(e##s.E[b] - dmu[iMu]), F##s[b], Fbar##s[b]); \
-						chi[iMuT] += (invT * F##s[b]*Fbar##s[b]) * contribChi##s[b]; \
-					}
-				CALC_F_ACCUM_CHI(1)
-				CALC_F_ACCUM_CHI(2)
-				#undef CALC_F_ACCUM_CHI
+						fermi(invT*(e##s.E[b] - dmu[iMu]), F##s[b], Fbar##s[b]);
+				CALC_F(1)
+				CALC_F(2)
+				#undef CALC_F
 				
 				//Accumulate Gamma contributions:
 				int bIndex = 0;
@@ -207,7 +193,53 @@ struct SpinRelaxCollect
 	static void ePhProcess(const FeynWann::MatrixEph& mEph, void* params)
 	{	((SpinRelaxCollect*)params)->process(mEph);
 	}
+
+	//Calculate denominator chi (electron loop)
+	void process(const FeynWann::StateE& e)
+	{	const int nBands = e.E.nRows();
+		
+		//Select relevant band range:
+		int bStart = nBands, bStop = 0;
+		for(int b=0; b<nBands; b++)
+		{	const double& E = e.E[b];
+			if(E>=Estart and b<bStart) bStart=b;
+			if(E<=Estop and b>=bStop) bStop=b+1;
+		}
+		int nBandsSel = bStop - bStart; //reduced number of selected bands at this k-pair
+		if(nBandsSel <= 0) return;
+		
+		//Degenerate spin projections:
+		std::vector<SparseMatrix> Sdeg(3);
+		for(int iDir=0; iDir<3; iDir++)
+			Sdeg[iDir] = degenerateProject(e.S[iDir], e.E, bStart, bStop);
+		
+		//Compute chi contributions by band except for electron occupation factors:
+		std::vector<matrix3<>> contribChi(nBands);
+		for(int iDir=0; iDir<3; iDir++)
+		for(int jDir=0; jDir<3; jDir++)
+		{	diagMatrix SiSj = diagSS(Sdeg[iDir], Sdeg[jDir], nBandsSel);
+			for(int b=bStart; b<bStop; b++)
+				contribChi[b](iDir,jDir) = prefacChi * SiSj[b-bStart];
+		}
 	
+		//Collect results for various dmu values:
+		for(size_t iT=0; iT<T.size(); iT++)
+		{	double invT = 1./T[iT];
+			for(size_t iMu=0; iMu<dmu.size(); iMu++)
+			{	size_t iMuT = iT*dmu.size() + iMu; //combined index
+				//Compute Fermi occupations and accumulate chi contributions:
+				diagMatrix F(nBands), Fbar(nBands);
+				for(int b=bStart; b<bStop; b++)
+				{	fermi(invT*(e.E[b] - dmu[iMu]), F[b], Fbar[b]);
+					chi[iMuT] += (invT * F[b]*Fbar[b]) * contribChi[b];
+				}
+			}
+		}
+	}
+	static void eProcess(const FeynWann::StateE& e, void* params)
+	{	((SpinRelaxCollect*)params)->process(e);
+	}
+
 	//! Real part of outer product of complex vectors, Re(a \otimes b*):
 	inline matrix3<> realOuter(const vector3<complex> &a, const vector3<complex> &b)
 	{	matrix3<> m;
@@ -232,9 +264,10 @@ struct EnergyRangeCollect
 	}
 	
 	void process(const FeynWann::StateE& state)
-	{	for(const double& E: state.E)
-		{	if(E<dmuMin and E>EvMax) EvMax = E;
-			if(E>dmuMax and E<EcMin) EcMin = E;
+	{	const double tol = 1e-3;
+		for(const double& E: state.E)
+		{	if(E<dmuMin+tol and E>EvMax) EvMax = E;
+			if(E>dmuMax-tol and E<EcMin) EcMin = E;
 		}
 	}
 	static void eProcess(const FeynWann::StateE& state, void* params)
@@ -308,6 +341,7 @@ int main(int argc, char** argv)
 	
 	//Initialize sampling parameters:
 	int nOffsetsPerBlock = ceildiv(nOffsets, nBlocks);
+	size_t nKtotPerBlock = fw.eCountPerOffset() * nOffsetsPerBlock;
 	size_t nKpairsPerBlock = fw.ePhCountPerOffset() * nOffsetsPerBlock;
 	logPrintf("Effectively sampled nKpairs: %lu\n", nKpairsPerBlock * nBlocks);
 	int oStart = 0, oStop = 0;
@@ -327,28 +361,38 @@ int main(int argc, char** argv)
 	logPrintf("\n");
 
 	//Determine relevant energy range (states close enough to mu or band edges to matter):
+	logPrintf("Determining active energy: "); logFlush();
 	EnergyRangeCollect erc(dmu);
-	fw.eLoop(vector3<>(), EnergyRangeCollect::eProcess, &erc);
-	fw.phLoop(vector3<>(), EnergyRangeCollect::phProcess, &erc);
+	for(int o=oStart; o<oStop; o++)
+	{	Random::seed(o);
+		vector3<> k0 = fw.randomVector(mpiGroup);
+		fw.eLoop(k0, EnergyRangeCollect::eProcess, &erc);
+		fw.phLoop(k0, EnergyRangeCollect::phProcess, &erc);
+	}
 	mpiWorld->allReduce(erc.EvMax, MPIUtil::ReduceMax);
 	mpiWorld->allReduce(erc.EcMin, MPIUtil::ReduceMin);
 	mpiWorld->allReduce(erc.omegaPhMax, MPIUtil::ReduceMax);
 	//--- add margins of max phonon energy, energy conservation width and fermiPrime width
 	double Emargin = erc.omegaPhMax + 6.*EconserveWidth + 20.*T.back();
-	double Estart = erc.EvMax - Emargin;
-	double Estop = erc.EcMin + Emargin;
+	fw.ePhEstart = erc.EvMax - Emargin;
+	fw.ePhEstop = erc.EcMin + Emargin;
+	logPrintf("%lg to %lg eV.\n\n", fw.ePhEstart/eV, fw.ePhEstop/eV);
+	
 	//Collect integrals involved in T1 calculation:
 	std::vector<std::shared_ptr<SpinRelaxCollect>> srcArr(nBlocks);
 	for(int block=0; block<nBlocks; block++)
 	{	logPrintf("Working on block %d of %d: ", block+1, nBlocks); logFlush();
-		srcArr[block] = std::make_shared<SpinRelaxCollect>(dmu, T, omegaPhByTmin, nModes, EconserveWidth, nKpairsPerBlock, Estart, Estop, valley, fw.R);
+		srcArr[block] = std::make_shared<SpinRelaxCollect>(dmu, T, omegaPhByTmin, nModes, EconserveWidth,
+			nKpairsPerBlock, nKtotPerBlock, fw.ePhEstart, fw.ePhEstop, valley, fw.R);
 		SpinRelaxCollect& src = *(srcArr[block]);
 		for(int o=0; o<noMine; o++)
 		{	Random::seed(block*nOffsetsPerBlock+o+oStart); //to make results independent of MPI division
 			//Process with a random offset pair:
 			vector3<> k01 = fw.randomVector(mpiGroup); //must be constant across group
 			vector3<> k02 = fw.randomVector(mpiGroup); //must be constant across group
-			fw.ePhLoop(k01, k02, SpinRelaxCollect::ePhProcess, &src);
+			fw.ePhLoop(k01, k02, SpinRelaxCollect::ePhProcess, &src); //for Gamma
+			fw.eLoop(k01, SpinRelaxCollect::eProcess, &src); //for Chi
+			fw.eLoop(k02, SpinRelaxCollect::eProcess, &src); //for Chi
 			//Print progress:
 			if((o+1)%oInterval==0) { logPrintf("%d%% ", int(round((o+1)*100./noMine))); logFlush(); }
 		}
