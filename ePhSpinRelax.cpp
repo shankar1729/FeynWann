@@ -495,13 +495,15 @@ int main(int argc, char** argv)
 				T1V[block] = (1./3)*trace(T1Vbar[block]);
 			}
 		}
-		reportResult(Gamma, "Gamma", 1./(eV*ps), "1/(eV.ps)", globalLog, true);
-		reportResult(chi, "chi", 1./eV, "1/eV", globalLog, true);
-		reportResult(T1bar, "T1", ps, "ps", globalLog, true); //tensor version
-		reportResult(T1, "T1", ps, "ps", globalLog, true);
+		reportResult(Gamma, "Gamma", 1./(eV*ps), "1/(eV.ps)");
+		reportResult(chi, "chi", 1./eV, "1/eV");
+		reportResult(T1bar, "T1", ps, "ps", globalLog, true); //tensor version (averaged on inverse)
+		reportResult(T1, "T1", ps, "ps", globalLog, true); //scalar version (averaged on inverse)
+		logPrintf("\n");
 		if(valley)
-		{	reportResult(T1Vbar, "T1valley", ps, "ps", globalLog, true); //tensor version
-			reportResult(T1V, "T1valley", ps, "ps", globalLog, true);
+		{	reportResult(T1Vbar, "T1valley", ps, "ps", globalLog, true); //tensor version (averaged on inverse)
+			reportResult(T1V, "T1valley", ps, "ps", globalLog, true); //scalar version (averaged on inverse)
+			logPrintf("\n");
 		}
 	}
 	
