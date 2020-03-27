@@ -71,14 +71,14 @@ inline diagMatrix diagSS(const SparseMatrix& S1, const SparseMatrix& S2, int N)
 
 //Multiply sparse matrix with dense matrix on left:
 inline matrix operator*(const matrix& M, const SparseMatrix& S)
-{	int N = M.nRows(); //assumed square
-	matrix R = zeroes(N, N);
+{	int nRows = M.nRows();
+	matrix R = zeroes(nRows, M.nCols()); //same size as M because S is square
 	complex* r = R.data();
 	const complex* m = M.data();
 	for(const SparseEntry& s: S)
-	{	complex* rCur = r + N*s.j;
-		const complex* mCur = m + N*s.i;
-		for(int k=0; k<N; k++)
+	{	complex* rCur = r + nRows*s.j;
+		const complex* mCur = m + nRows*s.i;
+		for(int k=0; k<nRows; k++)
 			*(rCur++) += *(mCur++) * s.val;
 	}
 	return R;
@@ -86,17 +86,17 @@ inline matrix operator*(const matrix& M, const SparseMatrix& S)
 
 //Multiply sparse matrix with dense matrix on right:
 inline matrix operator*(const SparseMatrix& S, const matrix& M)
-{	int N = M.nRows(); //assumed square
-	matrix R = zeroes(N, N);
+{	int nRows = M.nRows(), nCols = M.nCols();
+	matrix R = zeroes(nRows, nCols); //same size as M because S is square
 	complex* r = R.data();
 	const complex* m = M.data();
 	for(const SparseEntry& s: S)
 	{	complex* rCur = r + s.i;
 		const complex* mCur = m + s.j;
 		int offset = 0;
-		for(int k=0; k<N; k++)
+		for(int k=0; k<nCols; k++)
 		{	rCur[offset] += s.val * mCur[offset];
-			offset += N;
+			offset += nRows;
 		}
 	}
 	return R;
