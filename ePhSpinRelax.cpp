@@ -178,6 +178,7 @@ struct SpinRelaxCollect
 					modeContrib[alpha] = true;
 					contrib = true;
 				}
+				else Adata[bIndex] = 0.;
 				bIndex++;
 			}
 			if(not contrib) continue; //no energy conserving combination for this phonon mode at present k-pair
