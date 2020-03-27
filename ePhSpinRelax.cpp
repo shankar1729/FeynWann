@@ -356,6 +356,7 @@ int main(int argc, char** argv)
 	const int nOffsets = inputMap.get("nOffsets"); assert(nOffsets>0);
 	const int nBlocks = inputMap.get("nBlocks"); assert(nBlocks>0);
 	const double degeneracyThreshold = inputMap.get("degeneracyThreshold", 1e-6/eV) * eV;
+	const double neglectThreshold = inputMap.get("neglectThreshold", 1e-8); //relative threshold in occupation and energy conservation factors that can be neglected (determines Emargin)
 	const double EconserveWidth = inputMap.get("EconserveWidth") * eV;
 	const double Tmin = inputMap.get("Tmin") * Kelvin; //temperature; start of range
 	const double Tmax = inputMap.get("Tmax", Tmin/Kelvin) * Kelvin; assert(Tmax>=Tmin); //temperature; end of range (defaults to Tmin)
@@ -374,6 +375,7 @@ int main(int argc, char** argv)
 	logPrintf("Tmax = %lg\n", Tmax);
 	logPrintf("Tcount = %lu\n", Tcount);
 	logPrintf("degeneracyThreshold = %lg\n", degeneracyThreshold);
+	logPrintf("neglectThreshold = %lg\n", neglectThreshold);
 	logPrintf("EconserveWidth = %lg\n", EconserveWidth);
 	logPrintf("dmuMin = %lg\n", dmuMin);
 	logPrintf("dmuMax = %lg\n", dmuMax);
@@ -442,7 +444,9 @@ int main(int argc, char** argv)
 	mpiWorld->allReduce(erc.EcMin, MPIUtil::ReduceMin);
 	mpiWorld->allReduce(erc.omegaPhMax, MPIUtil::ReduceMax);
 	//--- add margins of max phonon energy, energy conservation width and fermiPrime width
-	double Emargin = erc.omegaPhMax + 6.*EconserveWidth + 20.*T.back();
+	const double nExponentials = -log(neglectThreshold);
+	const double nGaussSigmas = sqrt(-2.*log(neglectThreshold));
+	double Emargin = erc.omegaPhMax + nGaussSigmas*EconserveWidth + nExponentials*T.back();
 	fw.ePhEstart = erc.EvMax - Emargin;
 	fw.ePhEstop = erc.EcMin + Emargin;
 	logPrintf("%lg to %lg eV.\n\n", fw.ePhEstart/eV, fw.ePhEstop/eV);
