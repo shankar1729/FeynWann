@@ -6,13 +6,15 @@
 struct TripletMatrix
 {	//Triplet format:
 	const int nRows, nCols;
+	const bool symmetric; //whether the matrix is symmetric (implicit Mji for every Mij added)
 	struct Entry
 	{	int i,j; double Mij; 
 		Entry(int i, int j, double Mij) : i(i), j(j), Mij(Mij) {}
 	};
 	std::vector<Entry> entries; //MPI divided; each process has a subset
 	
-	TripletMatrix(int nRows, int nCols, int nNZestimate=0) : nRows(nRows), nCols(nCols)
+	TripletMatrix(int nRows, int nCols, int nNZestimate=0, bool symmetric=false)
+	: nRows(nRows), nCols(nCols), symmetric(symmetric)
 	{	if(nNZestimate) entries.reserve(nNZestimate / mpiWorld->nProcesses());
 	}
 	
@@ -23,7 +25,10 @@ struct TripletMatrix
 		complex* outData = out.data(); const complex* vData = v.data();
 		for(const Entry& entry: entries)
 			for(int col=0; col<v.nCols(); col++)
-				outData[out.index(entry.i, col)] += entry.Mij * vData[v.index(entry.j, col)];
+			{	outData[out.index(entry.i, col)] += entry.Mij * vData[v.index(entry.j, col)];
+				if(symmetric)
+					outData[out.index(entry.j, col)] += entry.Mij * vData[v.index(entry.i, col)];
+			}
 		mpiWorld->allReduceData(out, MPIUtil::ReduceSum);
 		watch.stop();
 		return out;
@@ -33,7 +38,10 @@ struct TripletMatrix
 	diagMatrix DiagSumRows() const
 	{	diagMatrix out(nCols, 0.);
 		for(const Entry& entry: entries)
-			out[entry.j] += entry.Mij;
+		{	out[entry.j] += entry.Mij;
+			if(symmetric)
+				out[entry.i] += entry.Mij;
+		}
 		mpiWorld->allReduceData(out, MPIUtil::ReduceSum);
 		return out;
 	}
@@ -260,7 +268,7 @@ int main(int argc, char** argv)
 		
 		//Construct BTE sparse matrix:
 		logPrintf("\nConstructing BTE matrix: "); logFlush();
-		TripletMatrix S(nStatesTot, nStatesTot, nNZbound);
+		TripletMatrix S(nStatesTot, nStatesTot, nNZbound, true);
 		double prefacS = 2*M_PI/h.nkTot;
 		double tauInvNum = 0.;
 		for(size_t ik=ikStart; ik<ikStop; ik++)
@@ -293,7 +301,6 @@ int main(int argc, char** argv)
 						{	size_t iState = stateOffset[ik] + bi;
 							size_t jState = stateOffset[jk] + bj;
 							S.entries.push_back(TripletMatrix::Entry(iState,jState, Sdata->real()));
-							S.entries.push_back(TripletMatrix::Entry(jState,iState, Sdata->real()));
 						}
 						Sdata++;
 					}
@@ -309,7 +316,7 @@ int main(int argc, char** argv)
 		//Convert 'S' to matrix 'B' in the derivation:
 		diagMatrix DiagSsum = S.DiagSumRows();
 		for(size_t iState=stateOffsetMine; iState<stateOffsetMine+nStatesMine; iState++)
-			S.entries.push_back(TripletMatrix::Entry(iState, iState, -DiagSsum[iState]));
+			S.entries.push_back(TripletMatrix::Entry(iState, iState, -0.5*DiagSsum[iState])); //factor of 0.5 due to implicit symmetry
 		const TripletMatrix& B = S; //call it B for clarity in the following
 		
 		//Construct velocity and -fPrime matrices:
