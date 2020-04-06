@@ -50,7 +50,7 @@ struct TripletMatrix
 	
 	//Solve A x = b iteratively using something like GMRES/DIIS (pass in an initial guess for x):
 	void applyInverse(const matrix& b, matrix& x) const
-	{	const int nIterations = 100;
+	{	const int nIterations = 1000;
 		const int maxHistory = 10;
 		const double threshold = 1e-7;
 		std::deque<matrix> xPrev, rPrev;
@@ -273,15 +273,15 @@ int main(int argc, char** argv)
 				auto gStop = gStart; gStop++;
 				while((gStop != kp.GePh.end()) and (gStop->jk == jk)) gStop++;
 				//Collect contributions:
-				matrix T = zeroes(nInnerAll[ik], nInnerAll[jk]); //real=T+, imag=T- contribution in derivation
-				complex* Tdata = T.data();
+				matrix Scontrib = zeroes(nInnerAll[ik], nInnerAll[jk]); //contributons to matrix Stilde in derivation
+				complex* Sdata = Scontrib.data();
 				for(auto g=gStart; g!=gStop; g++)
 				{	double nPh = bose(invT*g->omegaPh); //phonon occupation
 					for(const SparseEntry& e: g->G)
 					{	double term = prefacS * e.val.norm(); //prefactors * |e-ph matrix element|^2 * energy conservation factor
 						double nfbar_i = nPh + 1 - s1[e.i].f;
 						double nf_j = nPh*(nPh+1)/nfbar_i; //nPh + fj by detailed balance
-						Tdata[T.index(e.i,e.j)] += term * complex(nfbar_i, nf_j); //re->T+, im->T-
+						Sdata[Scontrib.index(e.i,e.j)].real() -= term * (nfbar_i * s1[e.i].mfPrime);
 						//Scattering time average:
 						double fj = nf_j - nPh, mfjPrime = invT*fj*(1.-fj);
 						tauInvNum += term * (nfbar_i * s1[e.i].mfPrime + nf_j * mfjPrime);
@@ -289,13 +289,13 @@ int main(int argc, char** argv)
 				}
 				for(int bj=0; bj<nInnerAll[jk]; bj++)
 					for(int bi=0; bi<nInnerAll[ik]; bi++)
-					{	if(Tdata->norm())
+					{	if(Sdata->real())
 						{	size_t iState = stateOffset[ik] + bi;
 							size_t jState = stateOffset[jk] + bj;
-							S.entries.push_back(TripletMatrix::Entry(iState,jState, Tdata->real()));
-							S.entries.push_back(TripletMatrix::Entry(jState,iState, Tdata->imag()));
+							S.entries.push_back(TripletMatrix::Entry(iState,jState, Sdata->real()));
+							S.entries.push_back(TripletMatrix::Entry(jState,iState, Sdata->real()));
 						}
-						Tdata++;
+						Sdata++;
 					}
 				//Move to next jk set:
 				gStart = gStop;
@@ -327,7 +327,7 @@ int main(int argc, char** argv)
 		
 		//Simple estimate (analgous to resistivity.cpp, but on uniform k-mesh):
 		double Tt = (h.spinWeight/(3.*h.nkTot)) * trace(dagger(V) * mfPrimeV).real();
-		double Gamma = (-h.spinWeight/(3.*h.nkTot)) * trace(dagger(V) * (B * mfPrimeV)).real();
+		double Gamma = (h.spinWeight/(3.*h.nkTot)) * trace(dagger(V) * (B * V)).real();
 		double rhoSimple = Omega*Gamma/(Tt*Tt);
 		double tauDrude = Tt / Gamma;
 		
@@ -336,7 +336,7 @@ int main(int argc, char** argv)
 		B.applyInverse(mfPrimeV, invB_mfPrimeV);
 		
 		//Calculate conductivity tensor using Boltzmann equation:
-		matrix sigmaMat = (-h.spinWeight/(h.nkTot*Omega)) * dagger(V) * invB_mfPrimeV;
+		matrix sigmaMat = (h.spinWeight/(h.nkTot*Omega)) * dagger(mfPrimeV) * invB_mfPrimeV;
 		matrix rhoMat = inv(sigmaMat);
 		double sigma = (1./3) * trace(sigmaMat).real();
 		double rho = 1./sigma;
