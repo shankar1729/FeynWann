@@ -127,11 +127,11 @@ struct Lindblad : public Integrator<DM1>
 	}
 	
 	//--------- Initialize -------------
-	void initialize()
+	void initialize(string inFile)
 	{
 		//Read header and check parameters:
 		MPIUtil::File fp;
-		mpiWorld->fopenRead(fp, "ldbd.dat");
+		mpiWorld->fopenRead(fp, inFile.c_str());
 		LindbladFile::Header h; h.read(fp, mpiWorld);
 		if(dmu<h.dmuMin or dmu>h.dmuMax)
 			die("dmu = %lg eV is out of range [ %lg , %lg ] eV specified in lindbladInit.\n", dmu/eV, h.dmuMin/eV, h.dmuMax/eV);
@@ -602,6 +602,7 @@ int main(int argc, char** argv)
 	if(verboseMode!="yes" and verboseMode!="no")
 		die("\nverboseMode must be 'yes' or 'no'\n");
 	const bool verbose = (verboseMode=="yes");
+	const string inFile = inputMap.has("inFile") ? inputMap.getString("inFile") : "ldbd.dat"; //input file name
 	
 	logPrintf("\nInputs after conversion to atomic units:\n");
 	logPrintf("dmu = %lg\n", dmu);
@@ -624,6 +625,7 @@ int main(int argc, char** argv)
 	logPrintf("tStop = %lg\n", tStop);
 	logPrintf("ePhMode = %s\n", ePhMode.c_str());
 	logPrintf("verbose = %s\n", verboseMode.c_str());
+	logPrintf("inFile = %s\n", inFile.c_str());
 	
 	if(ip.dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
@@ -636,7 +638,7 @@ int main(int argc, char** argv)
 	Lindblad lb(dmu, T,
 		pumpOmega, pumpA0, pumpTau, pumpPol, (pumpMode=="Evolve"),
 		omegaMin, omegaMax, domega, tau, pol, dE, ePhEnabled, verbose);
-	lb.initialize();
+	lb.initialize(inFile);
 	logPrintf("Initialization completed successfully at t[s]: %9.2lf\n\n", clock_sec());
 	logFlush();
 	

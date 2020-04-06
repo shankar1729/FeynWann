@@ -73,12 +73,13 @@ struct LindbladInit
 	double Estart, Estop; //energy range for k selection
 	std::vector<vector3<>> k; //selected k-points
 	std::vector<double> E; //all band energies for selected k-points
+	size_t nActiveTot; //total number of active states
 	inline void kSelect(const FeynWann::StateE& state)
 	{	bool active = false;
 		for(double E: state.E)
 			if(E>=Estart and E<=Estop)
 			{	active = true;
-				break;
+				nActiveTot++;
 			}
 		if(active)
 		{	k.push_back(state.k);
@@ -90,18 +91,6 @@ struct LindbladInit
 	}
 	void kpointSelect(const std::vector<vector3<>>& k0)
 	{
-		//Determine energy range:
-		EvMax = -DBL_MAX;
-		EcMin = +DBL_MAX;
-		fw.eLoop(vector3<>(), LindbladInit::eRange, this);
-		mpiWorld->allReduce(EvMax, MPIUtil::ReduceMax);
-		mpiWorld->allReduce(EcMin, MPIUtil::ReduceMin);
-		//--- add margins of max phonon energy, energy conservation width and fermiPrime width
-		double Emargin =7.*Tmax; //neglect below 10^-3 occupation deviation from equilibrium
-		Estart = std::min(EcMin - pumpOmegaMax, EvMax) - Emargin;
-		Estop = std::max(EvMax + pumpOmegaMax, EcMin) + Emargin;
-		logPrintf("Active energy range: %.3lf to %.3lf eV\n", Estart/eV, Estop/eV);
-		
 		//Initialize sampling parameters:
 		size_t oStart, oStop; //range of offstes handled by this process group
 		if(mpiGroup->isHead())
@@ -110,8 +99,27 @@ struct LindbladInit
 		mpiGroup->bcast(oStop);
 		size_t noMine = oStop-oStart;
 		size_t oInterval = std::max(1, int(round(noMine/50.))); //interval for reporting progress
-
+		
+		//Determine energy range:
+		EvMax = -DBL_MAX;
+		EcMin = +DBL_MAX;
+		logPrintf("Determining energy range: "); logFlush();
+		for(size_t o=oStart; o<oStop; o++)
+		{	fw.eLoop(k0[o], LindbladInit::eRange, this);
+			//Print progress:
+			if((o-oStart+1)%oInterval==0) { logPrintf("%d%% ", int(round((o-oStart+1)*100./noMine))); logFlush(); }
+		}
+		logPrintf("done.\n"); logFlush();
+		mpiWorld->allReduce(EvMax, MPIUtil::ReduceMax);
+		mpiWorld->allReduce(EcMin, MPIUtil::ReduceMin);
+		//--- add margins of max phonon energy, energy conservation width and fermiPrime width
+		double Emargin =7.*Tmax; //neglect below 10^-3 occupation deviation from equilibrium
+		Estart = std::min(EcMin - pumpOmegaMax, EvMax) - Emargin;
+		Estop = std::max(EvMax + pumpOmegaMax, EcMin) + Emargin;
+		logPrintf("Active energy range: %.3lf to %.3lf eV\n", Estart/eV, Estop/eV);
+		
 		//Select k-points:
+		nActiveTot = 0;
 		logPrintf("Scanning k-points with active states: "); logFlush();
 		for(size_t o=oStart; o<oStop; o++)
 		{	fw.eLoop(k0[o], LindbladInit::kSelect, this);
@@ -119,6 +127,7 @@ struct LindbladInit
 			if((o-oStart+1)%oInterval==0) { logPrintf("%d%% ", int(round((o-oStart+1)*100./noMine))); logFlush(); }
 		}
 		logPrintf("done.\n"); logFlush();
+		mpiWorld->allReduce(nActiveTot, MPIUtil::ReduceSum);
 		
 		//Synchronize selected k and E across all processes:
 		//--- determine nk on each process and compute cumulative counts
@@ -145,14 +154,17 @@ struct LindbladInit
 			std::swap(k, this->k);
 			std::swap(E, this->E);
 		}
-		logPrintf("Found %lu k-points with active states from %lu total k-points (%.0fx reduction)\n\n",
+		logPrintf("Found %lu k-points with active states from %lu total k-points (%.0fx reduction)\n",
 			nkSelected, nkTot, round(nkTot*1./nkSelected));
+		logPrintf("Selected %lu active states from %lu total electronic states (%.0fx reduction)\n\n",
+			nActiveTot, nkTot*fw.nBands, round((nkTot*fw.nBands)*1./nActiveTot));
 	}
 	
 	//--------- k-pair selection -------------
 	std::vector<std::vector<size_t>> kpartners; //list of e-ph coupled k2 for each k1
 	std::vector<std::pair<size_t,size_t>> kpairs; //pairs of k1 and k2
 	std::map<size_t,size_t> kIndexMap; //map from k-point mesh index to index in selected set
+	size_t nActivePairs; //total number of active state pairs
 	inline size_t kIndex(vector3<> k)
 	{	size_t index=0;
 		for(int iDir=0; iDir<3; iDir++)
@@ -188,12 +200,10 @@ struct LindbladInit
 						{	double deltaE = (*E1) - (*E2) - omegaPh; //energy conservation violation
 							if(fabs(deltaE) < nEphDelta*ePhDelta) //else negligible at the 10^-3 level for a Gaussian
 							{	Econserve = true;
-								break;
+								nActivePairs++;
 							}
 						}
-						if(Econserve) break;
 					}
-					if(Econserve) break;
 				}
 				if(Econserve) kpairs.push_back(std::make_pair(ik1,ik2));
 			}
@@ -218,6 +228,7 @@ struct LindbladInit
 		size_t oInterval = std::max(1, int(round(noMine/50.))); //interval for reporting progress
 
 		//Find momentum-conserving k-pairs for which energy conservation is also possible for some bands:
+		nActivePairs = 0;
 		logPrintf("Scanning k-pairs with e-ph coupling: "); logFlush();
 		for(size_t o=oStart; o<oStop; o++)
 		{	fw.phLoop(q0[o], LindbladInit::kpSelect, this);
@@ -225,6 +236,7 @@ struct LindbladInit
 			if((o-oStart+1)%oInterval==0) { logPrintf("%d%% ", int(round((o-oStart+1)*100./noMine))); logFlush(); }
 		}
 		logPrintf("done.\n"); logFlush();
+		mpiWorld->allReduce(nActivePairs, MPIUtil::ReduceSum);
 		
 		//Synchronize selected kpairs across all processes:
 		//--- determine nk on each process and compute cumulative counts
@@ -251,6 +263,9 @@ struct LindbladInit
 		size_t nkpairsTot = k.size()*k.size();
 		logPrintf("Found %lu k-pairs with e-ph coupling from %lu total pairs of selected k-points (%.0fx reduction)\n",
 			nkpairs, nkpairsTot, round(nkpairsTot*1./nkpairs));
+		size_t nStatePairsTot = std::pow(nkTot*fw.nBands, 2);
+		logPrintf("Selected %lu active state pairs from %lu total electronic state pairs (%.0fx reduction)\n",
+			nActivePairs, nStatePairsTot, round(nStatePairsTot*1./nActivePairs));
 		//--- initialize kpartners (list of k2 by k1):
 		kpartners.resize(k.size());
 		for(auto kpair: kpairs)
@@ -266,12 +281,12 @@ struct LindbladInit
 	}
 
 	//--------- Save data -------------
-	void saveData()
+	void saveData(string outFile)
 	{
 		//Initialize and write header:
 		#ifdef MPI_SAFE_WRITE
 		FILE* fp = NULL;
-		if(mpiWorld->isHead()) fp = fopen("ldbd.dat", "w"); //I/O from world head alone
+		if(mpiWorld->isHead()) fp = fopen(outFile.c_str(), "w"); //I/O from world head alone
 		#else
 		MPIUtil::File fp;
 		if(mpiGroup->isHead()) mpiGroupHead->fopenWrite(fp, "ldbd.dat"); //I/O collectively only from group heads
@@ -500,6 +515,7 @@ int main(int argc, char** argv)
 	const string ePhMode = inputMap.getString("ePhMode"); //must be Off or DiagK (add FullK in future)
 	const bool ePhEnabled = (ePhMode != "Off");
 	const double ePhDelta = inputMap.get("ePhDelta") * eV; //energy conservation width for e-ph coupling
+	const string outFile = inputMap.has("outFile") ? inputMap.getString("outFile") : "ldbd.dat"; //output file name
 	FeynWannParams fwp(&inputMap);
 	
 	logPrintf("\nInputs after conversion to atomic units:\n");
@@ -511,6 +527,7 @@ int main(int argc, char** argv)
 	logPrintf("probeOmegaMax = %lg\n", probeOmegaMax);
 	logPrintf("ePhMode = %s\n", ePhMode.c_str());
 	logPrintf("ePhDelta = %lg\n", ePhDelta);
+	logPrintf("outFile = %s\n", outFile.c_str());
 	fwp.printParams();
 	
 	//Initialize FeynWann:
@@ -573,7 +590,7 @@ int main(int argc, char** argv)
 		lb.kpairSelect(q0);
 	
 	//Final pass: output electronic and e-ph quantities
-	lb.saveData();
+	lb.saveData(outFile);
 	
 	//Cleanup:
 	fw.free();
