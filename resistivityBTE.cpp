@@ -81,6 +81,15 @@ struct TripletMatrix : public LinearSolvable<matrix>
 	}
 };
 
+matrix3<> Matrix3(const matrix& m)
+{	assert(m.nRows()==3);
+	assert(m.nCols()==3);
+	matrix3<> result;
+	for(int i=0; i<3; i++)
+		for(int j=0; j<3; j++)
+			result(i,j) = m(i,j).real();
+	return result;
+}
 
 int main(int argc, char** argv)
 {	
@@ -266,10 +275,10 @@ int main(int argc, char** argv)
 		mpiWorld->allReduceData(mfPrime, MPIUtil::ReduceSum);
 		matrix mfPrimeV = mfPrime * V;
 		
-		//Simple estimate (analgous to resistivity.cpp, but on uniform k-mesh):
+		//Relaxation time estimate:
 		double Tt = (h.spinWeight/(3.*h.nkTot)) * trace(dagger(V) * mfPrimeV).real();
 		double Gamma = (h.spinWeight/(3.*h.nkTot)) * trace(dagger(V) * (B * V)).real();
-		double rhoSimple = Omega*Gamma/(Tt*Tt);
+		double rhoRTA = Omega*Gamma/(Tt*Tt);
 		double tauDrude = Tt / Gamma;
 		
 		//Calculate inv(B) * fPrimeV iteratively:
@@ -279,23 +288,22 @@ int main(int argc, char** argv)
 		B.applyInverse(mfPrimeV, invB_mfPrimeV);
 		
 		//Calculate conductivity tensor using Boltzmann equation:
-		matrix sigmaMat = (h.spinWeight/(h.nkTot*Omega)) * dagger(mfPrimeV) * invB_mfPrimeV;
-		matrix rhoMat = inv(sigmaMat);
-		double sigma = (1./3) * trace(sigmaMat).real();
+		matrix3<> sigmaMat = (h.spinWeight/(h.nkTot*Omega)) * Matrix3(dagger(mfPrimeV) * invB_mfPrimeV);
+		matrix3<> rhoMat = inv(sigmaMat);
+		double sigma = (1./3) * trace(sigmaMat);
 		double rho = 1./sigma;
 		double tauInv = tauInvNum / weightSum;
 		
 		//Report:
-		double invRhoUnit = 1./(1e-9*Ohm*meter);
+		double rhoUnit = 1e-9*Ohm*meter;
 		logPrintf("\nResults for T = %lg K:\n", T/Kelvin);
-		logPrintf("vF               = %12lg\n", vF); logFlush();
-		logPrintf("g(Ef)            = %12lg\n", gEf); logFlush();
-		logPrintf("tauDrude         = %12lg fs\n", tauDrude/fs);
-		logPrintf("tau              = %12lg fs\n", (1./tauInv)/fs);
-		logPrintf("Resistivity(RTA) = %12lg nOhm-m\n", rhoSimple*invRhoUnit);
-		logPrintf("Resistivity      = %12lg nOhm-m\n", rho*invRhoUnit);
-		logPrintf("Resistivity tensor [nOhm-m]:\n"); 
-		matrix(rhoMat*invRhoUnit).print_real(globalLog, " %12lg ");
+		reportResult(std::vector<matrix3<>>(1, rhoMat), "Resistivity", rhoUnit, "nOhm-m");
+		reportResult(std::vector<double>(1, rho), "Resistivity", rhoUnit, "nOhm-m");
+		reportResult(std::vector<double>(1, rhoRTA), "ResistivityRTA", rhoUnit, "nOhm-m");
+		reportResult(std::vector<double>(1, tauDrude), "tauDrude", fs, "fs");
+		reportResult(std::vector<double>(1, 1./tauInv), "tau", fs, "fs");
+		reportResult(std::vector<double>(1, vF), "vF", 1, "");
+		reportResult(std::vector<double>(1, gEf), "g(Ef)", 1, "");
 		logPrintf("\n");
 	}
 	FeynWann::finalize();

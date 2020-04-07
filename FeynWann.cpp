@@ -1103,9 +1103,12 @@ void reportResult(const std::vector<matrix3<>>& result, string resultName, doubl
 	{	char mOpen[] = "/|\\", mClose[] = "\\|/";
 		fprintf(fp, "%20s%c", i==1 ? (resultName + " = ").c_str() : "", mOpen[i]);
 		for(int j=0; j<3; j++) fprintf(fp, " %12lg", resultMean(i,j)/unit);
-		fprintf(fp, " %c%5s%c", mClose[i], i==1 ? " +/- " : "", mOpen[i]);
-		for(int j=0; j<3; j++) fprintf(fp, " %12lg", fabs(resultStd(i,j))/unit);
-		fprintf(fp, " %c %s\n", mClose[i], i==1 ? unitName.c_str() : "");
+		if(N>1)
+		{	fprintf(fp, " %c%5s%c", mClose[i], i==1 ? " +/- " : "", mOpen[i]);
+			for(int j=0; j<3; j++) fprintf(fp, " %12lg", fabs(resultStd(i,j))/unit);
+			fprintf(fp, " %c %s\n", mClose[i], i==1 ? unitName.c_str() : "");
+		}
+		else fprintf(fp, " %c %s\n", mClose[i], i==1 ? unitName.c_str() : "");
 	}
 	fprintf(fp, "\n");
 }
@@ -1125,5 +1128,8 @@ void reportResult(const std::vector<double>& result, string resultName, double u
 	{	resultMean = 1./resultMean; //harmonic mean
 		resultStd *= std::pow(resultMean,2); //propagate error in reciprocal
 	}
-	fprintf(fp, "%17s = %12lg +/- %12lg %s\n", resultName.c_str(), resultMean/unit, fabs(resultStd)/unit, unitName.c_str());
+	if(N>1)
+		fprintf(fp, "%17s = %12lg +/- %12lg %s\n", resultName.c_str(), resultMean/unit, fabs(resultStd)/unit, unitName.c_str());
+	else
+		fprintf(fp, "%17s = %12lg %s\n", resultName.c_str(), resultMean/unit, unitName.c_str());
 }
