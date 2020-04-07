@@ -1,10 +1,12 @@
 #include "LindbladFile.h"
 #include "InputMap.h"
 #include <core/Units.h>
+#include <core/Minimize.h>
 #include <deque>
 
-struct TripletMatrix
-{	//Triplet format:
+struct TripletMatrix : public LinearSolvable<matrix>
+{
+	//Triplet format:
 	const int nRows, nCols;
 	const bool symmetric; //whether the matrix is symmetric (implicit Mji for every Mij added)
 	struct Entry
@@ -12,9 +14,10 @@ struct TripletMatrix
 		Entry(int i, int j, double Mij) : i(i), j(j), Mij(Mij) {}
 	};
 	std::vector<Entry> entries; //MPI divided; each process has a subset
+	diagMatrix K; //preconditioner (identity by default)
 	
 	TripletMatrix(int nRows, int nCols, int nNZestimate=0, bool symmetric=false)
-	: nRows(nRows), nCols(nCols), symmetric(symmetric)
+	: nRows(nRows), nCols(nCols), symmetric(symmetric), K(nRows, 1.)
 	{	if(nNZestimate) entries.reserve(nNZestimate / mpiWorld->nProcesses());
 	}
 	
@@ -33,117 +36,48 @@ struct TripletMatrix
 		watch.stop();
 		return out;
 	}
+	inline matrix hessian(const matrix& v) const { return (*this) * v; }
 	
 	//Calculate Sum_i Mij:
 	diagMatrix DiagSumRows() const
 	{	diagMatrix out(nCols, 0.);
 		for(const Entry& entry: entries)
 		{	out[entry.j] += entry.Mij;
-			if(symmetric)
-				out[entry.i] += entry.Mij;
+			if(symmetric) out[entry.i] += entry.Mij;
 		}
 		mpiWorld->allReduceData(out, MPIUtil::ReduceSum);
 		return out;
 	}
 	
-	complex safe_dot(const matrix& A, const matrix& B) const
-	{	complex result = trace(dagger(A) * B);
-		mpiWorld->bcast(&result.real(), 2);
-		return result;
-	}
+	double sync(double x) const { mpiWorld->bcast(x); return x; }
 	
-	double safe_nrm2(const matrix& A) const
-	{	return sqrt(safe_dot(A,A).real());
-	}
-	
-	//Solve A x = b iteratively using something like GMRES/DIIS (pass in an initial guess for x):
-	void applyInverse(const matrix& b, matrix& x) const
-	{	const int nIterations = 1000;
-		const int maxHistory = 10;
-		const double threshold = 1e-7;
-		std::deque<matrix> xPrev, rPrev;
-		matrix overlap(maxHistory, maxHistory);
-		matrix r = (*this) * x - b; //initial residual
-		double rNormThresh = threshold * safe_nrm2(r);
-		for(int iter=0; iter<=nIterations; iter++)
-		{	//Truncate history if necessary:
-			if((int)xPrev.size() >= maxHistory)
-			{	size_t ndim = xPrev.size();
-				if(ndim>1) overlap.set(0,ndim-1, 0,ndim-1, overlap(1,ndim, 1,ndim));
-				xPrev.pop_front();
-				rPrev.pop_front();
-			}
-			
-			//Update history and report:
-			rPrev.push_back(r);
-			xPrev.push_back(x);
-			double rNorm = safe_nrm2(r);
-			logPrintf("DIIS: Cycle: %2i  |Residual|: %.3e\n", iter, rNorm);
-			if(iter==nIterations) { logPrintf("DIIS: Convergence threshold not reached in %d iterations.\n", iter); break; }
-			if(rNorm < rNormThresh) { logPrintf("DIIS: Converged: |Residual| < %lg |Initial residual|.\n", threshold); break; }
-			
-			//DIIS mixing:
-			//--- Update the overlap matrix
-			size_t ndim = xPrev.size();
-			for(size_t j=0; j<ndim; j++)
-			{	complex thisOverlap = safe_dot(rPrev[j], r);
-				overlap.set(j, ndim-1, thisOverlap);
-				overlap.set(ndim-1, j, thisOverlap.conj());
-			}
-			//--- reset if singular
-			bool singular = false;
-			if(ndim > 1)
-			{	matrix U, Vdag; diagMatrix S;
-				matrix(overlap(0,ndim, 0,ndim)).svd(U, S, Vdag);
-				if(S.back() < S.front()*threshold)
-				{	logPrintf("DIIS: Singularity in overlap, resetting history.\n");
-					singular = true;
-					xPrev.assign(1, x);
-					rPrev.assign(1, r);
-					overlap.set(0,0, overlap(ndim-1,ndim-1));
-				}
-			}
-			if(!singular)
-			{	//--- Invert the residual overlap matrix to get the minimum of residual
-				matrix cOverlap(ndim+1, ndim+1); //Add row and column to enforce normalization constraint
-				cOverlap.set(0, ndim, 0, ndim, overlap(0,ndim, 0,ndim));
-				for(size_t j=0; j<ndim; j++)
-				{	cOverlap.set(j, ndim, 1);
-					cOverlap.set(ndim, j, 1);
-				}
-				cOverlap.set(ndim, ndim, 0);
-				matrix cOverlap_inv = inv(cOverlap);
-				//---- find best x and corresponding r in current subspace:
-				x.zero();
-				r.zero();
-				for(size_t j=0; j<ndim; j++)
-				{	complex alpha = cOverlap_inv(j, ndim);
-					x +=  alpha * xPrev[j];
-					r += alpha * rPrev[j];
-				}
-			}
-			
-			//Expand subspace:
-			matrix d = r; //search direction
-			double r_r = safe_dot(r,r).real();
-			while(true)
-			{	matrix Ad = (*this) * d;
-				double Ad_Ad = safe_dot(Ad,Ad).real();
-				complex Ad_r = safe_dot(Ad,r);
-				if(Ad_r.abs() < threshold * sqrt(Ad_Ad * r_r))
-				{	//Need to try a new search direction (try random):
-					logPrintf("DIIS: Singularity in subspace expansion, randomizing search direction.\n");
-					if(mpiWorld->isHead())
-						randomize(d);
-					mpiWorld->bcastData(d);
-					continue;
-				}
-				complex alpha = -Ad_r / Ad_Ad;
-				x += alpha * d;
-				r += alpha * Ad;
-				break;
-			}
+	//Solve A x = b iteratively using CG
+	void applyInverse(const matrix& b, matrix& x, double relTol=1e-9)
+	{	MinimizeParams mp;
+		mp.nIterations = 1000;
+		mp.fpLog = globalLog;
+		for(int col=0; col<b.nCols(); col++)
+		{	state = project(x(0,nRows, col,col+1));
+			mp.knormThreshold = relTol * sqrt(dot(state, precondition(state)));
+			solve(project(b(0,nRows, col,col+1)), mp);
+			x.set(0,nRows, col,col+1, state);
 		}
+	}
+	
+	inline matrix project(const matrix& v) const
+	{	matrix out(v);
+		complex* outData = out.data();
+		for(int col=0; col<out.nCols(); col++)
+		{	complex mean = 0.;
+			for(int row=0; row<nRows; row++) mean += outData[out.index(row,col)];
+			mean *= (1./nRows);
+			for(int row=0; row<nRows; row++) outData[out.index(row,col)] -= mean;
+		}
+		return out;
+	}
+	
+	matrix precondition(const matrix& v) const
+	{	return project(K * project(v));
 	}
 };
 
@@ -317,7 +251,7 @@ int main(int argc, char** argv)
 		diagMatrix DiagSsum = S.DiagSumRows();
 		for(size_t iState=stateOffsetMine; iState<stateOffsetMine+nStatesMine; iState++)
 			S.entries.push_back(TripletMatrix::Entry(iState, iState, -0.5*DiagSsum[iState])); //factor of 0.5 due to implicit symmetry
-		const TripletMatrix& B = S; //call it B for clarity in the following
+		TripletMatrix& B = S; //call it B for clarity in the following
 		
 		//Construct velocity and -fPrime matrices:
 		matrix V = zeroes(nStatesTot, 3);
@@ -339,6 +273,8 @@ int main(int argc, char** argv)
 		double tauDrude = Tt / Gamma;
 		
 		//Calculate inv(B) * fPrimeV iteratively:
+		double KmaxInv = 1e-6; //preconditioner regularizer
+		for(size_t i=0; i<nStatesTot; i++) B.K[i] = 1./hypot(mfPrime[i], KmaxInv);
 		matrix invB_mfPrimeV = tauDrude * mfPrimeV; //Drude model as initial guess
 		B.applyInverse(mfPrimeV, invB_mfPrimeV);
 		
