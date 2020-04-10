@@ -2,6 +2,7 @@
 #include "InputMap.h"
 #include <core/Units.h>
 #include <core/Minimize.h>
+#include <core/Random.h>
 #include <deque>
 
 struct TripletMatrix : public LinearSolvable<matrix>
@@ -14,10 +15,11 @@ struct TripletMatrix : public LinearSolvable<matrix>
 		Entry(int i, int j, double Mij) : i(i), j(j), Mij(Mij) {}
 	};
 	std::vector<Entry> entries; //MPI divided; each process has a subset
+	std::vector<bool> included; //whether each row/col index is included in matrix (all true by default)
 	diagMatrix K; //preconditioner (identity by default)
 	
 	TripletMatrix(int nRows, int nCols, int nNZestimate=0, bool symmetric=false)
-	: nRows(nRows), nCols(nCols), symmetric(symmetric), K(nRows, 1.)
+	: nRows(nRows), nCols(nCols), symmetric(symmetric), included(nRows, true), K(nRows, 1.)
 	{	if(nNZestimate) entries.reserve(nNZestimate / mpiWorld->nProcesses());
 	}
 	
@@ -71,9 +73,19 @@ struct TripletMatrix : public LinearSolvable<matrix>
 		complex* outData = out.data();
 		for(int col=0; col<out.nCols(); col++)
 		{	complex mean = 0.;
-			for(int row=0; row<nRows; row++) mean += outData[out.index(row,col)];
-			mean *= (1./nRows);
-			for(int row=0; row<nRows; row++) outData[out.index(row,col)] -= mean;
+			int nContrib = 0;
+			for(int row=0; row<nRows; row++)
+				if(included[row])
+				{	mean += outData[out.index(row,col)];
+					nContrib++;
+				}
+			mean *= (1./nContrib);
+			for(int row=0; row<nRows; row++)
+			{	if(included[row])
+					outData[out.index(row,col)] -= mean;
+				else 
+					outData[out.index(row,col)] = 0.;
+			}
 		}
 		return out;
 	}
@@ -178,134 +190,164 @@ int main(int argc, char** argv)
 	};
 	std::vector<State> state(nStatesMine);
 	
+	//N-fold division of k for error estimation:
+	int nBlocks = 3;
+	std::vector<int> omitIndex(h.nk); //which block to omit each k in
+	std::vector<size_t> nkSel(nBlocks, h.nk); //k count per block after omissions
+	Random::seed(0);
+	for(int& omit: omitIndex)
+	{	omit = Random::uniformInt(nBlocks);
+		nkSel[omit]--;
+	}
+	mpiWorld->bcastData(omitIndex);
+	mpiWorld->bcastData(nkSel);
+	
 	//Temperature loop:
 	for(size_t iT=0; iT<Tcount; iT++)
 	{	const double T = Tmin + iT*(Tmax-Tmin)/(Tcount-1);
 		const double invT = 1./T;
-		double vFsqSum = 0., weightSum = 0.;
-		State* s = state.data();
-		size_t nNZbound = 0; //uper bound number of non-zero e-ph matrix elements
-		for(size_t ik=ikStart; ik<ikStop; ik++)
-		{	const LindbladFile::Kpoint& kp = kpoint[ik-ikStart];
-			for(int b=0; b<kp.nInner; b++)
-			{	s->e = kp.E[kp.innerStart+b];
-				double EminusMuByT = (s->e - dmu)*invT, fbar;
-				fermi(EminusMuByT, s->f, fbar);
-				s->mfPrime = invT * s->f * fbar;
-				for(int iDir=0; iDir<3; iDir++)
-					s->v[iDir] = kp.P[iDir](b, kp.innerStart+b).real();
-				//Fermi surface sums:
-				vFsqSum += s->mfPrime * s->v.length_squared();
-				weightSum += s->mfPrime;
-				//e-ph matrix element count:
-				size_t jk = -1;
-				for(const LindbladFile::GePhEntry& g: kp.GePh)
-				{	if(jk != g.jk) nNZbound += nInnerAll[g.jk];
-					jk = g.jk;
-				}
-				s++;
-			}
-		}
-		mpiWorld->allReduce(vFsqSum, MPIUtil::ReduceSum);
-		mpiWorld->allReduce(weightSum, MPIUtil::ReduceSum);
-		double vF = sqrt(vFsqSum / weightSum);
-		double gEf = h.spinWeight*weightSum/h.nkTot;
 		
-		//Construct BTE sparse matrix:
-		logPrintf("\nConstructing BTE matrix: "); logFlush();
-		TripletMatrix S(nStatesTot, nStatesTot, nNZbound, true);
-		double prefacS = 2*M_PI/h.nkTot;
-		double tauInvNum = 0.;
-		for(size_t ik=ikStart; ik<ikStop; ik++)
-		{	const LindbladFile::Kpoint& kp = kpoint[ik-ikStart];
-			const State* s1 = state.data() + (stateOffset[ik]-stateOffsetMine);
-			auto gStart = kp.GePh.begin();
-			while(gStart != kp.GePh.end())
-			{	size_t jk = gStart->jk;
-				//Find range of g with same jk:
-				auto gStop = gStart; gStop++;
-				while((gStop != kp.GePh.end()) and (gStop->jk == jk)) gStop++;
-				//Collect contributions:
-				matrix Scontrib = zeroes(nInnerAll[ik], nInnerAll[jk]); //contributons to matrix Stilde in derivation
-				complex* Sdata = Scontrib.data();
-				for(auto g=gStart; g!=gStop; g++)
-				{	double nPh = bose(invT*g->omegaPh); //phonon occupation
-					for(const SparseEntry& e: g->G)
-					{	double term = prefacS * e.val.norm(); //prefactors * |e-ph matrix element|^2 * energy conservation factor
-						double nfbar_i = nPh + 1 - s1[e.i].f;
-						double nf_j = nPh*(nPh+1)/nfbar_i; //nPh + fj by detailed balance
-						Sdata[Scontrib.index(e.i,e.j)].real() -= term * (nfbar_i * s1[e.i].mfPrime);
-						//Scattering time average:
-						double fj = nf_j - nPh, mfjPrime = invT*fj*(1.-fj);
-						tauInvNum += term * (nfbar_i * s1[e.i].mfPrime + nf_j * mfjPrime);
+		std::vector<matrix3<>> rhoMat(nBlocks);
+		std::vector<double> rho(nBlocks);
+		std::vector<double> rhoRTA(nBlocks);
+		std::vector<double> tauDrude(nBlocks);
+		std::vector<double> tau(nBlocks);
+		std::vector<double> vF(nBlocks);
+		std::vector<double> gEf(nBlocks);
+		
+		for(int iBlock=0; iBlock<nBlocks; iBlock++)
+		{	double omitWeight = h.nk*1./nkSel[iBlock];
+			double vFsqSum = 0., weightSum = 0.;
+			State* s = state.data();
+			size_t nNZbound = 0; //upper bound number of non-zero e-ph matrix elements
+			for(size_t ik=ikStart; ik<ikStop; ik++)
+			{	const LindbladFile::Kpoint& kp = kpoint[ik-ikStart];
+				for(int b=0; b<kp.nInner; b++)
+				{	s->e = kp.E[kp.innerStart+b];
+					double EminusMuByT = (s->e - dmu)*invT, fbar;
+					fermi(EminusMuByT, s->f, fbar);
+					s->mfPrime = (omitIndex[ik]==iBlock) ? 0. : invT * s->f * fbar; //project out k not in current block
+					for(int iDir=0; iDir<3; iDir++)
+						s->v[iDir] = kp.P[iDir](b, kp.innerStart+b).real();
+					//Fermi surface sums:
+					vFsqSum += s->mfPrime * s->v.length_squared();
+					weightSum += s->mfPrime;
+					//e-ph matrix element count:
+					size_t jk = -1;
+					for(const LindbladFile::GePhEntry& g: kp.GePh)
+					{	if(jk != g.jk) nNZbound += nInnerAll[g.jk];
+						jk = g.jk;
 					}
+					s++;
 				}
-				for(int bj=0; bj<nInnerAll[jk]; bj++)
-					for(int bi=0; bi<nInnerAll[ik]; bi++)
-					{	if(Sdata->real())
-						{	size_t iState = stateOffset[ik] + bi;
-							size_t jState = stateOffset[jk] + bj;
-							S.entries.push_back(TripletMatrix::Entry(iState,jState, Sdata->real()));
+			}
+			mpiWorld->allReduce(vFsqSum, MPIUtil::ReduceSum);
+			mpiWorld->allReduce(weightSum, MPIUtil::ReduceSum);
+			vF[iBlock] = sqrt(vFsqSum / weightSum);
+			gEf[iBlock] = h.spinWeight*weightSum*omitWeight/h.nkTot;
+			
+			//Construct BTE sparse matrix:
+			logPrintf("\nConstructing BTE matrix: "); logFlush();
+			TripletMatrix S(nStatesTot, nStatesTot, nNZbound, true);
+			double prefacS = 2*M_PI*omitWeight/h.nkTot;
+			double tauInvNum = 0.;
+			for(size_t ik=ikStart; ik<ikStop; ik++)
+			{	if(omitIndex[ik]!=iBlock)
+				{	const LindbladFile::Kpoint& kp = kpoint[ik-ikStart];
+					const State* s1 = state.data() + (stateOffset[ik]-stateOffsetMine);
+					auto gStart = kp.GePh.begin();
+					while(gStart != kp.GePh.end())
+					{	size_t jk = gStart->jk;
+						//Find range of g with same jk:
+						auto gStop = gStart; gStop++;
+						while((gStop != kp.GePh.end()) and (gStop->jk == jk)) gStop++;
+						//Collect contributions:
+						if(omitIndex[jk]!=iBlock)
+						{	matrix Scontrib = zeroes(nInnerAll[ik], nInnerAll[jk]); //contributons to matrix Stilde in derivation
+							complex* Sdata = Scontrib.data();
+							for(auto g=gStart; g!=gStop; g++)
+							{	double nPh = bose(invT*g->omegaPh); //phonon occupation
+								for(const SparseEntry& e: g->G)
+								{	double term = prefacS * e.val.norm(); //prefactors * |e-ph matrix element|^2 * energy conservation factor
+									double nfbar_i = nPh + 1 - s1[e.i].f;
+									double nf_j = nPh*(nPh+1)/nfbar_i; //nPh + fj by detailed balance
+									Sdata[Scontrib.index(e.i,e.j)].real() -= term * (nfbar_i * s1[e.i].mfPrime);
+									//Scattering time average:
+									double fj = nf_j - nPh, mfjPrime = invT*fj*(1.-fj);
+									tauInvNum += term * (nfbar_i * s1[e.i].mfPrime + nf_j * mfjPrime);
+								}
+							}
+							for(int bj=0; bj<nInnerAll[jk]; bj++)
+								for(int bi=0; bi<nInnerAll[ik]; bi++)
+								{	if(Sdata->real())
+									{	size_t iState = stateOffset[ik] + bi;
+										size_t jState = stateOffset[jk] + bj;
+										S.entries.push_back(TripletMatrix::Entry(iState,jState, Sdata->real()));
+									}
+									Sdata++;
+								}
 						}
-						Sdata++;
+						//Move to next jk set:
+						gStart = gStop;
 					}
-				//Move to next jk set:
-				gStart = gStop;
+				}
+				//Print progress:
+				if((ik-ikStart+1)%ikInterval==0) { logPrintf("%d%% ", int(round((ik-ikStart+1)*100./nkMine))); logFlush(); }
 			}
-			//Print progress:
-			if((ik-ikStart+1)%ikInterval==0) { logPrintf("%d%% ", int(round((ik-ikStart+1)*100./nkMine))); logFlush(); }
+			logPrintf("done.\n"); logFlush();
+			mpiWorld->allReduce(tauInvNum, MPIUtil::ReduceSum);
+			
+			//Convert 'S' to matrix 'B' in the derivation:
+			diagMatrix DiagSsum = S.DiagSumRows();
+			for(size_t iState=stateOffsetMine; iState<stateOffsetMine+nStatesMine; iState++)
+				S.entries.push_back(TripletMatrix::Entry(iState, iState, -0.5*DiagSsum[iState])); //factor of 0.5 due to implicit symmetry
+			TripletMatrix& B = S; //call it B for clarity in the following
+			
+			//Construct velocity and -fPrime matrices:
+			matrix V = zeroes(nStatesTot, 3);
+			diagMatrix mfPrime(nStatesTot, 0.);
+			for(size_t iState=stateOffsetMine; iState<stateOffsetMine+nStatesMine; iState++)
+			{	const State& s = state[iState-stateOffsetMine];
+				for(int dir=0; dir<3; dir++)
+					V.set(iState, dir, s.v[dir]);
+				mfPrime[iState] = s.mfPrime;
+			}
+			mpiWorld->allReduceData(V, MPIUtil::ReduceSum);
+			mpiWorld->allReduceData(mfPrime, MPIUtil::ReduceSum);
+			matrix mfPrimeV = mfPrime * V;
+			
+			//Relaxation time estimate:
+			double Tt = (h.spinWeight*omitWeight/(3.*h.nkTot)) * trace(dagger(V) * mfPrimeV).real();
+			double Gamma = (h.spinWeight*omitWeight/(3.*h.nkTot)) * trace(dagger(V) * (B * V)).real();
+			rhoRTA[iBlock] = Omega*Gamma/(Tt*Tt);
+			tauDrude[iBlock] = Tt / Gamma;
+			
+			//Calculate inv(B) * fPrimeV iteratively:
+			double KmaxInv = 1e-6; //preconditioner regularizer
+			for(size_t i=0; i<nStatesTot; i++)
+			{	B.included[i] = mfPrime[i]; //only include non-zero points in solve subspace
+				B.K[i] =  1./hypot(mfPrime[i], KmaxInv);
+			}
+			matrix invB_mfPrimeV = tauDrude[iBlock] * mfPrimeV; //Drude model as initial guess
+			B.applyInverse(mfPrimeV, invB_mfPrimeV);
+			
+			//Calculate conductivity tensor using Boltzmann equation:
+			matrix3<> sigmaMat = (h.spinWeight*omitWeight/(h.nkTot*Omega)) * Matrix3(dagger(mfPrimeV) * invB_mfPrimeV);
+			rhoMat[iBlock] = inv(sigmaMat);
+			rho[iBlock] = (1./3) * trace(rhoMat[iBlock]);
+			tau[iBlock] = weightSum / tauInvNum;
 		}
-		logPrintf("done.\n"); logFlush();
-		mpiWorld->allReduce(tauInvNum, MPIUtil::ReduceSum);
-		
-		//Convert 'S' to matrix 'B' in the derivation:
-		diagMatrix DiagSsum = S.DiagSumRows();
-		for(size_t iState=stateOffsetMine; iState<stateOffsetMine+nStatesMine; iState++)
-			S.entries.push_back(TripletMatrix::Entry(iState, iState, -0.5*DiagSsum[iState])); //factor of 0.5 due to implicit symmetry
-		TripletMatrix& B = S; //call it B for clarity in the following
-		
-		//Construct velocity and -fPrime matrices:
-		matrix V = zeroes(nStatesTot, 3);
-		diagMatrix mfPrime(nStatesTot, 0.);
-		for(size_t iState=stateOffsetMine; iState<stateOffsetMine+nStatesMine; iState++)
-		{	const State& s = state[iState-stateOffsetMine];
-			for(int dir=0; dir<3; dir++)
-				V.set(iState, dir, s.v[dir]);
-			mfPrime[iState] = s.mfPrime;
-		}
-		mpiWorld->allReduceData(V, MPIUtil::ReduceSum);
-		mpiWorld->allReduceData(mfPrime, MPIUtil::ReduceSum);
-		matrix mfPrimeV = mfPrime * V;
-		
-		//Relaxation time estimate:
-		double Tt = (h.spinWeight/(3.*h.nkTot)) * trace(dagger(V) * mfPrimeV).real();
-		double Gamma = (h.spinWeight/(3.*h.nkTot)) * trace(dagger(V) * (B * V)).real();
-		double rhoRTA = Omega*Gamma/(Tt*Tt);
-		double tauDrude = Tt / Gamma;
-		
-		//Calculate inv(B) * fPrimeV iteratively:
-		double KmaxInv = 1e-6; //preconditioner regularizer
-		for(size_t i=0; i<nStatesTot; i++) B.K[i] = 1./hypot(mfPrime[i], KmaxInv);
-		matrix invB_mfPrimeV = tauDrude * mfPrimeV; //Drude model as initial guess
-		B.applyInverse(mfPrimeV, invB_mfPrimeV);
-		
-		//Calculate conductivity tensor using Boltzmann equation:
-		matrix3<> sigmaMat = (h.spinWeight/(h.nkTot*Omega)) * Matrix3(dagger(mfPrimeV) * invB_mfPrimeV);
-		matrix3<> rhoMat = inv(sigmaMat);
-		double sigma = (1./3) * trace(sigmaMat);
-		double rho = 1./sigma;
-		double tauInv = tauInvNum / weightSum;
 		
 		//Report:
 		double rhoUnit = 1e-9*Ohm*meter;
 		logPrintf("\nResults for T = %lg K:\n", T/Kelvin);
-		reportResult(std::vector<matrix3<>>(1, rhoMat), "Resistivity", rhoUnit, "nOhm-m");
-		reportResult(std::vector<double>(1, rho), "Resistivity", rhoUnit, "nOhm-m");
-		reportResult(std::vector<double>(1, rhoRTA), "ResistivityRTA", rhoUnit, "nOhm-m");
-		reportResult(std::vector<double>(1, tauDrude), "tauDrude", fs, "fs");
-		reportResult(std::vector<double>(1, 1./tauInv), "tau", fs, "fs");
-		reportResult(std::vector<double>(1, vF), "vF", 1, "");
-		reportResult(std::vector<double>(1, gEf), "g(Ef)", 1, "");
+		reportResult(rhoMat, "Resistivity", rhoUnit, "nOhm-m");
+		reportResult(rho, "Resistivity", rhoUnit, "nOhm-m");
+		reportResult(rhoRTA, "ResistivityRTA", rhoUnit, "nOhm-m");
+		reportResult(tauDrude, "tauDrude", fs, "fs");
+		reportResult(tau, "tau", fs, "fs");
+		reportResult(vF, "vF", 1, "");
+		reportResult(gEf, "g(Ef)", 1, "");
 		logPrintf("\n");
 	}
 	FeynWann::finalize();
