@@ -290,7 +290,7 @@ struct LindbladInit
 			{	std::vector<size_t>& kp = kpartners[ik];
 				if(kp.size() > maxNeighbors)
 				{	//Reduce neighbors to maxNeighbors:
-					kpairWeight[ik] = sqrt(kp.size() / maxNeighbors);
+					kpairWeight[ik] = sqrt(kp.size()*1./maxNeighbors);
 					Random::seed(size_t(NkFine[2]*(k[ik][2]+NkFine[1]*(k[ik][1]+NkFine[0]*k[ik][0])))); //make seed depend only on k and not its order
 					//--- permute array by Fisher-Yates shuffle:
 					for(size_t iN=kp.size()-1; iN>0; iN--)
