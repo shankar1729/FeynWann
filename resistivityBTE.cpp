@@ -60,9 +60,10 @@ struct TripletMatrix : public LinearSolvable<matrix>
 		mp.fpLog = nullLog;
 		for(int col=0; col<b.nCols(); col++)
 		{	state = project(x(0,nRows, col,col+1));
-			mp.knormThreshold = relTol * sqrt(dot(state, precondition(state)));
+			matrix bCol = project(b(0,nRows, col,col+1));
+			mp.knormThreshold = relTol * sqrt(dot(bCol, precondition(bCol)));
 			logPrintf("\tCG solve: "); logFlush();
-			int nIter = solve(project(b(0,nRows, col,col+1)), mp);
+			int nIter = solve(bCol, mp);
 			logPrintf("%s after %d iterations.\n", (nIter<mp.nIterations ? "converged" : "did not converge"), nIter); logFlush();
 			x.set(0,nRows, col,col+1, state);
 		}
@@ -328,7 +329,7 @@ int main(int argc, char** argv)
 			{	B.included[i] = mfPrime[i]; //only include non-zero points in solve subspace
 				B.K[i] =  1./hypot(mfPrime[i], KmaxInv);
 			}
-			matrix invB_mfPrimeV = tauDrude[iBlock] * mfPrimeV; //Drude model as initial guess
+			matrix invB_mfPrimeV = tauDrude[iBlock] * V; //initial guess
 			B.applyInverse(mfPrimeV, invB_mfPrimeV);
 			
 			//Calculate conductivity tensor using Boltzmann equation:
