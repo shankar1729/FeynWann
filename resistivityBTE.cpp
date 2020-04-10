@@ -219,7 +219,12 @@ int main(int argc, char** argv)
 		for(int iBlock=0; iBlock<nBlocks; iBlock++)
 		{	double omitWeight = h.nk*1./nkSel[iBlock];
 			double vFsqSum = 0., weightSum = 0.;
+			
+			//Initialize states, velocity and -df/dE matrices:
+			matrix V = zeroes(nStatesTot, 3);
+			diagMatrix mfPrime(nStatesTot, 0.);
 			State* s = state.data();
+			size_t iState = stateOffsetMine;
 			size_t nNZbound = 0; //upper bound number of non-zero e-ph matrix elements
 			for(size_t ik=ikStart; ik<ikStop; ik++)
 			{	const LindbladFile::Kpoint& kp = kpoint[ik-ikStart];
@@ -227,9 +232,9 @@ int main(int argc, char** argv)
 				{	s->e = kp.E[kp.innerStart+b];
 					double EminusMuByT = (s->e - dmu)*invT, fbar;
 					fermi(EminusMuByT, s->f, fbar);
-					s->mfPrime = (omitIndex[ik]==iBlock) ? 0. : invT * s->f * fbar; //project out k not in current block
+					mfPrime[iState] = s->mfPrime = (omitIndex[ik]==iBlock) ? 0. : invT * s->f * fbar; //project out k not in current block
 					for(int iDir=0; iDir<3; iDir++)
-						s->v[iDir] = kp.P[iDir](b, kp.innerStart+b).real();
+						V.set(iState, iDir, s->v[iDir] = kp.P[iDir](b, kp.innerStart+b).real());
 					//Fermi surface sums:
 					vFsqSum += s->mfPrime * s->v.length_squared();
 					weightSum += s->mfPrime;
@@ -240,12 +245,16 @@ int main(int argc, char** argv)
 						jk = g.jk;
 					}
 					s++;
+					iState++;
 				}
 			}
 			mpiWorld->allReduce(vFsqSum, MPIUtil::ReduceSum);
 			mpiWorld->allReduce(weightSum, MPIUtil::ReduceSum);
 			vF[iBlock] = sqrt(vFsqSum / weightSum);
 			gEf[iBlock] = h.spinWeight*weightSum*omitWeight/h.nkTot;
+			mpiWorld->allReduceData(V, MPIUtil::ReduceSum);
+			mpiWorld->allReduceData(mfPrime, MPIUtil::ReduceSum);
+			matrix mfPrimeV = mfPrime * V;
 			
 			//Construct BTE sparse matrix:
 			logPrintf("\nConstructing BTE matrix: "); logFlush();
@@ -303,19 +312,6 @@ int main(int argc, char** argv)
 			for(size_t iState=stateOffsetMine; iState<stateOffsetMine+nStatesMine; iState++)
 				S.entries.push_back(TripletMatrix::Entry(iState, iState, -0.5*DiagSsum[iState])); //factor of 0.5 due to implicit symmetry
 			TripletMatrix& B = S; //call it B for clarity in the following
-			
-			//Construct velocity and -fPrime matrices:
-			matrix V = zeroes(nStatesTot, 3);
-			diagMatrix mfPrime(nStatesTot, 0.);
-			for(size_t iState=stateOffsetMine; iState<stateOffsetMine+nStatesMine; iState++)
-			{	const State& s = state[iState-stateOffsetMine];
-				for(int dir=0; dir<3; dir++)
-					V.set(iState, dir, s.v[dir]);
-				mfPrime[iState] = s.mfPrime;
-			}
-			mpiWorld->allReduceData(V, MPIUtil::ReduceSum);
-			mpiWorld->allReduceData(mfPrime, MPIUtil::ReduceSum);
-			matrix mfPrimeV = mfPrime * V;
 			
 			//Relaxation time estimate:
 			double Tt = (h.spinWeight*omitWeight/(3.*h.nkTot)) * trace(dagger(V) * mfPrimeV).real();
