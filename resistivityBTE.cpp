@@ -55,11 +55,13 @@ struct TripletMatrix : public LinearSolvable<matrix>
 	void applyInverse(const matrix& b, matrix& x, double relTol=1e-9)
 	{	MinimizeParams mp;
 		mp.nIterations = 1000;
-		mp.fpLog = globalLog;
+		mp.fpLog = nullLog;
 		for(int col=0; col<b.nCols(); col++)
 		{	state = project(x(0,nRows, col,col+1));
 			mp.knormThreshold = relTol * sqrt(dot(state, precondition(state)));
-			solve(project(b(0,nRows, col,col+1)), mp);
+			logPrintf("\tCG solve: "); logFlush();
+			int nIter = solve(project(b(0,nRows, col,col+1)), mp);
+			logPrintf("%s after %d iterations.\n", (nIter<mp.nIterations ? "converged" : "did not converge"), nIter); logFlush();
 			x.set(0,nRows, col,col+1, state);
 		}
 	}
