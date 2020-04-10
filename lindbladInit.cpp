@@ -162,6 +162,7 @@ struct LindbladInit
 	
 	//--------- k-pair selection -------------
 	std::vector<std::vector<size_t>> kpartners; //list of e-ph coupled k2 for each k1
+	std::vector<double> kpairWeight; //Econserve weight factor for all k1 pairs due to downsampling (1 if no downsmapling)
 	std::vector<std::pair<size_t,size_t>> kpairs; //pairs of k1 and k2
 	std::map<size_t,size_t> kIndexMap; //map from k-point mesh index to index in selected set
 	size_t nActivePairs; //total number of active state pairs
@@ -212,7 +213,7 @@ struct LindbladInit
 	static void kpSelect(const FeynWann::StatePh& state, void* params)
 	{	((LindbladInit*)params)->kpSelect(state);
 	}
-	void kpairSelect(const std::vector<vector3<>>& q0)
+	void kpairSelect(const std::vector<vector3<>>& q0, size_t maxNeighbors)
 	{	
 		//Initialize kIndexMap for searching selected k-points:
 		for(size_t ik=0; ik<k.size(); ik++)
@@ -270,6 +271,7 @@ struct LindbladInit
 		kpartners.resize(k.size());
 		for(auto kpair: kpairs)
 			kpartners[kpair.first].push_back(kpair.second);
+		kpairs.clear();
 		size_t nPartnersMin = k.size(), nPartnersMax = 0;
 		for(std::vector<size_t>& kp: kpartners)
 		{	std::sort(kp.begin(), kp.end()); //sort k2 within each k1 array
@@ -277,7 +279,38 @@ struct LindbladInit
 			if(nPartners < nPartnersMin) nPartnersMin = nPartners;
 			if(nPartners > nPartnersMax) nPartnersMax = nPartners;
 		}
-		logPrintf("Number of partners per k-point:  min: %lu  max: %lu  mean: %.1lf\n\n", nPartnersMin, nPartnersMax, nkpairs*1./k.size());
+		logPrintf("Number of partners per k-point:  min: %lu  max: %lu  mean: %.1lf\n", nPartnersMin, nPartnersMax, nkpairs*1./k.size());
+		//--- optional downsampling:
+		kpairWeight.assign(k.size(), 1.); //default no weight enhancement
+		if(maxNeighbors)
+		{	nPartnersMin = k.size();
+			nPartnersMax = 0;
+			nkpairs = 0;
+			for(size_t ik=0; ik<k.size(); ik++)
+			{	std::vector<size_t>& kp = kpartners[ik];
+				if(kp.size() > maxNeighbors)
+				{	//Reduce neighbors to maxNeighbors:
+					kpairWeight[ik] = sqrt(kp.size() / maxNeighbors);
+					Random::seed(size_t(NkFine[2]*(k[ik][2]+NkFine[1]*(k[ik][1]+NkFine[0]*k[ik][0])))); //make seed depend only on k and not its order
+					//--- permute array by Fisher-Yates shuffle:
+					for(size_t iN=kp.size()-1; iN>0; iN--)
+					{	size_t jN = Random::uniformInt(iN+1);
+						std::swap(kp[iN], kp[jN]);
+					}
+					//--- reduce size and re-sort:
+					kp.resize(maxNeighbors);
+					std::sort(kp.begin(), kp.end()); //sort k2 within each k1 array
+					mpiWorld->bcastData(kp); //ensure consistency
+				}
+				const size_t& nPartners = kp.size();
+				if(nPartners < nPartnersMin) nPartnersMin = nPartners;
+				if(nPartners > nPartnersMax) nPartnersMax = nPartners;
+				nkpairs += nPartners;
+			}
+			mpiWorld->bcastData(kpairWeight);
+			logPrintf("          After down-selection:  min: %lu  max: %lu  mean: %.1lf\n", nPartnersMin, nPartnersMax, nkpairs*1./k.size());
+		}
+		logPrintf("\n");
 	}
 
 	//--------- Save data -------------
@@ -403,7 +436,7 @@ struct LindbladInit
 								g.omegaPh = m.ph->omega[alpha];
 								if(g.omegaPh < omegaPhCut) continue; //avoid zero frequency phonons
 								double sigmaInv = 1./std::min(ePhDelta, g.omegaPh/(nEphDelta+1)); //make sure flipped energies not included within energy conservation
-								double deltaPrefac = sqrt(sigmaInv/sqrt(M_PI));
+								double deltaPrefac = sqrt(sigmaInv/sqrt(M_PI)) * kpairWeight[ik]; //account for down-sampling weight (1 if no down-sampling)
 								const matrix& M = m.M[alpha];
 								for(int n2=innerOffset_j; n2<innerOffset_j+nInner_j; n2++)
 									for(int n1=innerOffset; n1<innerOffset+kp.nInner; n1++)
@@ -515,6 +548,7 @@ int main(int argc, char** argv)
 	const string ePhMode = inputMap.getString("ePhMode"); //must be Off or DiagK (add FullK in future)
 	const bool ePhEnabled = (ePhMode != "Off");
 	const double ePhDelta = inputMap.get("ePhDelta") * eV; //energy conservation width for e-ph coupling
+	const size_t maxNeighbors = inputMap.get("maxNeighbors", 0); //if non-zero: limit neighbors per k by stochastic down-sampling and amplifying the Econserve weights
 	const string outFile = inputMap.has("outFile") ? inputMap.getString("outFile") : "ldbd.dat"; //output file name
 	FeynWannParams fwp(&inputMap);
 	
@@ -527,6 +561,7 @@ int main(int argc, char** argv)
 	logPrintf("probeOmegaMax = %lg\n", probeOmegaMax);
 	logPrintf("ePhMode = %s\n", ePhMode.c_str());
 	logPrintf("ePhDelta = %lg\n", ePhDelta);
+	logPrintf("maxNeighbors = %lu\n", maxNeighbors);
 	logPrintf("outFile = %s\n", outFile.c_str());
 	fwp.printParams();
 	
@@ -587,7 +622,7 @@ int main(int argc, char** argv)
 	
 	//Second pass (ph only): select k pairs
 	if(ePhEnabled)
-		lb.kpairSelect(q0);
+		lb.kpairSelect(q0, maxNeighbors);
 	
 	//Final pass: output electronic and e-ph quantities
 	lb.saveData(outFile);
