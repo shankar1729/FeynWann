@@ -30,6 +30,7 @@ struct CollectEph
 {	
 	const FeynWann& fw;
 	const double dmu;
+	const vector3<> q0;
 	const double prefacG, prefacDOS;
 	const double EconserveExpFac, EconservePrefac; //energy conserving (fermi-surface constraining) Gaussian exponential and pre-factor
 	std::vector<diagMatrix> G; //Fermi-surface integrated e-ph coupling (for each phonon mode on DFT electronic k-mesh)
@@ -40,10 +41,10 @@ struct CollectEph
 	std::vector<vector3<>> qmesh; //phonon q-mesh (full version i.e. unreduced)
 	double wOffsetCur; //weight factor of current offset (due to symmetry reduction)
 	
-	CollectEph(const FeynWann& fw, double EconserveWidth, const vector3<int>& NkMult, double dmu)
-	: fw(fw), dmu(dmu),
+	CollectEph(const FeynWann& fw, double EconserveWidth, const vector3<int>& NkMult, double dmu, vector3<> q0)
+	: fw(fw), dmu(dmu), q0(q0),
 		prefacG(fw.spinWeight * 2*M_PI/(prod(fw.kfold)*prod(NkMult))),
-		prefacDOS(fw.spinWeight * 1./(2*prod(fw.kfold)*prod(NkMult))), //2 in denominator <= use both regular and offset meshes below
+		prefacDOS(fw.spinWeight * 1./(2*prod(fw.kfoldSup)*prod(fw.kfold)*prod(NkMult))), //2 prod(kfoldSup) to account for multiple counting
 		EconserveExpFac(-0.5/std::pow(EconserveWidth,2)),
 		EconservePrefac(1./(sqrt(2.*M_PI)*EconserveWidth)),
 		G(prod(fw.kfold), diagMatrix(fw.nModes)),
@@ -71,8 +72,9 @@ struct CollectEph
 		const FeynWann::StateE& e2 = *(mEph.e2);
 		const FeynWann::StatePh& ph = *(mEph.ph);
 		//Svae phonon wave-vectors and frequencies for final outputs
-		qmesh[ph.iqFine] = ph.q;
-		omegaPh[ph.iqFine] = ph.omega;
+		int iqFine = calculateIndex(round(Diag(ph.q-q0) * fw.kfold), fw.kfold); //referenced to electronic mesh
+		qmesh[iqFine] = ph.q;
+		omegaPh[iqFine] = ph.omega;
 		//Calculate Fermi-surface-constraining delta functions:
 		diagMatrix delta1 = delta(e1.E);
 		diagMatrix delta2 = delta(e2.E);
@@ -97,8 +99,8 @@ struct CollectEph
 				double cosThetaScatter = dot(v1, v2) / sqrt(std::max(1e-16, v1.length_squared() * v2.length_squared()));
 				//Loop over phonon modes:
 				for(int alpha=0; alpha<fw.nModes; alpha++)
-				{	G[ph.iqFine][alpha] += contrib * mEph.M[alpha](b2,b1).norm();
-					Gp[ph.iqFine][alpha] += contrib * mEph.M[alpha](b2,b1).norm() * (1.-cosThetaScatter);
+				{	G[iqFine][alpha] += contrib * mEph.M[alpha](b2,b1).norm();
+					Gp[iqFine][alpha] += contrib * mEph.M[alpha](b2,b1).norm() * (1.-cosThetaScatter);
 				}
 			}
 		}
@@ -217,6 +219,18 @@ int main(int argc, char** argv)
 	wk0.resize(nOffsets); mpiWorld->bcastData(wk0);
 	logPrintf("\n%lu offsets in NkMult mesh reduced to %d under symmetries.\n", kMult.size(), nOffsets);
 	
+	//Construct q offset mesh:
+	std::vector<vector3<>> qOffset;
+	vector3<int> iqOffset;
+	for(iqOffset[0]=0; iqOffset[0]<fw.kfoldSup[0]; iqOffset[0]++)
+	for(iqOffset[1]=0; iqOffset[1]<fw.kfoldSup[1]; iqOffset[1]++)
+	for(iqOffset[2]=0; iqOffset[2]<fw.kfoldSup[2]; iqOffset[2]++)
+		qOffset.push_back(kfoldInv * iqOffset);
+	int nqOffset = qOffset.size();
+	int nqOffsetSq = nqOffset * nqOffset;
+	int nOffsetPairs = nOffsets * nqOffsetSq;
+	logPrintf("%d phonon q-mesh offset pairs parallelized over process groups.\n", nOffsetPairs);
+	
 	logPrintf("\n");
 	if(ip.dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
@@ -226,23 +240,28 @@ int main(int argc, char** argv)
 	}
 	
 	//Initialize sampling parameters:
-	int oStart=0, oStop=0;
+	int oPairStart=0, oPairStop=0;
 	if(mpiGroup->isHead())
-		TaskDivision(nOffsets, mpiGroupHead).myRange(oStart, oStop);
-	mpiGroup->bcast(oStart);
-	mpiGroup->bcast(oStop);
-	int noMine = oStop-oStart; //number of offsets handled by current group
-	int oInterval = std::max(1, int(round(noMine/50.))); //interval for reporting progress
+		TaskDivision(nOffsetPairs, mpiGroupHead).myRange(oPairStart, oPairStop);
+	mpiGroup->bcast(oPairStart);
+	mpiGroup->bcast(oPairStop);
+	int noPairsMine = oPairStop-oPairStart; //number of offset pairs handled by current group
+	int oPairInterval = std::max(1, int(round(noPairsMine/50.))); //interval for reporting progress
 	
 	//Collect results for each offset
 	logPrintf("Collecting Gph: "); logFlush();
-	CollectEph cEph(fw, EconserveWidth, NkMult, dmu);
-	for(int o=oStart; o<oStop; o++)
-	{	//Process with selected offset:
+	CollectEph cEph(fw, EconserveWidth, NkMult, dmu, q0);
+	for(int oPair=oPairStart; oPair<oPairStop; oPair++)
+	{	int o = oPair / nqOffsetSq;
+		int iqOff1 = (oPair - o * nqOffsetSq) / nqOffset;
+		int iqOff2 = oPair % nqOffset;
+		//Process with selected offset:
 		cEph.wOffsetCur = wk0[o];
-		fw.ePhLoop(q0+k0[o], k0[o], CollectEph::ePhProcess, &cEph);
+		vector3<> k01 = k0[o] + qOffset[iqOff1] + q0;
+		vector3<> k02 = k0[o] + qOffset[iqOff2];
+		fw.ePhLoop(k01, k02, CollectEph::ePhProcess, &cEph);
 		//Print progress:
-		if((o-oStart+1)%oInterval==0) { logPrintf("%d%% ", int(round((o-oStart+1)*100./noMine))); logFlush(); }
+		if((oPair-oPairStart+1)%oPairInterval==0) { logPrintf("%d%% ", int(round((oPair-oPairStart+1)*100./noPairsMine))); logFlush(); }
 	}
 	logPrintf("done.\n"); logFlush();
 	

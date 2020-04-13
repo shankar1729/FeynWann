@@ -320,12 +320,9 @@ FeynWann::FeynWann(FeynWannParams& fwp)
 	}
 	logPrintf("done.\n");
 	
-	//Read wannier hamiltonian
+	//Initialize phonon properties:
 	realPartOnly = (nSpinor==1);
-	fname = fwp.wannierPrefix + ".mlwfH" + spinSuffix;
-	Hw = std::make_shared<DistributedMatrix>(fname, realPartOnly,
-		mpiGroup, nBands*nBands, cellMap, kfold, false, mpiInterGroup, &cellWeightsVec);
-	
+	offsetDim = kfold; //size of an offset is determined by electronic k-points by default
 	if(fwp.needPhonons)
 	{	//Read relevant parameters from phonon.out:
 		fname = fwp.phononPrefix + ".out";
@@ -360,6 +357,7 @@ FeynWann::FeynWann(FeynWannParams& fwp)
 				die("kfold is not a multiple of phononSup.\n");
 		}
 		logPrintf("\n");
+		offsetDim = phononSup; //size of an offset is limited by phonon supercell
 		
 		//Read phonon basis:
 		invsqrtM = readPhononBasis(fwp.totalEprefix + ".phononBasis");
@@ -375,7 +373,7 @@ FeynWann::FeynWann(FeynWannParams& fwp)
 		if(fileSize((fname + "Corr").c_str()) > 0) //corrected force matrix exists
 			fname += "Corr";
 		OsqW = std::make_shared<DistributedMatrix>(fname, true, //phonon omegaSq is always real
-			mpiGroup, nModes*nModes, phononCellMap, phononSup, false, mpiInterGroup);
+			mpiGroup, nModes*nModes, phononCellMap, offsetDim, false, mpiInterGroup);
 		
 		//Read cell maps for electron-phonon matrix elements and sum rule:
 		ePhCellMap = readCellMap(fwp.wannierPrefix + ".mlwfCellMapPh" + spinSuffix);
@@ -399,17 +397,17 @@ FeynWann::FeynWann(FeynWannParams& fwp)
 		//Read electron-phonon matrix elements
 		fname = fwp.wannierPrefix + ".mlwfHePh" + spinSuffix;
 		HePhW = std::make_shared<DistributedMatrix>(fname, realPartOnly,
-			mpiGroup, nModes*nBands*nBands, ePhCellMap, phononSup, true, mpiInterGroup, &ePhCellWeights);
+			mpiGroup, nModes*nBands*nBands, ePhCellMap, offsetDim, true, mpiInterGroup, &ePhCellWeights);
 		
 		//Read electron-phonon matrix element sum rule
 		fname = fwp.wannierPrefix + ".mlwfHePhSum" + spinSuffix;
 		HePhSumW = std::make_shared<DistributedMatrix>(fname, realPartOnly,
-			mpiGroup, 3*nBands*nBands, ePhCellMapSum, kfold, false, mpiInterGroup);
+			mpiGroup, 3*nBands*nBands, ePhCellMapSum, offsetDim, false, mpiInterGroup);
 		
 		//Read gradient matrix element for e-ph sum rule
 		fname = fwp.wannierPrefix + ".mlwfD" + spinSuffix;
 		Dw = std::make_shared<DistributedMatrix>(fname, realPartOnly,
-			mpiGroup, 3*nBands*nBands, cellMap, kfold, false, mpiInterGroup, &cellWeightsVec);
+			mpiGroup, 3*nBands*nBands, cellMap, offsetDim, false, mpiInterGroup, &cellWeightsVec, &kfold);
 		
 		//Check for polarity:
 		fname = fwp.wannierPrefix + ".out";
@@ -462,43 +460,48 @@ FeynWann::FeynWann(FeynWannParams& fwp)
 		}
 	}
 	
+	//Read wannier hamiltonian
+	fname = fwp.wannierPrefix + ".mlwfH" + spinSuffix;
+	Hw = std::make_shared<DistributedMatrix>(fname, realPartOnly,
+		mpiGroup, nBands*nBands, cellMap, offsetDim, false, mpiInterGroup, &cellWeightsVec, &kfold);
+	
 	//Velocity matrix elements
 	if(fwp.needVelocity)
 	{	fname = fwp.wannierPrefix + ".mlwfP" + spinSuffix;
 		Pw = std::make_shared<DistributedMatrix>(fname, realPartOnly,
-			mpiGroup, 3*nBands*nBands, cellMap, kfold, false, mpiInterGroup, &cellWeightsVec);
+			mpiGroup, 3*nBands*nBands, cellMap, offsetDim, false, mpiInterGroup, &cellWeightsVec, &kfold);
 	}
 	//Spin matrix elements
 	if(not isRelativistic()) fwp.needSpin = false; //spin only available in relatvistic mode
 	if(fwp.needSpin)
 	{	fname = fwp.wannierPrefix + ".mlwfS" + spinSuffix;
 		Sw = std::make_shared<DistributedMatrix>(fname, realPartOnly,
-			mpiGroup, 3*nBands*nBands, cellMap, kfold, false, mpiInterGroup, &cellWeightsVec);
+			mpiGroup, 3*nBands*nBands, cellMap, offsetDim, false, mpiInterGroup, &cellWeightsVec, &kfold);
 	}
 	//z position matrix elements
 	if(fwp.EzExt)
 	{	fname = fwp.wannierPrefix + ".mlwfZ" + spinSuffix;
 		Zw = std::make_shared<DistributedMatrix>(fname, realPartOnly,
-			mpiGroup, nBands*nBands, cellMap, kfold, false, mpiInterGroup, &cellWeightsVec);
+			mpiGroup, nBands*nBands, cellMap, offsetDim, false, mpiInterGroup, &cellWeightsVec, &kfold);
 	}
 	//Linewidths:
 	if(fwp.needLinewidth_ee)
 	{	//e-e:
 		fname = fwp.wannierPrefix + ".mlwfImSigma_ee" + spinSuffix;
 		ImSigma_eeW = std::make_shared<DistributedMatrix>(fname, realPartOnly,
-			mpiGroup, nBands*nBands, cellMap, kfold, false, mpiInterGroup, &cellWeightsVec);
+			mpiGroup, nBands*nBands, cellMap, offsetDim, false, mpiInterGroup, &cellWeightsVec, &kfold);
 	}
 	if(fwp.needLinewidth_ePh)
 	{	//e-ph:
 		fname = fwp.wannierPrefix + ".mlwfImSigma_ePh" + spinSuffix;
 		ImSigma_ePhW = std::make_shared<DistributedMatrix>(fname, realPartOnly,
-			mpiGroup, nBands*nBands*FeynWannParams::fGrid_ePh.size(), cellMap, kfold, false, mpiInterGroup, &cellWeightsVec);
+			mpiGroup, nBands*nBands*FeynWannParams::fGrid_ePh.size(), cellMap, offsetDim, false, mpiInterGroup, &cellWeightsVec, &kfold);
 	}
 	if(fwp.needLinewidthP_ePh)
 	{	//e-ph:
 		fname = fwp.wannierPrefix + ".mlwfImSigmaP_ePh" + spinSuffix;
 		ImSigmaP_ePhW = std::make_shared<DistributedMatrix>(fname, realPartOnly,
-			mpiGroup, nBands*nBands*FeynWannParams::fGrid_ePh.size(), cellMap, kfold, false, mpiInterGroup, &cellWeightsVec);
+			mpiGroup, nBands*nBands*FeynWannParams::fGrid_ePh.size(), cellMap, offsetDim, false, mpiInterGroup, &cellWeightsVec, &kfold);
 	}
 	
 	logPrintf("\n");
@@ -578,7 +581,7 @@ void FeynWann::eLoop(const vector3<>& k0, FeynWann::eProcessFunc eProcess, void*
 	int ik = Hw->ikStart;
 	int ikStop = ik + Hw->nk;
 	StateE state;
-	PartialLoop3D(kfold, ik, ikStop, state.k, k0,
+	PartialLoop3D(offsetDim, ik, ikStop, state.k, k0,
 		state.ik = ik;
 		setState(state);
 		watchCallback.start();
@@ -617,9 +620,8 @@ void FeynWann::phLoop(const vector3<>& q0, FeynWann::phProcessFunc phProcess, vo
 	int iq = OsqW->ikStart;
 	int iqStop = iq + OsqW->nk;
 	StatePh state;
-	PartialLoop3D(phononSup, iq, iqStop, state.q, q0,
+	PartialLoop3D(offsetDim, iq, iqStop, state.q, q0,
 		state.iq = iq;
-		state.iqFine = 0; //Only meaningful in ePhLoop
 		setState(state);
 		watchCallback.start();
 		phProcess(state, params);
@@ -631,7 +633,6 @@ void FeynWann::phCalc(const vector3<>& q, FeynWann::StatePh& ph)
 	//Compute Fourier versions for this q:
 	OsqW->compute(q);
 	//Prepare state on group head:
-	ph.iqFine = 0;
 	ph.iq = 0;
 	ph.q = q;
 	if(mpiGroup->isHead()) setState(ph);
@@ -642,13 +643,14 @@ void FeynWann::ePhLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::ePh
 {	static StopWatch watchBcast("FeynWann::ePhLoop:bcast"); 
 	static StopWatch watchCallback("FeynWann::ePhLoop:callback");
 	assert(fwp.needPhonons);
-	int prodKfold = Hw->nkTot;
-	int prodSup = OsqW->nkTot;
-	int prodSupSq = HePhW->nkTot;
-	assert(prodSupSq == prodSup*prodSup);
+	int prodOffsetDim = Hw->nkTot;
+	int prodOffsetDimSq = HePhW->nkTot;
+	assert(prodOffsetDim == OsqW->nkTot);
+	assert(prodOffsetDimSq == prodOffsetDim*prodOffsetDim);
+	
 	//Initialize electronic states for 1 and 2:
 	#define PrepareElecStates(i) \
-		std::vector<StateE> e##i(prodKfold); /* States */ \
+		std::vector<StateE> e##i(prodOffsetDim); /* States */ \
 		{	Hw->transform(k0##i); \
 			if(fwp.needVelocity) Pw->transform(k0##i); \
 			if(fwp.needSpin) Sw->transform(k0##i); \
@@ -660,9 +662,11 @@ void FeynWann::ePhLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::ePh
 			Dw->transform(k0##i); \
 			int ik = Hw->ikStart; \
 			int ikStop = ik + Hw->nk; \
-			PartialLoop3D(kfold, ik, ikStop, e##i[ik].k, k0##i, \
+			bool withinRange = false; \
+			PartialLoop3D(offsetDim, ik, ikStop, e##i[ik].k, k0##i, \
 				e##i[ik].ik = ik; \
 				setState(e##i[ik]); \
+				if(e##i[ik].withinRange) withinRange = true; \
 			) \
 			/* Make available on all processes of group */ \
 			if(mpiGroup->nProcesses() > 1) \
@@ -670,102 +674,67 @@ void FeynWann::ePhLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::ePh
 				for(int whose=0; whose<mpiGroup->nProcesses(); whose++) \
 					for(int ik=Hw->ikStartProc[whose]; ik<Hw->ikStartProc[whose+1]; ik++) \
 						bcastState(e##i[ik], mpiGroup, whose); \
+				mpiGroup->allReduce(withinRange, MPIUtil::ReduceLOr); \
 				watchBcast.stop(); \
 			} \
+			if(not withinRange) return; /*no states in active window*/ \
 		}
 	inEphLoop = true; //turns on sum rule handling in setState and bcastState
 	PrepareElecStates(1) //prepares e1 and V1
 	PrepareElecStates(2) //prepares e2 and V2
 	inEphLoop = false;
 	#undef PrepareElecStates
-	//Loop over phonon q offsets:
-	vector3<> kfoldInv(1./kfold[0], 1./kfold[1], 1./kfold[2]);
-	vector3<int> iqSup;
-	for(iqSup[0]=0; iqSup[0]<kfoldSup[0]; iqSup[0]++)
-	for(iqSup[1]=0; iqSup[1]<kfoldSup[1]; iqSup[1]++)
-	for(iqSup[2]=0; iqSup[2]<kfoldSup[2]; iqSup[2]++)
-	{	if(fwp.ePhHeadOnly and iqSup.length_squared()) continue; //k-path debug mode
-		//Prepare phonon states:
-		vector3<> q0 = k01 - k02 + elemwiseProd(iqSup, kfoldInv);
-		OsqW->transform(q0);
-		std::vector<StatePh> ph(prodSup);
-		{	int iq = OsqW->ikStart;
-			int iqStop = iq + OsqW->nk;
-			PartialLoop3D(phononSup, iq, iqStop, ph[iq].q, q0,
-				ph[iq].iq = iq;
-				ph[iq].iqFine = calculateIndex(iqSup + elemwiseProd(kfoldSup, iqv), kfold);
-				setState(ph[iq]);
-			)
-			//Make available on all processes of group:
-			if(mpiGroup->nProcesses() > 1)
-			{	watchBcast.start();
-				for(int whose=0; whose<mpiGroup->nProcesses(); whose++)
-					for(int iq=OsqW->ikStartProc[whose]; iq<OsqW->ikStartProc[whose+1]; iq++)
-						bcastState(ph[iq], mpiGroup, whose);
-				watchBcast.stop();
-			}
-		}
-		//Loop over k2 supercell offsets:
-		vector3<int> ik2sup;
-		for(ik2sup[0]=0; ik2sup[0]<kfoldSup[0]; ik2sup[0]++)
-		for(ik2sup[1]=0; ik2sup[1]<kfoldSup[1]; ik2sup[1]++)
-		for(ik2sup[2]=0; ik2sup[2]<kfoldSup[2]; ik2sup[2]++)
-		{	vector3<> k02cur = k02 + elemwiseProd(ik2sup, kfoldInv);
-			vector3<int> ik1sup = iqSup + ik2sup; //momentum conservation
-			vector3<> k01cur = q0 + k02cur; //momentum conservation
-			if(fwp.ePhHeadOnly and ik2sup.length_squared()) continue; //k-path debug mode
-			//Check whether any electronic state for current ik1sup and ik2sup are within ePh energy range
-			if(ePhEstart < ePhEstop)
-			{	
-				#define CheckElecRange(i) \
-				{	bool withinRange = false; \
-					int ik##i = 0; vector3<> k##i; \
-					PartialLoop3D(phononSup, ik##i, prodSup, k##i, k0##i##cur, \
-						int ik##i##net = calculateIndex(ik##i##sup + elemwiseProd(kfoldSup, ik##i##v), kfold); \
-						if(e1[ik##i##net].withinRange) \
-						{	withinRange = true; \
-							break; \
-						} \
-					) \
-					if(not withinRange) continue; \
-				}
-				CheckElecRange(1) //continue if no states within range in ik1sup
-				CheckElecRange(2) //continue if no states within range in ik2sup
-				#undef CheckElecRange
-			}
-			//Calculate electron-phonon matrix elements:
-			HePhW->transform(k01cur, k02cur);
-			int ikPair = 0;
-			int ikPairStart = HePhW->ikStart;
-			int ikPairStop = ikPairStart + HePhW->nk;
-			int ik1 = 0; vector3<> k1;
-			PartialLoop3D(phononSup, ik1, prodSup, k1, k01cur,
-				int ik1net = calculateIndex(ik1sup + elemwiseProd(kfoldSup, ik1v), kfold);
-				if(e1[ik1net].withinRange)
-				{	int ik2 = 0; vector3<> k2;
-					PartialLoop3D(phononSup, ik2, prodSup, k2, k02cur,
-						int ik2net = calculateIndex(ik2sup + elemwiseProd(kfoldSup, ik2v), kfold);
-						if(ikPair>=ikPairStart and ikPair<ikPairStop //subset to be evaluated on this process
-							and (not (fwp.ePhHeadOnly and ikPair)) //overridden in k-path debug mode to be ikPair==0 alone
-							and e2[ik2net].withinRange ) //k2 has at least one state within active energy range
-						{	//Identify associated phonon states:
-							int iqIndex = calculateIndex(ik1v - ik2v, phononSup);
-							//Set e-ph matrix elements:
-							MatrixEph m;
-							setMatrix(e1[ik1net], e2[ik2net], ph[iqIndex], ikPair, m);
-							//Invoke call-back function:
-							watchCallback.start();
-							ePhProcess(m, params);
-							watchCallback.stop();
-						}
-						ikPair++;
-					)
-				}
-				else ikPair += prodSup; //no states within range at current k1
-			)
+	
+	//Prepare phonon states:
+	vector3<> q0 = k01 - k02;
+	OsqW->transform(q0);
+	std::vector<StatePh> ph(prodOffsetDim);
+	{	int iq = OsqW->ikStart;
+		int iqStop = iq + OsqW->nk;
+		PartialLoop3D(offsetDim, iq, iqStop, ph[iq].q, q0,
+			ph[iq].iq = iq;
+			setState(ph[iq]);
+		)
+		//Make available on all processes of group:
+		if(mpiGroup->nProcesses() > 1)
+		{	watchBcast.start();
+			for(int whose=0; whose<mpiGroup->nProcesses(); whose++)
+				for(int iq=OsqW->ikStartProc[whose]; iq<OsqW->ikStartProc[whose+1]; iq++)
+					bcastState(ph[iq], mpiGroup, whose);
+			watchBcast.stop();
 		}
 	}
+	
+	//Calculate electron-phonon matrix elements:
+	HePhW->transform(k01, k02);
+	int ikPair = 0;
+	int ikPairStart = HePhW->ikStart;
+	int ikPairStop = ikPairStart + HePhW->nk;
+	int ik1 = 0; vector3<> k1;
+	PartialLoop3D(offsetDim, ik1, prodOffsetDim, k1, k01,
+		if(e1[ik1].withinRange)
+		{	int ik2 = 0; vector3<> k2;
+			PartialLoop3D(offsetDim, ik2, prodOffsetDim, k2, k02,
+				if(ikPair>=ikPairStart and ikPair<ikPairStop //subset to be evaluated on this process
+					and (not (fwp.ePhHeadOnly and ikPair)) //overridden in k-path debug mode to be ikPair==0 alone
+					and e2[ik2].withinRange ) //k2 has at least one state within active energy range
+				{	//Identify associated phonon states:
+					int iqIndex = calculateIndex(ik1v - ik2v, offsetDim);
+					//Set e-ph matrix elements:
+					MatrixEph m;
+					setMatrix(e1[ik1], e2[ik2], ph[iqIndex], ikPair, m);
+					//Invoke call-back function:
+					watchCallback.start();
+					ePhProcess(m, params);
+					watchCallback.stop();
+				}
+				ikPair++;
+			)
+		}
+		else ikPair += prodOffsetDim; //no states within range at current k1
+	)
 }
+
 void FeynWann::ePhCalc(const FeynWann::StateE& e1, const FeynWann::StateE& e2, const FeynWann::StatePh& ph, FeynWann::MatrixEph& m)
 {	assert(fwp.needPhonons);
 	assert(circDistanceSquared(e1.k-e2.k, ph.q) < 1e-8);
@@ -992,7 +961,6 @@ void FeynWann::setState(FeynWann::StatePh& state)
 void FeynWann::bcastState(FeynWann::StatePh& state, MPIUtil* mpiUtil, int root)
 {	if(mpiUtil->nProcesses()==1) return; //no communictaion needed
 	mpiUtil->bcast(state.iq, root);
-	mpiUtil->bcast(state.iqFine, root);
 	mpiUtil->bcast(&state.q[0], 3, root);
 	bcast(state.omega, nModes, mpiUtil, root);
 	bcast(state.U, nModes, nModes, mpiUtil, root);

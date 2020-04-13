@@ -30,7 +30,8 @@ public:
 	const MPIUtil* mpiUtil; //!< MPI instance / communicator over whcih this is parallelized
 	int nElemsTot; //!< total number of matrix elements (per cell/k) [if packed, only counts packed]
 	const std::vector<vector3<int>>& cellMap; //!< cell map in real space
-	const vector3<int>& kfold; //!< k-point folding
+	const vector3<int>& kfold; //!< FFT mesh dimensions
+	vector3<int> kfoldIn; //!< FFT mesh dimensions of unique cells in input
 	bool squared; //!< whether cell map / kpoints are squared (eg. e-ph matrix elements)
 	
 	//Parameters set in the constructor:
@@ -38,6 +39,7 @@ public:
 	int iElemStart; //!< starting element on current process
 	int nCellsTot; //!< size of cell map or its square, depending on squared
 	int kfoldProd; //!< prod(kfold)
+	int kfoldInProd; //!< prod(kfold)
 	int nkTot; //!< prod(kfold) or its square, depending on squared
 	int nk; //!< number of k-points (or pairs, if squared) on current process
 	int ikStart; //!< starting k-point (or pair, if squared) on current process
@@ -48,9 +50,11 @@ public:
 	//! If mpiInterGroup is non-null, then read only in one group and broadcast to rest (require regular process grid)
 	//! If cellWeights is non-null, then read in only unique cells and use cellWeights in interpolation (required in squared mode)
 	//! (remaining parameters are as specified in the class)
+	//! If kfoldInPtr is also non-null, unique cells in the file are on a mesh of dimensions kfoldIn different from kfold used
+	//! for the Fourier transforms; this is only allowed for single k (not squared) mode
 	DistributedMatrix(string fname, bool realOnly, const MPIUtil* mpiUtil, int nElemsTot,
 		const std::vector<vector3<int>>& cellMap, const vector3<int>& kfold, bool squared,
-		const std::shared_ptr<MPIUtil> mpiInterGroup=0, const std::vector<matrix>* cellWeights=0);
+		const std::shared_ptr<MPIUtil> mpiInterGroup=0, const std::vector<matrix>* cellWeights=0, const vector3<int>* kfoldInPtr=0);
 	~DistributedMatrix();
 	
 	void transform(vector3<> k0); //!< prepare results for k-point mesh offset by k0 (squared=false only)

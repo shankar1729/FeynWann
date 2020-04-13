@@ -51,12 +51,18 @@ struct PlanSet
 
 DistributedMatrix::DistributedMatrix(string fname, bool realOnly, const MPIUtil* mpiUtil, int nElemsTot,
 	const std::vector<vector3<int>>& cellMap, const vector3<int>& kfold, bool squared,
-	const std::shared_ptr<MPIUtil>  mpiInterGroup, const std::vector<matrix>* cellWeights)
+	const std::shared_ptr<MPIUtil>  mpiInterGroup, const std::vector<matrix>* cellWeights, const vector3<int>* kfoldInPtr)
 : mpiUtil(mpiUtil), nElemsTot(nElemsTot), cellMap(cellMap), kfold(kfold), squared(squared)
 {
 	if(squared) assert(cellWeights); //only unique cells supported in square dmode (e-ph elements)
 	kfoldProd = kfold[0]*kfold[1]*kfold[2];
-	nCellsTot = cellWeights ? kfoldProd : cellMap.size(); //cell weights optionally applied here to save disk / memory
+	kfoldIn = kfold;
+	if(kfoldInPtr)
+	{	assert(not squared); //different input mesh dimension only supported in single k (non-squared) mode
+		kfoldIn = *kfoldInPtr;
+	}
+	kfoldInProd = kfoldIn[0]*kfoldIn[1]*kfoldIn[2];
+	nCellsTot = cellWeights ? kfoldInProd : cellMap.size(); //cell weights optionally applied here to save disk / memory
 	nkTot = kfoldProd;
 	if(squared)
 	{	nCellsTot *= nCellsTot;
@@ -134,7 +140,7 @@ DistributedMatrix::DistributedMatrix(string fname, bool realOnly, const MPIUtil*
 	
 	//Initialize cell index:
 	if(cellWeights)
-	{	uniqueCells.resize(kfoldProd);
+	{	uniqueCells.resize(kfoldInProd);
 		for(size_t iCell=0; iCell<cellMap.size(); iCell++)
 		{	Cell cell;
 			cell.iR = cellMap[iCell];
@@ -155,7 +161,7 @@ DistributedMatrix::DistributedMatrix(string fname, bool realOnly, const MPIUtil*
 				cell.weight.assign(w.nData(), 0.);
 				eblas_daxpy(w.nData(), 1., (const double*)w.data(),2, cell.weight.data(),1); //get real parts
 			}
-			uniqueCells[calculateIndex(cell.iR, kfold)].push_back(cell);
+			uniqueCells[calculateIndex(cell.iR, kfoldIn)].push_back(cell);
 		}
 	}
 	else
@@ -178,24 +184,24 @@ DistributedMatrix::~DistributedMatrix()
 }
 
 void DistributedMatrix::transform(vector3<> k0)
-{	static StopWatch watch("DistributedMatrix::transform1"); watch.start();
+{	static StopWatch watch("DistributedMatrix::transform1"), watchPrep("DistributedMatrix::t1prep"); watch.start();
 	assert(!squared);
 	if(uniqueCells.size()) //Unique cell mode
-	{
+	{	watchPrep.start();
 		//Initialize offset phases:
 		for(std::vector<Cell>& cells: uniqueCells)
 			for(Cell& cell: cells)
 				cell.phase01 = cis(2*M_PI*dot(cell.iR, k0));
-		//Copy mat to buf:
-		callPref(eblas_copy)(buf.data(), mat.data(), mat.nData());
 		//Apply cell weights and offset phases:
+		buf.zero();
 		int matStride = nBands*nBands; //number of elements per matrix
 		int iMatStart = iElemStart / matStride;
 		int iMatStop = ceildiv(iElemStart+nElems, matStride);
-		for(int iCell=0; iCell<kfoldProd; iCell++)
-		{	//Collect weights * phase for all equivalent cells:
+		for(int iCellIn=0; iCellIn<kfoldInProd; iCellIn++)
+		{	int iCell = calculateIndex(uniqueCells[iCellIn][0].iR, kfold);
+			//Collect weights * phase for all equivalent cells:
 			matrix w = zeroes(nBands, nBands);
-			for(const Cell& c: uniqueCells[iCell])
+			for(const Cell& c: uniqueCells[iCellIn])
 			{	complex* wData = w.data();
 				for(int iw=0; iw<matStride; iw++)
 					*(wData++) += c.phase01 * c.weight[iw];
@@ -207,12 +213,19 @@ void DistributedMatrix::transform(vector3<> k0)
 				int iwStart = std::max(-iElemOffset, 0);
 				int iwStop = std::min(nElems-iElemOffset, matStride);
 				if(iwStop <= iwStart) continue; //nothing on current process
-				//Apply weights:
-				callPref(eblas_zmul)(iwStop-iwStart,
-					w.dataPref()+iwStart, 1,
-					buf.dataPref()+(iElemOffset+iwStart)*nkTot+iCell, nkTot);
+				//Accumulate to buffer with weights:
+				const complex* wData = w.data() + iwStart;
+				const complex* matData = mat.data() + (iElemOffset+iwStart)*nCellsTot+iCellIn;
+				complex* bufData = buf.data() + (iElemOffset+iwStart)*nkTot+iCell;
+				for(int iw=iwStart; iw<iwStop; iw++)
+				{	*bufData += (*wData) * (*matData);
+					wData++;
+					matData += nCellsTot;
+					bufData += nkTot;
+				}
 			}
 		}
+		watchPrep.stop();
 	}
 	else //Full cellMap mode:
 	{
