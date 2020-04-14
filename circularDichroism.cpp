@@ -180,6 +180,7 @@ int main(int argc, char** argv)
 	const double EemptyMax = inputMap.get("EemptyMax", +DBL_MAX) * eV; //maximum empty-state energy to use (vary below max Wannier energy) to check convergence
 	const double T = inputMap.get("T") * Kelvin;
 	const double dmu = inputMap.get("dmu", 0.) * eV; //optional shift in chemical potential from neutral value/ VBM; (default to 0)
+	FeynWannParams fwp(&inputMap);
 
 	//Check contribution:
 	logPrintf("\nInputs after conversion to atomic units:\n");
@@ -189,9 +190,9 @@ int main(int argc, char** argv)
 	logPrintf("EemptyMax = %lg\n", EemptyMax);
 	logPrintf("T = %lg\n", T);
 	logPrintf("dmu = %lg\n", dmu);
-
+	fwp.printParams();
+	
 	//Initialize FeynWann:
-	FeynWannParams fwp;
 	fwp.needSymmetries = true;
 	fwp.needVelocity = true;
 	std::shared_ptr<FeynWann> fw = std::make_shared<FeynWann>(fwp);
@@ -227,7 +228,7 @@ int main(int argc, char** argv)
 			fwp.iSpin = iSpin;
 			fw = std::make_shared<FeynWann>(fwp);
 		}
-		logPrintf("\nCollecting ImEps: "); logFlush();
+		logPrintf("\nCollecting CD spectrum: "); logFlush();
 		for(int o=0; o<noMine; o++)
 		{	Random::seed(o+oStart); //to make results independent of MPI division
 			vector3<> k0 = fw->randomVector(mpiGroup); //must be constant across group

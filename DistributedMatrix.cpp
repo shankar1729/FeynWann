@@ -344,16 +344,22 @@ void DistributedMatrix::compute(vector3<> k)
 			int iwStart = std::max(-iElemOffset, 0);
 			int iwStop = std::min(nElems-iElemOffset, matStride);
 			for(int iw=iwStart; iw<iwStop; iw++)
-			{	int iElem = iElemOffset+iw; //element index within process
-				complex out = 0.;
+			{	complex out = 0.;
 				for(int iCell=0; iCell<kfoldProd; iCell++)
-				{	//Collect weights * phase for all equivalent cells:
-					complex w = 0.;
-					for(const Cell& c: uniqueCells[iCell])
-						w += c.phase01 * c.weight[iw];
-					out += w * matData[iElem*nkTot+iCell];
+				{	const std::vector<Cell>& cells = uniqueCells[iCell];
+					complex wPhase; //current weight * phase sum for unique cells
+					for(auto iter=cells.begin(); iter!=cells.end();)
+					{	auto iterNext = iter; iterNext++;
+						wPhase += iter->phase01 * iter->weight[iw];
+						if(iterNext==cells.end() or iterNext->indexIn!=iter->indexIn)
+						{	out += wPhase * matData[iter->indexIn];
+							wPhase = complex();
+						}
+						iter = iterNext;
+					}
 				}
-				bufData[iElem] = out;
+				*(bufData++) = out;
+				matData += nCellsTot;
 			}
 		}
 	}

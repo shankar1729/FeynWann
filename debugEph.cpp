@@ -56,6 +56,7 @@ struct DebugEph
 	FeynWann::StateE e1, e2;
 	FeynWann::StatePh ph;
 	FeynWann::MatrixEph m;
+	bool spinAvailable;
 	
 	DebugEph(int bandStart, int bandStop, int modeStart, int modeStop)
 	: bandStart(bandStart), bandStop(bandStop), modeStart(modeStart), modeStop(modeStop)
@@ -65,15 +66,15 @@ struct DebugEph
 	{	const diagMatrix& E1 = mEph.e1->E;
 		const diagMatrix& E2 = mEph.e2->E;
 		const diagMatrix& omegaPh = mEph.ph->omega;
-		int nBands = E1.nRows();
-		int nModes= omegaPh.nRows();
 		
 		//---- Single k compute debug ----
 		if(&mEph != &m) //these were computed separately below
 		{	logPrintf("err(E1):  %le\n", nrm2(e1.E-E1)/nrm2(E1));
 			logPrintf("err(E2):  %le\n", nrm2(e2.E-E2)/nrm2(E2));
-			logPrintf("err(S1):  %le\n", nrm2(degSqSum(e1.S[0],E1)-degSqSum(mEph.e1->S[0],E1))/nrm2(degSqSum(e1.S[0],E1)));
-			logPrintf("err(S2):  %le\n", nrm2(degSqSum(e2.S[0],E2)-degSqSum(mEph.e2->S[0],E2))/nrm2(degSqSum(e2.S[0],E2)));
+			if(spinAvailable)
+			{	logPrintf("err(S1):  %le\n", nrm2(degSqSum(e1.S[0],E1)-degSqSum(mEph.e1->S[0],E1))/nrm2(degSqSum(e1.S[0],E1)));
+				logPrintf("err(S2):  %le\n", nrm2(degSqSum(e2.S[0],E2)-degSqSum(mEph.e2->S[0],E2))/nrm2(degSqSum(e2.S[0],E2)));
+			}
 			logPrintf("err(ph):  %le\n", nrm2(ph.omega-omegaPh)/nrm2(omegaPh));
 			logPrintf("err(ePh): %le\n", nrm2(degSqSum(m.M,E1,E2,omegaPh)[1]-degSqSum(mEph.M,E1,E2,omegaPh)[1])/nrm2(degSqSum(mEph.M,E1,E2,omegaPh)[1]));
 			logFlush();
@@ -262,6 +263,7 @@ int main(int argc, char** argv)
 	Mtot *= 1./3;
 	DebugEph src(bandStart, bandStop, modeStart, modeStop);
 	src.Mtot = Mtot;
+	src.spinAvailable = fwp.needSpin;
 	fw.eCalc(k1, src.e1);
 	if(mpiGroup->isHead())
 	{	logPrintf("E1[eV]: ");
@@ -274,7 +276,7 @@ int main(int argc, char** argv)
 		fw.ePhCalc(src.e1, src.e2, src.ph, src.m);
 		
 		if(mpiGroup->isHead()) src.process(src.m); //directly use much faster single-k version (test of single-k skipped above)
-		//fw.ePhLoop(k1, k2, DebugEph::ePhProcess, &src); //Call ePh loop to test the single-k stuff above
+		fw.ePhLoop(k1, k2, DebugEph::ePhProcess, &src); //Call ePh loop to test the single-k stuff above
 	}
 	
 	fw.free();
