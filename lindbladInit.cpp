@@ -610,7 +610,7 @@ int main(int argc, char** argv)
 	
 	//First pass (e only): select k-points
 	lb.kpointSelect(k0);
-	logPrintf("%lu active k-points parallelized over %d processes.\n", lb.k.size(), mpiWorld->nProcesses());
+	if(mpiWorld->isHead()) logPrintf("%lu active k-points parallelized over %d process groups.\n", lb.k.size(), mpiGroupHead->nProcesses());
 	
 	if(ip.dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");

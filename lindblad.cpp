@@ -627,13 +627,6 @@ int main(int argc, char** argv)
 	logPrintf("verbose = %s\n", verboseMode.c_str());
 	logPrintf("inFile = %s\n", inFile.c_str());
 	
-	if(ip.dryRun)
-	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
-		FeynWann::finalize();
-		return 0;
-	}
-	logPrintf("\n");
-	
 	//Create and initialize lindblad calculator:
 	Lindblad lb(dmu, T,
 		pumpOmega, pumpA0, pumpTau, pumpPol, (pumpMode=="Evolve"),
@@ -641,6 +634,14 @@ int main(int argc, char** argv)
 	lb.initialize(inFile);
 	logPrintf("Initialization completed successfully at t[s]: %9.2lf\n\n", clock_sec());
 	logFlush();
+	
+	logPrintf("%lu active k-points parallelized over %d processes.\n", lb.nk, mpiWorld->nProcesses());
+	if(ip.dryRun)
+	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
+		FeynWann::finalize();
+		return 0;
+	}
+	logPrintf("\n");
 	
 	if(pumpMode=="Perturb" and (not ePhEnabled))
 	{	//Simple probe-pump-probe with no relaxation:
