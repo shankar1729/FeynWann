@@ -453,5 +453,5 @@ int main(int argc, char** argv)
 		ofs.close();
 	}
 	
-	finalizeSystem();
+	FeynWann::finalize();
 };
