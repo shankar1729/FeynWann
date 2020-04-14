@@ -69,6 +69,7 @@ int main(int argc, char** argv)
 	std::shared_ptr<FeynWann> fw = std::make_shared<FeynWann>(fwp);
 	size_t nKpts = nOffsets * fw->eCountPerOffset();  
 	logPrintf("Effectively sampled nKpts: %lu\n", nKpts);
+	if(mpiWorld->isHead()) logPrintf("%lu electron k-mesh offsets parallelized over %d process groups.\n", nOffsets, mpiGroupHead->nProcesses());
 	
 	if(ip.dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
