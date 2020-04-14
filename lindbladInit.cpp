@@ -92,7 +92,7 @@ struct LindbladInit
 	void kpointSelect(const std::vector<vector3<>>& k0)
 	{
 		//Initialize sampling parameters:
-		size_t oStart, oStop; //range of offstes handled by this process group
+		size_t oStart, oStop; //range of offsets handled by this process group
 		if(mpiGroup->isHead())
 			TaskDivision(k0.size(), mpiGroupHead).myRange(oStart, oStop);
 		mpiGroup->bcast(oStart);
@@ -105,7 +105,7 @@ struct LindbladInit
 		EcMin = +DBL_MAX;
 		logPrintf("Determining energy range: "); logFlush();
 		for(size_t o=oStart; o<oStop; o++)
-		{	fw.eLoop(k0[o], LindbladInit::eRange, this);
+		{	for(vector3<> qOff: fw.qOffset) fw.eLoop(k0[o]+qOff, LindbladInit::eRange, this);
 			//Print progress:
 			if((o-oStart+1)%oInterval==0) { logPrintf("%d%% ", int(round((o-oStart+1)*100./noMine))); logFlush(); }
 		}
@@ -122,7 +122,7 @@ struct LindbladInit
 		nActiveTot = 0;
 		logPrintf("Scanning k-points with active states: "); logFlush();
 		for(size_t o=oStart; o<oStop; o++)
-		{	fw.eLoop(k0[o], LindbladInit::kSelect, this);
+		{	for(vector3<> qOff: fw.qOffset) fw.eLoop(k0[o]+qOff, LindbladInit::kSelect, this);
 			//Print progress:
 			if((o-oStart+1)%oInterval==0) { logPrintf("%d%% ", int(round((o-oStart+1)*100./noMine))); logFlush(); }
 		}
@@ -589,9 +589,8 @@ int main(int argc, char** argv)
 		k0.push_back(NkFineInv * ikMult);
 	logPrintf("Effective interpolated k-mesh dimensions: ");
 	NkFine.print(globalLog, " %d ");
-	size_t nOffsets = k0.size();
-	size_t nKeff = nOffsets * fw.eCountPerOffset();
-	logPrintf("Effectively sampled %s: %lu\n", "nKpts", nKeff);
+	size_t nKeff = k0.size() * fw.eCountPerOffset() * fw.qOffset.size();
+	logPrintf("Effectively sampled nKpts: %lu\n", nKeff);
 	
 	//Construct mesh of q-offsets:
 	std::vector<vector3<>> q0;
@@ -606,6 +605,13 @@ int main(int argc, char** argv)
 			q0.push_back(NkFineInv * iqMult);
 	}
 	
+	//Create and initialize lindblad calculator:
+	LindbladInit lb(fw, NkFine, dmuMin, dmuMax, Tmax, pumpOmegaMax, probeOmegaMax, ePhEnabled, ePhDelta);
+	
+	//First pass (e only): select k-points
+	lb.kpointSelect(k0);
+	logPrintf("%lu active k-points parallelized over %d processes.\n", lb.k.size(), mpiWorld->nProcesses());
+	
 	if(ip.dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
 		fw.free();
@@ -613,12 +619,6 @@ int main(int argc, char** argv)
 		return 0;
 	}
 	logPrintf("\n");
-	
-	//Create and initialize lindblad calculator:
-	LindbladInit lb(fw, NkFine, dmuMin, dmuMax, Tmax, pumpOmegaMax, probeOmegaMax, ePhEnabled, ePhDelta);
-	
-	//First pass (e only): select k-points
-	lb.kpointSelect(k0);
 	
 	//Second pass (ph only): select k pairs
 	if(ePhEnabled)
