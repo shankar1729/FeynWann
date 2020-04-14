@@ -165,6 +165,7 @@ int main(int argc, char** argv)
 	}
 	mpiWorld->fclose(fp);
 	logPrintf("done.\n"); logFlush();
+	logPrintf("%lu active k-points parallelized over %d processes.\n", h.nk, mpiWorld->nProcesses());
 	
 	if(ip.dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");

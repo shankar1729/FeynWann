@@ -138,6 +138,7 @@ int main(int argc, char** argv)
 	int nOffsetsPerBlock = ceildiv(nOffsets, nBlocks);
 	size_t nKptsPerBlock = fw->eCountPerOffset() * nOffsetsPerBlock;
 	logPrintf("Effectively sampled nKpts: %lu\n", nKptsPerBlock * nBlocks);
+	if(mpiWorld->isHead()) logPrintf("%d electron k-mesh offsets per block parallelized over %d process groups.\n", nOffsetsPerBlock, mpiGroupHead->nProcesses());
 	int oStart = 0, oStop = 0;
 	if(mpiGroup->isHead())
 		TaskDivision(nOffsetsPerBlock, mpiGroupHead).myRange(oStart, oStop);
