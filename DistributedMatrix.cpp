@@ -19,6 +19,7 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 
 #include "DistributedMatrix.h"
 #include <fftw3-mpi.h>
+#include <algorithm>
 
 template<typename scalar> void readMatrix(const MPIUtil* mpiUtil, const std::shared_ptr<MPIUtil> mpiInterGroup,
 	string fname, int nElemsTot, int nElems, int iElemStart, int nCellsTot, complex* dest)
@@ -140,10 +141,11 @@ DistributedMatrix::DistributedMatrix(string fname, bool realOnly, const MPIUtil*
 	
 	//Initialize cell index:
 	if(cellWeights)
-	{	uniqueCells.resize(kfoldInProd);
+	{	uniqueCells.resize(kfoldProd);
 		for(size_t iCell=0; iCell<cellMap.size(); iCell++)
 		{	Cell cell;
 			cell.iR = cellMap[iCell];
+			cell.indexIn = calculateIndex(cell.iR, kfoldIn);
 			//Get real part of matrix:
 			const matrix& w = cellWeights->at(iCell);
 			cell.weight.reserve(w.nData());
@@ -161,8 +163,11 @@ DistributedMatrix::DistributedMatrix(string fname, bool realOnly, const MPIUtil*
 				cell.weight.assign(w.nData(), 0.);
 				eblas_daxpy(w.nData(), 1., (const double*)w.data(),2, cell.weight.data(),1); //get real parts
 			}
-			uniqueCells[calculateIndex(cell.iR, kfoldIn)].push_back(cell);
+			uniqueCells[calculateIndex(cell.iR, kfold)].push_back(cell);
 		}
+		for(std::vector<Cell>& cells: uniqueCells)
+			if(cells.size() > 1)
+				std::sort(cells.begin(), cells.end());
 	}
 	else
 	{	cellIndex.resize(nCellsTot);
@@ -193,6 +198,36 @@ void DistributedMatrix::transform(vector3<> k0)
 			for(Cell& cell: cells)
 				cell.phase01 = cis(2*M_PI*dot(cell.iR, k0));
 		//Apply cell weights and offset phases:
+		int matStride = nBands*nBands; //number of elements per matrix
+		int iMatStart = iElemStart / matStride;
+		int iMatStop = ceildiv(iElemStart+nElems, matStride);
+		complex* bufData = buf.data();
+		const complex* matData = mat.data();
+		for(int iMat=iMatStart; iMat<iMatStop; iMat++)
+		{	//Determine index range of w that contributes
+			int iElemOffset = iMat*matStride - iElemStart;
+			int iwStart = std::max(-iElemOffset, 0);
+			int iwStop = std::min(nElems-iElemOffset, matStride);
+			for(int iw=iwStart; iw<iwStop; iw++)
+			{	for(int iCell=0; iCell<kfoldProd; iCell++)
+				{	complex result; //current result
+					const std::vector<Cell>& cells = uniqueCells[iCell];
+					complex wPhase; //current weight * phase sum for unique cells
+					for(auto iter=cells.begin(); iter!=cells.end();)
+					{	auto iterNext = iter; iterNext++;
+						wPhase += iter->phase01 * iter->weight[iw];
+						if(iterNext==cells.end() or iterNext->indexIn!=iter->indexIn)
+						{	result += wPhase * matData[iter->indexIn];
+							wPhase = complex();
+						}
+						iter = iterNext;
+					}
+					*(bufData++) = result;
+				}
+				matData += nCellsTot;
+			}
+		}
+		/*
 		buf.zero();
 		int matStride = nBands*nBands; //number of elements per matrix
 		int iMatStart = iElemStart / matStride;
@@ -225,6 +260,7 @@ void DistributedMatrix::transform(vector3<> k0)
 				}
 			}
 		}
+		*/
 		watchPrep.stop();
 	}
 	else //Full cellMap mode:

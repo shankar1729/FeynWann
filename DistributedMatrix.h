@@ -73,8 +73,11 @@ private:
 	//Cells and weights by unique indices:
 	struct Cell
 	{	vector3<int> iR;
+		int indexIn; //index into kfoldIn array
 		std::vector<double> weight; //nBands x nBands in non-squared, and nAtoms (outer) by nBands (inner) in squared mode
 		complex phase01, phase02; //temporary variables used in transform
+		
+		bool operator<(const Cell& other) const { return indexIn < other.indexIn; } //!< to sort by indexIn for efficient memory access
 	};
 	std::vector<std::vector<Cell>> uniqueCells;
 	int nAtoms, nBands;
