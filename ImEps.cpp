@@ -264,7 +264,10 @@ int main(int argc, char** argv)
 	std::shared_ptr<FeynWann> fw = std::make_shared<FeynWann>(fwp);
 	size_t nKeff = nOffsets * (contribType==Direct ? fw->eCountPerOffset() : fw->ePhCountPerOffset());
 	logPrintf("Effectively sampled %s: %lu\n", (contribType==Direct ? "nKpts" : "nKpairs"), nKeff);
-
+	if(mpiWorld->isHead())
+		logPrintf("%d %s-mesh offsets parallelized over %d process groups.\n",
+			nOffsets, (contribType==Direct ? "electron k" : "phonon q"), mpiGroupHead->nProcesses());
+	
 	//Calculate normalized polarization vector:
 	vector3<complex> Ehat = complex(1,0)*polRe + complex(0,1)*polIm; //Efield direction
 	Ehat *= (1./sqrt(Ehat[0].norm() + Ehat[1].norm() + Ehat[2].norm())); //normalize to unit complex vector
@@ -291,7 +294,7 @@ int main(int argc, char** argv)
 	//Initialize frequency grid:
 	const double domega = dE;
 	EnergyRange er = { DBL_MAX, -DBL_MAX, 0. };
-	fw->eLoop(vector3<>(), EnergyRange::eProcess, &er);
+	for(vector3<> qOff: fw->qOffset) fw->eLoop(qOff, EnergyRange::eProcess, &er);
 	mpiWorld->allReduce(er.Emin, MPIUtil::ReduceMin);
 	mpiWorld->allReduce(er.Emax, MPIUtil::ReduceMax);
 	mpiWorld->allReduce(er.vMax, MPIUtil::ReduceMax);

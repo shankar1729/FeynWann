@@ -256,6 +256,9 @@ int main(int argc, char** argv)
 	std::shared_ptr<FeynWann> fw = std::make_shared<FeynWann>(fwp);
 	size_t nKeff = nOffsets * (contribType==Direct ? fw->eCountPerOffset() : fw->ePhCountPerOffset());
 	logPrintf("Effectively sampled %s: %lu\n", (contribType==Direct ? "nKpts" : "nKpairs"), nKeff);
+	if(mpiWorld->isHead())
+		logPrintf("%d %s-mesh offsets parallelized over %d process groups.\n",
+			nOffsets, (contribType==Direct ? "electron k" : "phonon q"), mpiGroupHead->nProcesses());
 
 	if(ip.dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
@@ -283,7 +286,7 @@ int main(int argc, char** argv)
 	int oInterval = std::max(1, int(round(noMine/50.))); //interval for reporting progress
 	//Initialize frequency grid:
 	EnergyRange er = { DBL_MAX, -DBL_MAX };
-	fw->eLoop(vector3<>(), EnergyRange::eProcess, &er);
+	for(vector3<> qOff: fw->qOffset) fw->eLoop(qOff, EnergyRange::eProcess, &er);
 	mpiWorld->allReduce(er.Emin, MPIUtil::ReduceMin);
 	mpiWorld->allReduce(er.Emax, MPIUtil::ReduceMax);
 	double omegaFull = er.Emax - er.Emin;
@@ -301,7 +304,6 @@ int main(int argc, char** argv)
 		if(iSpin>0)
 		{	fw = 0; //free memory from previous spin
 			fwp.iSpin = iSpin;
-			logPrintf("This is a spin type calculation \n"); logFlush();
 			fw = std::make_shared<FeynWann>(fwp);
 		}
 		logPrintf("\nCollecting ImEps: "); logFlush();
