@@ -189,11 +189,10 @@ DistributedMatrix::~DistributedMatrix()
 }
 
 void DistributedMatrix::transform(vector3<> k0)
-{	static StopWatch watch("DistributedMatrix::transform1"), watchPrep("DistributedMatrix::t1prep"); watch.start();
+{	static StopWatch watch("DistributedMatrix::transform1"); watch.start();
 	assert(!squared);
 	if(uniqueCells.size()) //Unique cell mode
-	{	watchPrep.start();
-		//Initialize offset phases:
+	{	//Initialize offset phases:
 		for(std::vector<Cell>& cells: uniqueCells)
 			for(Cell& cell: cells)
 				cell.phase01 = cis(2*M_PI*dot(cell.iR, k0));
@@ -227,41 +226,6 @@ void DistributedMatrix::transform(vector3<> k0)
 				matData += nCellsTot;
 			}
 		}
-		/*
-		buf.zero();
-		int matStride = nBands*nBands; //number of elements per matrix
-		int iMatStart = iElemStart / matStride;
-		int iMatStop = ceildiv(iElemStart+nElems, matStride);
-		for(int iCellIn=0; iCellIn<kfoldInProd; iCellIn++)
-		{	int iCell = calculateIndex(uniqueCells[iCellIn][0].iR, kfold);
-			//Collect weights * phase for all equivalent cells:
-			matrix w = zeroes(nBands, nBands);
-			for(const Cell& c: uniqueCells[iCellIn])
-			{	complex* wData = w.data();
-				for(int iw=0; iw<matStride; iw++)
-					*(wData++) += c.phase01 * c.weight[iw];
-			}
-			//Apply weights:
-			for(int iMat=iMatStart; iMat<iMatStop; iMat++)
-			{	//Determine index range of w that contributes
-				int iElemOffset = iMat*matStride - iElemStart;
-				int iwStart = std::max(-iElemOffset, 0);
-				int iwStop = std::min(nElems-iElemOffset, matStride);
-				if(iwStop <= iwStart) continue; //nothing on current process
-				//Accumulate to buffer with weights:
-				const complex* wData = w.data() + iwStart;
-				const complex* matData = mat.data() + (iElemOffset+iwStart)*nCellsTot+iCellIn;
-				complex* bufData = buf.data() + (iElemOffset+iwStart)*nkTot+iCell;
-				for(int iw=iwStart; iw<iwStop; iw++)
-				{	*bufData += (*wData) * (*matData);
-					wData++;
-					matData += nCellsTot;
-					bufData += nkTot;
-				}
-			}
-		}
-		*/
-		watchPrep.stop();
 	}
 	else //Full cellMap mode:
 	{
