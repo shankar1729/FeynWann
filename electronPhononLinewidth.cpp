@@ -84,8 +84,9 @@ struct CollectEph
 	//---- Collect energies and kmesh ----
 	static void collectE(const FeynWann::StateE& state, void* params)
 	{	CollectEph& cEph = *((CollectEph*)params);
-		cEph.E[state.ik] = state.E;
-		cEph.kmesh[state.ik] = state.k;
+		int ik = calculateIndex(round(Diag(state.k)*cEph.fw.kfold), cEph.fw.kfold);
+		cEph.E[ik] = state.E;
+		cEph.kmesh[ik] = state.k;
 	}
 	
 	//---- Main e-ph scattering linewidth kernel ----
@@ -93,6 +94,7 @@ struct CollectEph
 	{	const FeynWann::StateE& e1 = *(mEph.e1);
 		const FeynWann::StateE& e2 = *(mEph.e2);
 		const FeynWann::StatePh& ph = *(mEph.ph);
+		const int ik1 = calculateIndex(round(Diag(e1.k)*fw.kfold), fw.kfold);
 		const int nBands = e1.E.nRows();
 		const int nModes = ph.omega.nRows();
 		const vector3<> S0; //null spin in non-relativistic modes
@@ -127,9 +129,9 @@ struct CollectEph
 						{	unsigned if1p = if1 + f1grid.size(); //index for scattering version
 							unsigned if1v = if1p + f1grid.size(); //index for valley version (if present)
 							double contrib = contribNum / (nPh+0.5 + ae*(0.5-f1grid[if1])); //net f1-dependent contribution
-							ImSigma[if1][e1.ik][b1] += contrib;
-							ImSigma[if1p][e1.ik][b1] += contrib * (1.-cosThetaScatter); //scattering version with angle factors
-							if(valley) ImSigma[if1v][e1.ik][b1] += contrib * wValley; //scattering intervalley contribution
+							ImSigma[if1][ik1][b1] += contrib;
+							ImSigma[if1p][ik1][b1] += contrib * (1.-cosThetaScatter); //scattering version with angle factors
+							if(valley) ImSigma[if1v][ik1][b1] += contrib * wValley; //scattering intervalley contribution
 						}
 					}
 				}
@@ -142,18 +144,18 @@ struct CollectEph
 	
 	//---- Wannierization ----
 	int cStart, cStop; //range of cells handled here
+	int iCol; //current column
 	matrix mlwfImSigma[3], phase;
-	
 	void wannierize(const FeynWann::StateE& state)
-	{	//Calculate for Fourier transform:
-		unsigned iCol = state.ik - fw.Hw->ikStart;
+	{	const int ik = calculateIndex(round(Diag(state.k)*fw.kfold), fw.kfold);
+		//Calculate phase for Fourier transform:
 		for(int c=cStart; c<cStop; c++)
 			phase.set(iCol, c-cStart, cis(-2*M_PI*dot(state.k, uniqueCells[c])));
 		//For each matrix:
 		for(unsigned iP=0; iP<nP; iP++) //without or with P factors
-			for(unsigned if1=0; if1<f1grid.size(); if1++)
+		{	for(unsigned if1=0; if1<f1grid.size(); if1++)
 			{	//Convert to log for the interpolation:
-				diagMatrix logImSigma(ImSigma[if1+iP*f1grid.size()][state.ik]);
+				diagMatrix logImSigma(ImSigma[if1+iP*f1grid.size()][ik]);
 				for(double& x: logImSigma) x = log(x);
 				//Switch to Wannier basis:
 				matrix logImSigmaW = state.U * logImSigma * dagger(state.U);
@@ -161,6 +163,8 @@ struct CollectEph
 				unsigned colLength = fw.nBands * fw.nBands;
 				eblas_copy(mlwfImSigma[iP].data()+colLength*(iCol*f1grid.size()+if1), logImSigmaW.data(), colLength);
 			}
+		}
+		iCol++;
 	}
 	static void eProcess(const FeynWann::StateE& state, void* params)
 	{	((CollectEph*)params)->wannierize(state);
@@ -282,9 +286,18 @@ int main(int argc, char** argv)
 	logPrintf("Effective interpolated k-mesh dimensions: ");
 	NkFine.print(globalLog, " %d ");
 	
+	//Construct q offset mesh:
+	std::vector<vector3<>> qOffset;
+	matrix3<> kfoldInv = inv(Diag(vector3<>(fw.kfold)));
+	vector3<int> iqOffset;
+	for(iqOffset[0]=0; iqOffset[0]<fw.kfoldSup[0]; iqOffset[0]++)
+	for(iqOffset[1]=0; iqOffset[1]<fw.kfoldSup[1]; iqOffset[1]++)
+	for(iqOffset[2]=0; iqOffset[2]<fw.kfoldSup[2]; iqOffset[2]++)
+		qOffset.push_back(kfoldInv * iqOffset);
+
 	//Collect energies and k-point  mesh:
 	CollectEph cEph(fw, T, EconserveWidth, NkMult, valley);
-	fw.eLoop(vector3<>(), CollectEph::collectE, &cEph);
+	for(vector3<> qOff: qOffset) fw.eLoop(qOff, CollectEph::collectE, &cEph);
 	//--- make available on all processes:
 	for(unsigned i=0; i<cEph.E.size(); i++)
 	{	int root = cEph.E[i].size() ? mpiGroup->iProcess() : mpiGroup->nProcesses(); //my process ID or N, depending on whether I have E[i]
@@ -343,7 +356,6 @@ int main(int argc, char** argv)
 			break;
 		}
 	matrix3<> G = 2*M_PI*inv(fw.R), GGT = G*(~G);
-	matrix3<> kfoldInv = inv(Diag(vector3<>(fw.kfold)));
 	if(mpiWorld->isHead())
 	{	//compile kpoint map:
 		PeriodicLookup<vector3<>> plook(kMult, GGT);
@@ -369,6 +381,10 @@ int main(int argc, char** argv)
 	k02.resize(nOffsets); mpiWorld->bcastData(k02);
 	wk02.resize(nOffsets); mpiWorld->bcastData(wk02);
 	logPrintf("\n%lu offsets in NkMult mesh reduced to %d under symmetries.\n", kMult.size(), nOffsets);
+	int nqOffset = qOffset.size();
+	int nqOffsetSq = nqOffset * nqOffset;
+	int nOffsetPairs = nOffsets * nqOffsetSq;
+	if(mpiWorld->isHead()) logPrintf("%d phonon q-mesh offset pairs parallelized over %d process groups.\n", nOffsetPairs, mpiGroupHead->nProcesses());
 	
 	logPrintf("\n");
 	if(ip.dryRun)
@@ -379,22 +395,25 @@ int main(int argc, char** argv)
 	}
 	
 	//Initialize sampling parameters:
-	int oStart=0, oStop=0;
+	int oPairStart=0, oPairStop=0;
 	if(mpiGroup->isHead())
-		TaskDivision(nOffsets, mpiGroupHead).myRange(oStart, oStop);
-	mpiGroup->bcast(oStart);
-	mpiGroup->bcast(oStop);
-	int noMine = oStop-oStart; //number of offsets handled by current group
-	int oInterval = std::max(1, int(round(noMine/50.))); //interval for reporting progress
-	
+		TaskDivision(nOffsetPairs, mpiGroupHead).myRange(oPairStart, oPairStop);
+	mpiGroup->bcast(oPairStart);
+	mpiGroup->bcast(oPairStop);
+	int noPairsMine = oPairStop-oPairStart; //number of offset pairs handled by current group
+	int oPairInterval = std::max(1, int(round(noPairsMine/50.))); //interval for reporting progress
+
 	//Collect results for each offset
 	logPrintf("Collecting ImSigma_ePh: "); logFlush();
-	for(int o=oStart; o<oStop; o++)
-	{	//Process with a random offset:
+	for(int oPair=oPairStart; oPair<oPairStop; oPair++)
+	{	int o = oPair / nqOffsetSq;
+		int iqOff1 = (oPair - o * nqOffsetSq) / nqOffset;
+		int iqOff2 = oPair % nqOffset;
+		//Process with selected offset:
 		cEph.wOffsetCur = wk02[o];
-		fw.ePhLoop(vector3<>(), k02[o], CollectEph::ePhProcess, &cEph);
+		fw.ePhLoop(qOffset[iqOff1], qOffset[iqOff2] + k02[o], CollectEph::ePhProcess, &cEph);
 		//Print progress:
-		if((o-oStart+1)%oInterval==0) { logPrintf("%d%% ", int(round((o-oStart+1)*100./noMine))); logFlush(); }
+		if((oPair-oPairStart+1)%oPairInterval==0) { logPrintf("%d%% ", int(round((oPair-oPairStart+1)*100./noPairsMine))); logFlush(); }
 	}
 	logPrintf("done.\n"); logFlush();
 	
@@ -470,12 +489,13 @@ int main(int argc, char** argv)
 	mpiGroup->bcast(cEph.cStart);
 	mpiGroup->bcast(cEph.cStop);
 	int ncMine = std::max(1, cEph.cStop - cEph.cStart);
-	int nkMine = std::max(1, fw.Hw->nk);
+	int nkMine = std::max(1, fw.Hw->nk * nqOffset);
 	//--- Wannierize
 	for(unsigned iP=0; iP<cEph.nP; iP++)
 		cEph.mlwfImSigma[iP] = zeroes(fw.nBands*fw.nBands*cEph.f1grid.size(), nkMine);
 	cEph.phase = zeroes(nkMine, ncMine);
-	fw.eLoop(vector3<>(), CollectEph::eProcess, &cEph);
+	cEph.iCol = 0;
+	for(vector3<> qOff: qOffset) fw.eLoop(qOff, CollectEph::eProcess, &cEph);
 	cEph.phase *= (1./cEph.kmesh.size()); //inverse transform normalizing factor
 	cEph.dumpWannierized(cEph.mlwfImSigma[0], fwp.wannierPrefix + ".mlwfImSigma_ePh" + fw.spinSuffix);
 	cEph.dumpWannierized(cEph.mlwfImSigma[1], fwp.wannierPrefix + ".mlwfImSigmaP_ePh" + fw.spinSuffix);

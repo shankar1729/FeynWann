@@ -229,7 +229,7 @@ int main(int argc, char** argv)
 	int nqOffset = qOffset.size();
 	int nqOffsetSq = nqOffset * nqOffset;
 	int nOffsetPairs = nOffsets * nqOffsetSq;
-	logPrintf("%d phonon q-mesh offset pairs parallelized over process groups.\n", nOffsetPairs);
+	if(mpiWorld->isHead()) logPrintf("%d phonon q-mesh offset pairs parallelized over %d process groups.\n", nOffsetPairs, mpiGroupHead->nProcesses());
 	
 	logPrintf("\n");
 	if(ip.dryRun)
