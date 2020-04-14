@@ -218,15 +218,7 @@ int main(int argc, char** argv)
 	k0.resize(nOffsets); mpiWorld->bcastData(k0);
 	wk0.resize(nOffsets); mpiWorld->bcastData(wk0);
 	logPrintf("\n%lu offsets in NkMult mesh reduced to %d under symmetries.\n", kMult.size(), nOffsets);
-	
-	//Construct q offset mesh:
-	std::vector<vector3<>> qOffset;
-	vector3<int> iqOffset;
-	for(iqOffset[0]=0; iqOffset[0]<fw.kfoldSup[0]; iqOffset[0]++)
-	for(iqOffset[1]=0; iqOffset[1]<fw.kfoldSup[1]; iqOffset[1]++)
-	for(iqOffset[2]=0; iqOffset[2]<fw.kfoldSup[2]; iqOffset[2]++)
-		qOffset.push_back(kfoldInv * iqOffset);
-	int nqOffset = qOffset.size();
+	int nqOffset = fw.qOffset.size();
 	int nqOffsetSq = nqOffset * nqOffset;
 	int nOffsetPairs = nOffsets * nqOffsetSq;
 	if(mpiWorld->isHead()) logPrintf("%d phonon q-mesh offset pairs parallelized over %d process groups.\n", nOffsetPairs, mpiGroupHead->nProcesses());
@@ -257,8 +249,8 @@ int main(int argc, char** argv)
 		int iqOff2 = oPair % nqOffset;
 		//Process with selected offset:
 		cEph.wOffsetCur = wk0[o];
-		vector3<> k01 = k0[o] + qOffset[iqOff1] + q0;
-		vector3<> k02 = k0[o] + qOffset[iqOff2];
+		vector3<> k01 = k0[o] + fw.qOffset[iqOff1] + q0;
+		vector3<> k02 = k0[o] + fw.qOffset[iqOff2];
 		fw.ePhLoop(k01, k02, CollectEph::ePhProcess, &cEph);
 		//Print progress:
 		if((oPair-oPairStart+1)%oPairInterval==0) { logPrintf("%d%% ", int(round((oPair-oPairStart+1)*100./noPairsMine))); logFlush(); }

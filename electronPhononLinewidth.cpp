@@ -286,18 +286,9 @@ int main(int argc, char** argv)
 	logPrintf("Effective interpolated k-mesh dimensions: ");
 	NkFine.print(globalLog, " %d ");
 	
-	//Construct q offset mesh:
-	std::vector<vector3<>> qOffset;
-	matrix3<> kfoldInv = inv(Diag(vector3<>(fw.kfold)));
-	vector3<int> iqOffset;
-	for(iqOffset[0]=0; iqOffset[0]<fw.kfoldSup[0]; iqOffset[0]++)
-	for(iqOffset[1]=0; iqOffset[1]<fw.kfoldSup[1]; iqOffset[1]++)
-	for(iqOffset[2]=0; iqOffset[2]<fw.kfoldSup[2]; iqOffset[2]++)
-		qOffset.push_back(kfoldInv * iqOffset);
-
 	//Collect energies and k-point  mesh:
 	CollectEph cEph(fw, T, EconserveWidth, NkMult, valley);
-	for(vector3<> qOff: qOffset) fw.eLoop(qOff, CollectEph::collectE, &cEph);
+	for(vector3<> qOff: fw.qOffset) fw.eLoop(qOff, CollectEph::collectE, &cEph);
 	//--- make available on all processes:
 	for(unsigned i=0; i<cEph.E.size(); i++)
 	{	int root = cEph.E[i].size() ? mpiGroup->iProcess() : mpiGroup->nProcesses(); //my process ID or N, depending on whether I have E[i]
@@ -356,6 +347,7 @@ int main(int argc, char** argv)
 			break;
 		}
 	matrix3<> G = 2*M_PI*inv(fw.R), GGT = G*(~G);
+	matrix3<> kfoldInv = inv(Diag(vector3<>(fw.kfold)));
 	if(mpiWorld->isHead())
 	{	//compile kpoint map:
 		PeriodicLookup<vector3<>> plook(kMult, GGT);
@@ -381,7 +373,7 @@ int main(int argc, char** argv)
 	k02.resize(nOffsets); mpiWorld->bcastData(k02);
 	wk02.resize(nOffsets); mpiWorld->bcastData(wk02);
 	logPrintf("\n%lu offsets in NkMult mesh reduced to %d under symmetries.\n", kMult.size(), nOffsets);
-	int nqOffset = qOffset.size();
+	int nqOffset = fw.qOffset.size();
 	int nqOffsetSq = nqOffset * nqOffset;
 	int nOffsetPairs = nOffsets * nqOffsetSq;
 	if(mpiWorld->isHead()) logPrintf("%d phonon q-mesh offset pairs parallelized over %d process groups.\n", nOffsetPairs, mpiGroupHead->nProcesses());
@@ -411,7 +403,7 @@ int main(int argc, char** argv)
 		int iqOff2 = oPair % nqOffset;
 		//Process with selected offset:
 		cEph.wOffsetCur = wk02[o];
-		fw.ePhLoop(qOffset[iqOff1], qOffset[iqOff2] + k02[o], CollectEph::ePhProcess, &cEph);
+		fw.ePhLoop(fw.qOffset[iqOff1], fw.qOffset[iqOff2] + k02[o], CollectEph::ePhProcess, &cEph);
 		//Print progress:
 		if((oPair-oPairStart+1)%oPairInterval==0) { logPrintf("%d%% ", int(round((oPair-oPairStart+1)*100./noPairsMine))); logFlush(); }
 	}
@@ -495,7 +487,7 @@ int main(int argc, char** argv)
 		cEph.mlwfImSigma[iP] = zeroes(fw.nBands*fw.nBands*cEph.f1grid.size(), nkMine);
 	cEph.phase = zeroes(nkMine, ncMine);
 	cEph.iCol = 0;
-	for(vector3<> qOff: qOffset) fw.eLoop(qOff, CollectEph::eProcess, &cEph);
+	for(vector3<> qOff: fw.qOffset) fw.eLoop(qOff, CollectEph::eProcess, &cEph);
 	cEph.phase *= (1./cEph.kmesh.size()); //inverse transform normalizing factor
 	cEph.dumpWannierized(cEph.mlwfImSigma[0], fwp.wannierPrefix + ".mlwfImSigma_ePh" + fw.spinSuffix);
 	cEph.dumpWannierized(cEph.mlwfImSigma[1], fwp.wannierPrefix + ".mlwfImSigmaP_ePh" + fw.spinSuffix);

@@ -323,6 +323,7 @@ FeynWann::FeynWann(FeynWannParams& fwp)
 	//Initialize phonon properties:
 	realPartOnly = (nSpinor==1);
 	offsetDim = kfold; //size of an offset is determined by electronic k-points by default
+	qOffset.assign(1, vector3<>()); //no q-mesh offsets required to cover k-mesh by default
 	if(fwp.needPhonons)
 	{	//Read relevant parameters from phonon.out:
 		fname = fwp.phononPrefix + ".out";
@@ -358,6 +359,15 @@ FeynWann::FeynWann(FeynWannParams& fwp)
 		}
 		logPrintf("\n");
 		offsetDim = phononSup; //size of an offset is limited by phonon supercell
+		
+		//Initialize q-mesh offsets that will cover k-mesh:
+		qOffset.clear();
+		vector3<int> iqOffset;
+		matrix3<> kfoldInv = inv(Diag(vector3<>(kfold)));
+		for(iqOffset[0]=0; iqOffset[0]<kfoldSup[0]; iqOffset[0]++)
+		for(iqOffset[1]=0; iqOffset[1]<kfoldSup[1]; iqOffset[1]++)
+		for(iqOffset[2]=0; iqOffset[2]<kfoldSup[2]; iqOffset[2]++)
+			qOffset.push_back(kfoldInv * iqOffset);
 		
 		//Read phonon basis:
 		invsqrtM = readPhononBasis(fwp.totalEprefix + ".phononBasis");

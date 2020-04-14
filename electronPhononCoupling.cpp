@@ -105,6 +105,7 @@ int main(int argc, char** argv)
 	std::shared_ptr<FeynWann> fw = std::make_shared<FeynWann>(fwp);
 	size_t nKeff = nOffsets * fw->ePhCountPerOffset();
 	logPrintf("Effectively sampled nKpairs: %lu\n", nKeff);
+	if(mpiWorld->isHead()) logPrintf("%d phonon q-mesh offset pairs parallelized over %d process groups.\n", nOffsets, mpiGroupHead->nProcesses());
 
 	if(ip.dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
@@ -130,7 +131,7 @@ int main(int argc, char** argv)
 	
 	//Initialize energy grid:
 	EnergyRange er = { DBL_MAX, -DBL_MAX };
-	fw->eLoop(vector3<>(), EnergyRange::eProcess, &er);
+	for(vector3<> qOff: fw->qOffset) fw->eLoop(qOff, EnergyRange::eProcess, &er);
 	mpiWorld->allReduce(er.Emin, MPIUtil::ReduceMin);
 	mpiWorld->allReduce(er.Emax, MPIUtil::ReduceMax);
 	er.Emin = dE * (floor(er.Emin/dE) - 10); //add some margin and ensure grid contains 0

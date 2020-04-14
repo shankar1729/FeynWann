@@ -131,6 +131,7 @@ public:
 	vector3<int> phononSup; //!< phonon supercell in original calculation
 	vector3<int> kfoldSup; //!< k-point folding of phonon supercell i.e. kfold / phononSup
 	vector3<int> offsetDim; //!< k/q mesh dimensions associated with offset = kfold without phonons and phononSup with phonons
+	std::vector<vector3<>> qOffset; //!< list of offsets to q-mesh requred to cover k-mesh (of length = prod(kfoldSup))
 	vector3<bool> isTruncated; //!< whether each direction is truncated
 	std::vector<SpaceGroupOp> sym; //!< symmetries of DFT calculation
 	int nBands; //!< number of Wannier bands for the electrons
