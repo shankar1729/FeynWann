@@ -111,7 +111,6 @@ struct SpinRelaxCollect
 			}
 		return result;
 	}
-
 	
 	//Calculate spin relaxation rate numerator (Gamma):
 	void process(const FeynWann::MatrixEph& mEph)
@@ -415,6 +414,10 @@ int main(int argc, char** argv)
 	size_t nKtotPerBlock = fw.eCountPerOffset() * nOffsetsPerBlock;
 	size_t nKpairsPerBlock = fw.ePhCountPerOffset() * nOffsetsPerBlock;
 	logPrintf("Effectively sampled nKpairs: %lu\n", nKpairsPerBlock * nBlocks);
+	if(mpiWorld->isHead())
+		logPrintf("%d phonon q-mesh offsets per block parallelized over %d process groups.\n",
+			nOffsetsPerBlock, mpiGroupHead->nProcesses());
+	
 	int oStart = 0, oStop = 0;
 	if(mpiGroup->isHead())
 		TaskDivision(nOffsetsPerBlock, mpiGroupHead).myRange(oStart, oStop);
