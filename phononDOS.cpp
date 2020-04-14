@@ -67,7 +67,8 @@ int main(int argc, char** argv)
 	FeynWann fw(fwp);
 	size_t nKpts = nOffsets * fw.phCountPerOffset();
 	logPrintf("Effectively sampled nKpts: %lu\n", nKpts);
-	
+	if(mpiWorld->isHead()) logPrintf("%lu phonon q-mesh offsets parallelized over %d process groups.\n", nOffsets, mpiGroupHead->nProcesses());
+
 	if(ip.dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
 		fw.free();
