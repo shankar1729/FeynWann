@@ -115,7 +115,10 @@ public:
 	//! Calculate electronic properties for each pair of k-points between two meshes offset by k01 and k02,
 	//! as well as phonon properties and electron-phonon matrix elements connecting these k-points.
 	//! Calls provided callback function ePhProcess on each of them, along with provided params
-	void ePhLoop(const vector3<>& k01, const vector3<>& k02, ePhProcessFunc ePhProcess, void* params);
+	//! Optionally invoke non-null eProcess and phProcess callback functions (with same params) before the ePhProcess call back function,
+	//! which is effectively a more efficient way of calling eLoop's and phLoop with the same offsets beforehand.
+	void ePhLoop(const vector3<>& k01, const vector3<>& k02, ePhProcessFunc ePhProcess, void* params,
+		eProcessFunc eProcess1=0, eProcessFunc eProcess2=0, phProcessFunc phProcess=0);
 	void ePhCalc(const StateE& e1, const StateE& e2, const StatePh& ph, MatrixEph& m); //!< Calculate e-ph matrix elements coupling e1, e2 and ph and store it in m on group head
 	size_t ePhCountPerOffset() const { return size_t(Hw->nkTot) * size_t(Hw->nkTot); } //!< number of k-pairs sampled per offset = prod(offsetDim)^2
 	

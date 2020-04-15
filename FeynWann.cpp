@@ -649,7 +649,8 @@ void FeynWann::phCalc(const vector3<>& q, FeynWann::StatePh& ph)
 }
 
 
-void FeynWann::ePhLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::ePhProcessFunc ePhProcess, void* params)
+void FeynWann::ePhLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::ePhProcessFunc ePhProcess, void* params,
+	eProcessFunc eProcess1, eProcessFunc eProcess2, phProcessFunc phProcess)
 {	static StopWatch watchBcast("FeynWann::ePhLoop:bcast"); 
 	static StopWatch watchCallback("FeynWann::ePhLoop:callback");
 	assert(fwp.needPhonons);
@@ -660,6 +661,7 @@ void FeynWann::ePhLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::ePh
 	
 	//Initialize electronic states for 1 and 2:
 	#define PrepareElecStates(i) \
+		bool withinRange##i = false; \
 		std::vector<StateE> e##i(prodOffsetDim); /* States */ \
 		{	Hw->transform(k0##i); \
 			if(fwp.needVelocity) Pw->transform(k0##i); \
@@ -672,11 +674,13 @@ void FeynWann::ePhLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::ePh
 			Dw->transform(k0##i); \
 			int ik = Hw->ikStart; \
 			int ikStop = ik + Hw->nk; \
-			bool withinRange = false; \
 			PartialLoop3D(offsetDim, ik, ikStop, e##i[ik].k, k0##i, \
 				e##i[ik].ik = ik; \
 				setState(e##i[ik]); \
-				if(e##i[ik].withinRange) withinRange = true; \
+				if(e##i[ik].withinRange) \
+				{	withinRange##i = true; \
+					if(eProcess##i) eProcess##i(e##i[ik], params); \
+				} \
 			) \
 			/* Make available on all processes of group */ \
 			if(mpiGroup->nProcesses() > 1) \
@@ -684,14 +688,15 @@ void FeynWann::ePhLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::ePh
 				for(int whose=0; whose<mpiGroup->nProcesses(); whose++) \
 					for(int ik=Hw->ikStartProc[whose]; ik<Hw->ikStartProc[whose+1]; ik++) \
 						bcastState(e##i[ik], mpiGroup, whose); \
-				mpiGroup->allReduce(withinRange, MPIUtil::ReduceLOr); \
+				mpiGroup->allReduce(withinRange##i, MPIUtil::ReduceLOr); \
 				watchBcast.stop(); \
 			} \
-			if(not withinRange) return; /*no states in active window*/ \
 		}
 	inEphLoop = true; //turns on sum rule handling in setState and bcastState
 	PrepareElecStates(1) //prepares e1 and V1
+	if(not withinRange1 and not (eProcess2 or phProcess)) return; //no states in active window of 1 and no other callbacks requested
 	PrepareElecStates(2) //prepares e2 and V2
+	if(not (withinRange1 and withinRange2) and not phProcess) return; //no states in either active window (and no other callbacks requested)
 	inEphLoop = false;
 	#undef PrepareElecStates
 	
@@ -704,6 +709,7 @@ void FeynWann::ePhLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::ePh
 		PartialLoop3D(offsetDim, iq, iqStop, ph[iq].q, q0,
 			ph[iq].iq = iq;
 			setState(ph[iq]);
+			if(phProcess) phProcess(ph[iq], params);
 		)
 		//Make available on all processes of group:
 		if(mpiGroup->nProcesses() > 1)
@@ -714,6 +720,7 @@ void FeynWann::ePhLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::ePh
 			watchBcast.stop();
 		}
 	}
+	if(not (withinRange1 and withinRange2)) return; //no pairs of states within active window
 	
 	//Calculate electron-phonon matrix elements:
 	HePhW->transform(k01, k02);

@@ -466,9 +466,9 @@ int main(int argc, char** argv)
 			//Process with a random offset pair:
 			vector3<> k01 = fw.randomVector(mpiGroup); //must be constant across group
 			vector3<> k02 = fw.randomVector(mpiGroup); //must be constant across group
-			fw.ePhLoop(k01, k02, SpinRelaxCollect::ePhProcess, &src); //for Gamma
-			fw.eLoop(k01, SpinRelaxCollect::eProcess, &src); //for Chi
-			fw.eLoop(k02, SpinRelaxCollect::eProcess, &src); //for Chi
+			fw.ePhLoop(k01, k02, SpinRelaxCollect::ePhProcess, &src, //for Gamma
+				SpinRelaxCollect::eProcess,   //for Chi at k01
+				SpinRelaxCollect::eProcess ); //for Chi at k02
 			//Print progress:
 			if((o+1)%oInterval==0) { logPrintf("%d%% ", int(round((o+1)*100./noMine))); logFlush(); }
 		}
