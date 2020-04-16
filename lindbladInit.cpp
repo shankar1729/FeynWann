@@ -578,6 +578,7 @@ struct LindbladInit
 					fw.ePhLoop(k01, k02, addEph, this, initFunc, 0, 0, &mask1, &mask2, &maskPair);
 					initDone = true;
 				}
+				if(not initDone) fw.eLoop(k01, initKpoint, this, &mask); //corner case: entire offset has no partners (make sure init still happens)
 				//Move e-ph matrix elements to process that owns each ik:
 				if(mpiGroup->nProcesses() > 1)
 				{	for(size_t ik=ikStart; ik<ikStop; ik++)
