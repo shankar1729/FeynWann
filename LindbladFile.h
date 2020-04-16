@@ -122,6 +122,21 @@ namespace LindbladFile
 			G.resize(Gsize);
 			mpiUtil->freadData(G, fp);
 		}
+		void send(MPIUtil* mpiUtil, int dest, int tag) const
+		{	mpiUtil->send(jk, dest, tag);
+			mpiUtil->send(omegaPh, dest, tag);
+			size_t Gsize = G.size();
+			mpiUtil->send(Gsize, dest, tag);
+			mpiUtil->send((const char*)G.data(), sizeof(SparseEntry)*Gsize, dest, tag);
+		}
+		void recv(MPIUtil* mpiUtil, int src, int tag)
+		{	mpiUtil->recv(jk, src, tag);
+			mpiUtil->recv(omegaPh, src, tag);
+			size_t Gsize;
+			mpiUtil->recv(Gsize, src, tag);
+			G.resize(Gsize);
+			mpiUtil->recv((char*)G.data(), sizeof(SparseEntry)*Gsize, src, tag);
+		}
 		
 		//For searching partner lists:
 		inline bool operator<(const size_t jk2) const

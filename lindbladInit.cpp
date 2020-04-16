@@ -41,6 +41,11 @@ template<typename ArrayType> struct IndexCompare
 	template<typename Integer> bool operator()(Integer i1, Integer i2) const { return array[i1] < array[i2]; }
 };
 
+//Helper class to use ostream functions on a memory buffer
+struct membuf: std::streambuf // derive because std::streambuf constructor is protected
+{	membuf(std::vector<char>& buf) { setp(buf.data(), buf.data()+buf.size()); } // set start end end pointers
+};
+
 //Lindblad initialization using FeynWann callback
 struct LindbladInit
 {	
@@ -100,6 +105,15 @@ struct LindbladInit
 			index = (size_t)round(NkFine[iDir]*(index+ki));
 		}
 		return index;
+	}
+	//Search for k using kIndexMap; return false if not found
+	inline bool findK(vector3<> k, size_t&ik)
+	{	const std::map<size_t,size_t>::iterator iter = kIndexMap.find(kIndex(k));
+		if(iter != kIndexMap.end())
+		{	ik = iter->second;
+			return true;
+		}
+		else return false;
 	}
 	
 	inline void kSelect(const FeynWann::StateE& state)
@@ -256,31 +270,28 @@ struct LindbladInit
 		for(size_t ik1=0; ik1<k.size(); ik1++)
 		{	const vector3<>& k1 = k[ik1];
 			vector3<> k2 = k1 - state.q; //momentum conservation
-			const std::map<size_t,size_t>::iterator iter = kIndexMap.find(kIndex(k2));
-			if(iter != kIndexMap.end())
-			{	size_t ik2 = iter->second;
-				//Check energy conservation for pair of bands within active range:
-				//--- determine ranges of all E1 and E2:
-				const double *E1begin = E.data()+ik1*fw.nBands, *E1end = E1begin+fw.nBands;
-				const double *E2begin = E.data()+ik2*fw.nBands, *E2end = E2begin+fw.nBands;
-				//--- narrow to active energy ranges:
-				selectActive(E1begin, E1end, Estart, Estop);
-				selectActive(E2begin, E2end, Estart, Estop);
-				//--- check energy ranges:
-				bool Econserve = false;
-				for(const double* E1=E1begin; E1<E1end; E1++) //E1 in active range
-				{	for(const double* E2=E2begin; E2<E2end; E2++) //E2 in active range
-					{	for(const double omegaPh: state.omega) if(omegaPh>omegaPhCut) //loop over non-zero phonon frequencies
-						{	double deltaE = (*E1) - (*E2) - omegaPh; //energy conservation violation
-							if(fabs(deltaE) < nEphDelta*ePhDelta) //else negligible at the 10^-3 level for a Gaussian
-							{	Econserve = true;
-								nActivePairs++;
-							}
+			size_t ik2; if(not findK(k2, ik2)) continue;
+			//Check energy conservation for pair of bands within active range:
+			//--- determine ranges of all E1 and E2:
+			const double *E1begin = E.data()+ik1*fw.nBands, *E1end = E1begin+fw.nBands;
+			const double *E2begin = E.data()+ik2*fw.nBands, *E2end = E2begin+fw.nBands;
+			//--- narrow to active energy ranges:
+			selectActive(E1begin, E1end, Estart, Estop);
+			selectActive(E2begin, E2end, Estart, Estop);
+			//--- check energy ranges:
+			bool Econserve = false;
+			for(const double* E1=E1begin; E1<E1end; E1++) //E1 in active range
+			{	for(const double* E2=E2begin; E2<E2end; E2++) //E2 in active range
+				{	for(const double omegaPh: state.omega) if(omegaPh>omegaPhCut) //loop over non-zero phonon frequencies
+					{	double deltaE = (*E1) - (*E2) - omegaPh; //energy conservation violation
+						if(fabs(deltaE) < nEphDelta*ePhDelta) //else negligible at the 10^-3 level for a Gaussian
+						{	Econserve = true;
+							nActivePairs++;
 						}
 					}
 				}
-				if(Econserve) kpartners[ik1].push_back(ik2);
 			}
+			if(Econserve) kpartners[ik1].push_back(ik2);
 		}
 	}
 	static void kpSelect(const FeynWann::StatePh& state, void* params)
@@ -397,6 +408,14 @@ struct LindbladInit
 	std::vector<int> kpWhose; //index of process in mpiWorld that owns each entry in kpAll
 	std::vector<size_t> kpSize; //size in bytes of each entry in kpAll when written to file
 	
+	//Wrapper to selectActive that computes offset and length of the active range (rather than narrowing the iterator range)
+	inline void activeOffsets(const double* Ebegin, const double* Eend, double Estart, double Estop, int& offset, int& length)
+	{	const double *EactiveBegin = Ebegin, *EactiveEnd = Eend;
+		selectActive(EactiveBegin, EactiveEnd, Estart, Estop);
+		offset = EactiveBegin - Ebegin;
+		length = EactiveEnd - EactiveBegin;
+	}
+	
 	//Initialize k-point data:
 	void initKpoint(const FeynWann::StateE& state)
 	{	LindbladFile::Kpoint& kp = kpOffset[state.ik];
@@ -404,29 +423,26 @@ struct LindbladInit
 		
 		//Find k-point index in global list:
 		kp.k = state.k;
-		const std::map<size_t,size_t>::iterator iter = kIndexMap.find(kIndex(kp.k));
-		if(iter == kIndexMap.end()) return; //not an active k-point
-		size_t ik = iter->second;
+		size_t ik; if(not findK(kp.k, ik)) return;
 		
 		//Determine energy ranges:
 		const double *Ebegin = E.data()+ik*fw.nBands, *Eend = Ebegin+fw.nBands;
 		//--- pump-active (inner) energy range:
-		const double *EinnerBegin = Ebegin, *EinnerEnd = Eend;
-		selectActive(EinnerBegin, EinnerEnd, Estart, Estop);
-		kp.nInner = EinnerEnd - EinnerBegin;
+		int innerOffset = 0; //offset from original bands to inner window
+		activeOffsets(Ebegin, Eend, Estart, Estop, innerOffset, kp.nInner);
+		double EinnerMin = Ebegin[innerOffset];
+		double EinnerMax = Ebegin[innerOffset+kp.nInner-1];
 		//--- probe-active (outer) energy range:
-		const double *EouterBegin = Ebegin, *EouterEnd = Eend;
-		selectActive(EouterBegin, EouterEnd,
-			(*EinnerBegin)-probeOmegaMax, //lowest occupied energy accessible from bottom of active window
-			(*(EinnerEnd-1))+probeOmegaMax);  //highest unoccupied energy accessible from top of active window
-		kp.nOuter = EouterEnd - EouterBegin;
-		kp.innerStart = EinnerBegin - EouterBegin;
-		int innerOffset = EinnerBegin - Ebegin; //offset from original bands to inner window
-		int outerOffset = EouterBegin - Ebegin; //offset from original bands to outer window
+		int outerOffset = 0; //offset from original bands to outer window
+		activeOffsets(Ebegin, Eend,
+			EinnerMin-probeOmegaMax, //lowest occupied energy accessible from bottom of active window
+			EinnerMax+probeOmegaMax,  //highest unoccupied energy accessible from top of active window
+			outerOffset, kp.nOuter);
+		kp.innerStart = innerOffset - outerOffset;
 		
 		//Save energy and matrix elements to kp:
 		//Energies:
-		kp.E.assign(EouterBegin, EouterEnd);
+		kp.E.assign(Ebegin+outerOffset, Ebegin+outerOffset+kp.nOuter);
 		//Momenta:
 		for(int iDir=0; iDir<3; iDir++)
 			kp.P[iDir] = state.v[iDir](innerOffset,innerOffset+kp.nInner, outerOffset,outerOffset+kp.nOuter);
@@ -437,6 +453,51 @@ struct LindbladInit
 	}
 	static void initKpoint(const FeynWann::StateE& state, void* params)
 	{	((LindbladInit*)params)->initKpoint(state);
+	}
+	
+	//Add e-ph nmatrix element to k-point data:
+	void addEph(const FeynWann::MatrixEph& mEph)
+	{	const FeynWann::StateE& e1 = *(mEph.e1);
+		const FeynWann::StateE& e2 = *(mEph.e2);
+		const FeynWann::StatePh& ph = *(mEph.ph);
+		LindbladFile::Kpoint& kp1 = kpOffset[e1.ik];
+		//Get global index and active ranges of each point:
+		#define PREP(i) \
+			size_t ik##i; \
+			int innerOffset##i, nInner##i; \
+			{	if(not findK(e##i.k, ik##i)) return; \
+				const double *Ebegin = E.data()+ik##i*fw.nBands; \
+				const double *Eend= Ebegin + fw.nBands; \
+				activeOffsets(Ebegin, Eend, Estart, Estop, innerOffset##i, nInner##i); \
+			}
+		PREP(1)
+		PREP(2)
+		#undef PREP
+		//Collect energy-conserving matrix elements within active window:
+		for(int alpha=0; alpha<fw.nModes; alpha++)
+		{	LindbladFile::GePhEntry g;
+			g.jk = ik2;
+			g.omegaPh = ph.omega[alpha];
+			if(g.omegaPh < omegaPhCut) continue; //avoid zero frequency phonons
+			double sigmaInv = 1./std::min(ePhDelta, g.omegaPh/(nEphDelta+1)); //make sure flipped energies not included within energy conservation
+			double deltaPrefac = sqrt(sigmaInv/sqrt(M_PI)) * kpairWeight[ik1]; //account for down-sampling weight (1 if no down-sampling)
+			const matrix& M = mEph.M[alpha];
+			for(int n2=innerOffset2; n2<innerOffset2+nInner2; n2++)
+				for(int n1=innerOffset1; n1<innerOffset1+nInner1; n1++)
+				{	double deltaEbySigma = sigmaInv*(e1.E[n1] - e2.E[n2] - g.omegaPh);
+					if(fabs(deltaEbySigma) < nEphDelta)
+					{	SparseEntry s;
+						s.i = n1 - innerOffset1;
+						s.j = n2 - innerOffset2;
+						s.val = M(n1,n2) * (deltaPrefac*exp(-0.5*deltaEbySigma*deltaEbySigma)); //apply e-conservation factor
+						g.G.push_back(s);
+					}
+				}
+			if(g.G.size()) kp1.GePh.push_back(g);
+		}
+	}
+	static void addEph(const FeynWann::MatrixEph& mEph, void* params)
+	{	((LindbladInit*)params)->addEph(mEph);
 	}
 	
 	void saveData(const std::vector<vector3<>>& k0, string outFile)
@@ -470,14 +531,87 @@ struct LindbladInit
 			vector3<> k01 = k0[offKcur[0]] + fw.qOffset[offKcur[1]];
 			
 			//Initialize mask of active states:
-			std::vector<bool> mask(fw.eCountPerOffset(), false);
+			size_t nkOff = fw.eCountPerOffset(); //number of k in an offset
+			std::vector<bool> mask(nkOff, false);
 			for(size_t ik=ikStart; ik<ikStop; ik++) mask[offK[ik][2]] = true;
 			
 			kpOffset.clear();
-			kpOffset.resize(fw.eCountPerOffset());
+			kpOffset.resize(nkOff);
 			
 			if(ePhEnabled)
-			{	die("Not yet implemented.\n");
+			{	//Create list of offsets contained in partners of all k in current offset:
+				std::map<vector3<int>, std::vector<bool>> maskMap; //(ik1,ik2) mask indexed by partner offset
+				for(size_t ik=ikStart; ik<ikStop; ik++)
+				{	int ikOff = offK[ik][2]; //index of ik within its offset
+					for(size_t jk: kpartners[ik])
+					{	vector3<int> offKpartner = offK[jk];
+						int jkOff = offKpartner[2]; //index of jk within its offset
+						//Locate entry in maskMap or create one:
+						offKpartner[2] = 0; //unique partner offset index to maskMap
+						auto iter = maskMap.find(offKpartner);
+						if(iter == maskMap.end())
+							iter = maskMap.insert(iter, std::make_pair(offKpartner, std::vector<bool>(nkOff*nkOff, false)));
+						//Update mask:
+						iter->second[ikOff*nkOff+jkOff] = true;
+					}
+				}
+				//Loop over partner offsets:
+				bool initDone = false; //whether k-point has already been initialized
+				for(auto entry: maskMap)
+				{	//Initialize the masks:
+					const std::vector<bool>& maskPair =  entry.second; //mask of which pairs of k are active in current offset pair
+					std::vector<bool> mask1(nkOff, false); //which ikOffs are encountered in maskPair
+					std::vector<bool> mask2(nkOff, false); //which jkOffs are encountered in maskPair
+					if(not initDone) mask1 = mask; //make sure all k-points are inited in first case (not just ones with neighbors in that offset)
+					auto maskPairIter = maskPair.begin();
+					for(size_t ikOff=0; ikOff<nkOff; ikOff++)
+						for(size_t jkOff=0; jkOff<nkOff; jkOff++)
+							if(*(maskPairIter++))
+							{	mask1[ikOff] = true;
+								mask2[jkOff] = true;
+							}
+					//Compute matrix elements:
+					vector3<int> offKpartner = entry.first;
+					vector3<> k02 = k0[offKpartner[0]] + fw.qOffset[offKpartner[1]];
+					FeynWann::eProcessFunc initFunc = 0; //after first pass, only need to invoke addEph(),
+					if(not initDone) initFunc = initKpoint; //... but in first pass, also invoke initKpoint()
+					fw.ePhLoop(k01, k02, addEph, this, initFunc, 0, 0, &mask1, &mask2, &maskPair);
+					initDone = true;
+				}
+				//Move e-ph matrix elements to process that owns each ik:
+				if(mpiGroup->nProcesses() > 1)
+				{	for(size_t ik=ikStart; ik<ikStop; ik++)
+					{	LindbladFile::Kpoint& kp = kpOffset[offK[ik][2]]; //current k-point data
+						int whose = kp.E.size() ? mpiGroup->iProcess() : -1;
+						mpiGroup->allReduce(whose, MPIUtil::ReduceMax); //now whose points to process within group that owns ik
+						bool isMine = (whose == mpiGroup->iProcess());
+						//Determine number of entries on each process:
+						std::vector<size_t> nGePh(mpiGroup->nProcesses(), 0);
+						nGePh[mpiGroup->iProcess()] = kp.GePh.size();
+						mpiGroup->reduceData(nGePh, MPIUtil::ReduceMax, whose);
+						if(isMine)
+						{	size_t nGePhTot = 0;  for(size_t n: nGePh) nGePhTot += n; //total number of entries
+							std::vector<LindbladFile::GePhEntry> GePh(nGePhTot);
+							auto iter = GePh.begin();
+							for(int jProc=0; jProc<mpiGroup->nProcesses(); jProc++)
+							{	if(jProc == mpiGroup->iProcess())
+								{	for(const LindbladFile::GePhEntry& g: kp.GePh)
+										*(iter++) = g;
+								}
+								else
+								{	for(size_t i=0; i<nGePh[jProc]; i++)
+										(iter++)->recv(mpiGroup, jProc, ik);
+								}
+							}
+							std::swap(kp.GePh, GePh);
+						}
+						else
+						{	for(LindbladFile::GePhEntry g: kp.GePh)
+								g.send(mpiGroup, whose, ik);
+							kp.GePh.clear();
+						}
+					}
+				}
 			}
 			else
 			{	fw.eLoop(k01, initKpoint, this, &mask);
@@ -531,30 +665,28 @@ struct LindbladInit
 		size_t ikInterval = std::max(1, int(round(h.nk/50.))); //interval for reporting progress
 		for(size_t ik=0; ik<h.nk; ik++)
 		{	const LindbladFile::Kpoint& kp = kpAll[ik];
-			std::ostringstream oss; //buffer containing serialization of kp
+			std::vector<char> buf(kpSize[ik]); //buffer containing serialization of kp
 			bool isMine = (kpWhose[ik] == mpiWorld->iProcess());
 			if(isMine)
-			{	kp.write(oss, h);
+			{	membuf mbuf(buf);
+				std::ostream os(&mbuf);
+				kp.write(os, h);
 				#ifdef MPI_SAFE_WRITE
 				if(not mpiWorld->isHead()) //send to head to write:
-					mpiWorld->send(oss.str().data(), kpSize[ik], 0, ik);
+					mpiWorld->sendData(buf, 0, ik);
 				#else
 				//Write from each process in parallel:
 				mpiWorld->fseek(fp, byteOffsets[ik], SEEK_SET);
-				mpiWorld->fwrite(oss.str().data(), 1, kpSize[ik], fp);
+				mpiWorld->fwrite(buf.data(), 1, kpSize[ik], fp);
 				#endif
 			}
 			#ifdef MPI_SAFE_WRITE
 			//Write data from head:
 			if(mpiWorld->isHead())
-			{	std::vector<char> buf;
-				if(not isMine) //Recv data to write
-				{	buf.resize(kpSize[ik]);
+			{	if(not isMine) //Recv data to write
 					mpiWorld->recvData(buf, kpWhose[ik], ik);
-				}
-				const char* bufData = isMine ? oss.str().data() : buf.data();
 				fseek(fp, byteOffsets[ik], SEEK_SET);
-				fwrite(bufData, 1, kpSize[ik], fp);
+				fwrite(buf.data(), 1, kpSize[ik], fp);
 			}
 			#endif
 			//Print progress:
@@ -567,58 +699,6 @@ struct LindbladInit
 		#else
 		mpiWorld->fclose(fp);
 		#endif
-
-/*
-				//Electron-phonon matrix elements:
-				if(h.ePhEnabled)
-				{
-					for(size_t jk: kpartners[ik])
-					{	
-						//Compute other electronic state:
-						FeynWann::StateE ej;
-						fw.eCalc(k[jk], ej);
-						//--- determine active range:
-						const double *EjBegin = E.data()+jk*fw.nBands, *EjEnd = EjBegin+fw.nBands;
-						const double *EjInnerBegin = EjBegin, *EjInnerEnd = EjEnd;
-						selectActive(EjInnerBegin, EjInnerEnd, Estart, Estop);
-						int innerOffset_j = EjInnerBegin - EjBegin;
-						int nInner_j = EjInnerEnd - EjInnerBegin;
-						
-						//Compute phonon state:
-						FeynWann::StatePh ph;
-						fw.phCalc(k[ik]-k[jk], ph);
-						
-						//Compute e-ph matrix elements:
-						FeynWann::MatrixEph m;
-						fw.ePhCalc(ei, ej, ph, m);
-						
-						//Collect energy-conserving matrix elements within active window:
-						if(mpiGroup->isHead())
-						{	for(int alpha=0; alpha<fw.nModes; alpha++)
-							{	LindbladFile::GePhEntry g;
-								g.jk = jk;
-								g.omegaPh = m.ph->omega[alpha];
-								if(g.omegaPh < omegaPhCut) continue; //avoid zero frequency phonons
-								double sigmaInv = 1./std::min(ePhDelta, g.omegaPh/(nEphDelta+1)); //make sure flipped energies not included within energy conservation
-								double deltaPrefac = sqrt(sigmaInv/sqrt(M_PI)) * kpairWeight[ik]; //account for down-sampling weight (1 if no down-sampling)
-								const matrix& M = m.M[alpha];
-								for(int n2=innerOffset_j; n2<innerOffset_j+nInner_j; n2++)
-									for(int n1=innerOffset; n1<innerOffset+kp.nInner; n1++)
-									{	double deltaEbySigma = sigmaInv*(m.e1->E[n1] - m.e2->E[n2] - g.omegaPh);
-										if(fabs(deltaEbySigma) < nEphDelta)
-										{	SparseEntry s;
-											s.i = n1 - innerOffset;
-											s.j = n2 - innerOffset_j;
-											s.val = M(n1,n2) * (deltaPrefac*exp(-0.5*deltaEbySigma*deltaEbySigma)); //apply e-conservation factor
-											g.G.push_back(s);
-										}
-									}
-								if(g.G.size()) kp.GePh.push_back(g);
-							}
-						}
-					}
-				}
-*/
 	}
 };
 

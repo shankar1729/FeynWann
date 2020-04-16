@@ -577,7 +577,7 @@ template<typename T> vector3<T> elemwiseProd(vector3<int> a, vector3<T> b)
 		} \
 	}
 
-void FeynWann::eLoop(const vector3<>& k0, FeynWann::eProcessFunc eProcess, void* params, std::vector<bool>* mask)
+void FeynWann::eLoop(const vector3<>& k0, FeynWann::eProcessFunc eProcess, void* params, const std::vector<bool>* mask)
 {	static StopWatch watchCallback("FeynWann::eLoop:callback");
 	//Run Fourier transforms with this offset:
 	Hw->transform(k0);
@@ -655,7 +655,7 @@ void FeynWann::phCalc(const vector3<>& q, FeynWann::StatePh& ph)
 
 void FeynWann::ePhLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::ePhProcessFunc ePhProcess, void* params,
 	eProcessFunc eProcess1, eProcessFunc eProcess2, phProcessFunc phProcess,
-	std::vector<bool>* eMask1, std::vector<bool>* eMask2, std::vector<bool>* ePhMask)
+	const std::vector<bool>* eMask1, const std::vector<bool>* eMask2, const std::vector<bool>* ePhMask)
 {	static StopWatch watchBcast("FeynWann::ePhLoop:bcast"); 
 	static StopWatch watchCallback("FeynWann::ePhLoop:callback");
 	assert(fwp.needPhonons);
@@ -740,7 +740,8 @@ void FeynWann::ePhLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::ePh
 			PartialLoop3D(offsetDim, ik2, prodOffsetDim, k2, k02,
 				if(ikPair>=ikPairStart and ikPair<ikPairStop //subset to be evaluated on this process
 					and (not (fwp.ePhHeadOnly and ikPair)) //overridden in k-path debug mode to be ikPair==0 alone
-					and e2[ik2].withinRange ) //k2 has at least one state within active energy range
+					and e2[ik2].withinRange //k2 has at least one state within active energy range
+					and ((not ePhMask) or ePhMask->at(ikPair)) ) //state pair is not masked out explicitly
 				{	//Identify associated phonon states:
 					int iqIndex = calculateIndex(ik1v - ik2v, offsetDim);
 					//Set e-ph matrix elements:

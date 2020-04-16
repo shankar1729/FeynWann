@@ -103,7 +103,7 @@ public:
 	//! Calculate electronic properties for each k-point in a mesh offset by k0
 	//! Calls provided callback function eProcess on each of them, along with provided params
 	//! Optional array mask selects which indices within the offset to actually calculate, skipping the rest for efficiency.
-	void eLoop(const vector3<>& k0, eProcessFunc eProcess, void* params, std::vector<bool>* mask=0);
+	void eLoop(const vector3<>& k0, eProcessFunc eProcess, void* params, const std::vector<bool>* mask=0);
 	void eCalc(const vector3<>& k, StateE& e); //!< Calculate electronic properties for a single k and store results in e on group head
 	size_t eCountPerOffset() const { return Hw->nkTot; } //!< number of k's sampled per offset = prod(offsetDim)
 	
@@ -122,7 +122,7 @@ public:
 	//! Note that ePhMask is of dimensions eCountPerOffset^2, with outer loop over ik1 and inner loop over ik2.
 	void ePhLoop(const vector3<>& k01, const vector3<>& k02, ePhProcessFunc ePhProcess, void* params,
 		eProcessFunc eProcess1=0, eProcessFunc eProcess2=0, phProcessFunc phProcess=0,
-		std::vector<bool>* eMask1=0, std::vector<bool>* eMask2=0, std::vector<bool>* ePhMask=0);
+		const std::vector<bool>* eMask1=0, const std::vector<bool>* eMask2=0, const std::vector<bool>* ePhMask=0);
 	void ePhCalc(const StateE& e1, const StateE& e2, const StatePh& ph, MatrixEph& m); //!< Calculate e-ph matrix elements coupling e1, e2 and ph and store it in m on group head
 	size_t ePhCountPerOffset() const { return size_t(Hw->nkTot) * size_t(Hw->nkTot); } //!< number of k-pairs sampled per offset = prod(offsetDim)^2
 	
