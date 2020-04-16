@@ -577,7 +577,7 @@ template<typename T> vector3<T> elemwiseProd(vector3<int> a, vector3<T> b)
 		} \
 	}
 
-void FeynWann::eLoop(const vector3<>& k0, FeynWann::eProcessFunc eProcess, void* params)
+void FeynWann::eLoop(const vector3<>& k0, FeynWann::eProcessFunc eProcess, void* params, std::vector<bool>* mask)
 {	static StopWatch watchCallback("FeynWann::eLoop:callback");
 	//Run Fourier transforms with this offset:
 	Hw->transform(k0);
@@ -593,10 +593,13 @@ void FeynWann::eLoop(const vector3<>& k0, FeynWann::eProcessFunc eProcess, void*
 	StateE state;
 	PartialLoop3D(offsetDim, ik, ikStop, state.k, k0,
 		state.ik = ik;
+		state.withinRange = mask ? mask->at(ik) : true;
 		setState(state);
-		watchCallback.start();
-		eProcess(state, params);
-		watchCallback.stop();
+		if(state.withinRange)
+		{	watchCallback.start();
+			eProcess(state, params);
+			watchCallback.stop();
+		}
 	)
 }
 void FeynWann::eCalc(const vector3<>& k, FeynWann::StateE& e)
@@ -616,6 +619,7 @@ void FeynWann::eCalc(const vector3<>& k, FeynWann::StateE& e)
 	//Prepare state on group head:
 	e.ik = 0;
 	e.k = k;
+	e.withinRange = true;
 	if(mpiGroup->isHead()) setState(e);
 	inEphLoop = false;
 }
@@ -650,7 +654,8 @@ void FeynWann::phCalc(const vector3<>& q, FeynWann::StatePh& ph)
 
 
 void FeynWann::ePhLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::ePhProcessFunc ePhProcess, void* params,
-	eProcessFunc eProcess1, eProcessFunc eProcess2, phProcessFunc phProcess)
+	eProcessFunc eProcess1, eProcessFunc eProcess2, phProcessFunc phProcess,
+	std::vector<bool>* eMask1, std::vector<bool>* eMask2, std::vector<bool>* ePhMask)
 {	static StopWatch watchBcast("FeynWann::ePhLoop:bcast"); 
 	static StopWatch watchCallback("FeynWann::ePhLoop:callback");
 	assert(fwp.needPhonons);
@@ -676,6 +681,7 @@ void FeynWann::ePhLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::ePh
 			int ikStop = ik + Hw->nk; \
 			PartialLoop3D(offsetDim, ik, ikStop, e##i[ik].k, k0##i, \
 				e##i[ik].ik = ik; \
+				e##i[ik].withinRange = eMask##i ? eMask##i->at(ik) : true; \
 				setState(e##i[ik]); \
 				if(e##i[ik].withinRange) \
 				{	withinRange##i = true; \
@@ -808,17 +814,16 @@ void FeynWann::setState(FeynWann::StateE& state)
 			if(E > symmThreshold)
 				E += fwp.scissor;
 	}
-	//Check whether any states in range:
-	state.withinRange = true;
-	if(inEphLoop and (ePhEstart<ePhEstop))
+	//Check whether any states in range (only if not already masked out by initial value of withinRange):
+	if(state.withinRange and inEphLoop and (ePhEstart<ePhEstop))
 	{	state.withinRange = false;
 		for (double& E : state.E)
 			if(E >= ePhEstart and E <= ePhEstop)
 			{	state.withinRange = true;
 				break;
 			}
-		if(not state.withinRange) return; //Remaining quantities will never be used
 	}
+	if(not state.withinRange) return; //Remaining quantities will never be used
 	watchRotations.start();
 	//Velocity matrix, if needed:
 	if(fwp.needVelocity)

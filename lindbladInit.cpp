@@ -34,6 +34,13 @@ template<class T> constexpr std::reverse_iterator<T*> reverse(T* i) { return std
 static const double omegaPhCut = 1e-6;
 static const double nEphDelta = 4.; //number of ePhDelta to include in output
 
+//Helper class to "argsort" an array i.e. determine the indices that sort it
+template<typename ArrayType> struct IndexCompare
+{	const ArrayType& array;
+	IndexCompare(const ArrayType& array) : array(array) {}
+	template<typename Integer> bool operator()(Integer i1, Integer i2) const { return array[i1] < array[i2]; }
+};
+
 //Lindblad initialization using FeynWann callback
 struct LindbladInit
 {	
@@ -74,6 +81,27 @@ struct LindbladInit
 	std::vector<vector3<>> k; //selected k-points
 	std::vector<double> E; //all band energies for selected k-points
 	size_t nActiveTot; //total number of active states
+
+	std::vector<vector3<int>> offK; //index of each k by offsets: [ kOffset, qOffset, ik ]
+	vector3<int> offKcur; //offset indices of current eLoop call in first two components
+	std::vector<vector3<int>> offKuniq; //unique offsets in offK
+	std::vector<size_t> ikStartOff; //starting k index for each offset in offKuniq (length: offKuniq.size()+1)
+	
+	size_t iGroup; //index of current group amongst groups
+	size_t nGroups; //number of process groups
+	std::vector<size_t> offStartGroup; //starting offset index for each process group (length: nGroups+1)
+	std::vector<size_t> ikStartGroup; //starting k index for each process group (length: nGroups+1)
+	
+	std::map<size_t,size_t> kIndexMap; //map from k-point mesh index to index in selected set
+	inline size_t kIndex(vector3<> k)
+	{	size_t index=0;
+		for(int iDir=0; iDir<3; iDir++)
+		{	double ki = k[iDir] - floor(k[iDir]); //wrapped to [0,1)
+			index = (size_t)round(NkFine[iDir]*(index+ki));
+		}
+		return index;
+	}
+	
 	inline void kSelect(const FeynWann::StateE& state)
 	{	bool active = false;
 		for(double E: state.E)
@@ -84,6 +112,8 @@ struct LindbladInit
 		if(active)
 		{	k.push_back(state.k);
 			E.insert(E.end(), state.E.begin(), state.E.end());
+			offKcur[2] = state.ik;
+			offK.push_back(offKcur);
 		}
 	}
 	static void kSelect(const FeynWann::StateE& state, void* params)
@@ -122,7 +152,12 @@ struct LindbladInit
 		nActiveTot = 0;
 		logPrintf("Scanning k-points with active states: "); logFlush();
 		for(size_t o=oStart; o<oStop; o++)
-		{	for(vector3<> qOff: fw.qOffset) fw.eLoop(k0[o]+qOff, LindbladInit::kSelect, this);
+		{	offKcur[0] = o;
+			offKcur[1] = 0;
+			for(vector3<> qOff: fw.qOffset)
+			{	fw.eLoop(k0[o]+qOff, LindbladInit::kSelect, this);
+				offKcur[1]++; //increment qOffset index
+			}
 			//Print progress:
 			if((o-oStart+1)%oInterval==0) { logPrintf("%d%% ", int(round((o-oStart+1)*100./noMine))); logFlush(); }
 		}
@@ -142,38 +177,76 @@ struct LindbladInit
 		{	//Set k and E in position in global arrays:
 			std::vector<vector3<>> k(nkSelected);
 			std::vector<double> E(nkSelected*fw.nBands);
+			std::vector<vector3<int>> offK(nkSelected);
 			std::copy(this->k.begin(), this->k.end(), k.begin()+nkPrev[mpiWorld->iProcess()]);
 			std::copy(this->E.begin(), this->E.end(), E.begin()+nkPrev[mpiWorld->iProcess()]*fw.nBands);
+			std::copy(this->offK.begin(), this->offK.end(), offK.begin()+nkPrev[mpiWorld->iProcess()]);
 			//Broadcast:
 			for(int jProc=0; jProc<mpiWorld->nProcesses(); jProc++)
 			{	size_t ikStart = nkPrev[jProc], nk = nkPrev[jProc+1]-ikStart;
 				mpiWorld->bcast(k.data()+ikStart, nk, jProc);
 				mpiWorld->bcast(E.data()+ikStart*fw.nBands, nk*fw.nBands, jProc);
+				mpiWorld->bcast(offK.data()+ikStart, nk, jProc);
 			}
-			//Store to class variables:
-			std::swap(k, this->k);
-			std::swap(E, this->E);
+			//Sort by offset:
+			std::vector<size_t> sortIndex(nkSelected);
+			for(size_t i=0; i<nkSelected; i++) sortIndex[i] = i;
+			std::sort(sortIndex.begin(), sortIndex.end(), IndexCompare<std::vector<vector3<int>>>(offK));
+			//Store to class variables in sorted order:
+			this->k.resize(nkSelected);
+			this->E.resize(nkSelected*fw.nBands);
+			this->offK.resize(nkSelected);
+			vector3<int> offKprev(-1,-1,0);
+			for(size_t i=0; i<nkSelected; i++)
+			{	size_t iSrc = sortIndex[i];
+				this->k[i] = k[iSrc];
+				eblas_copy(this->E.data()+i*fw.nBands, E.data()+iSrc*fw.nBands, fw.nBands);
+				this->offK[i] = offKcur = offK[iSrc];
+				//Update unique offset list:
+				offKcur[2] = 0; //ignore k in comparing for unique list
+				if(not (offKcur == offKprev))
+				{	offKuniq.push_back(offKcur);
+					ikStartOff.push_back(i);
+					offKprev = offKcur;
+				}
+			}
+			ikStartOff.push_back(nkSelected);
 		}
+		logPrintf("Found k-points with active states in %lu of %lu q-mesh offsets (%.0fx reduction)\n",
+			offKuniq.size(), k0.size()*fw.qOffset.size(), round(k0.size()*fw.qOffset.size()*1./offKuniq.size()));
 		logPrintf("Found %lu k-points with active states from %lu total k-points (%.0fx reduction)\n",
 			nkSelected, nkTot, round(nkTot*1./nkSelected));
 		logPrintf("Selected %lu active states from %lu total electronic states (%.0fx reduction)\n\n",
 			nActiveTot, nkTot*fw.nBands, round((nkTot*fw.nBands)*1./nActiveTot));
+		
+		//Make group index, count, offset division and k division available on all processes of each group:
+		if(mpiGroup->isHead())
+		{	iGroup = mpiGroupHead->iProcess();
+			nGroups = mpiGroupHead->nProcesses();
+			offStartGroup.assign(nGroups+1, 0);
+			ikStartGroup.assign(nGroups+1, 0);
+			TaskDivision groupDiv(offKuniq.size(), mpiGroupHead);
+			for(size_t jGroup=0; jGroup<nGroups; jGroup++)
+			{	offStartGroup[jGroup+1] = groupDiv.stop(jGroup);
+				ikStartGroup[jGroup+1] = ikStartOff[offStartGroup[jGroup+1]];
+			}
+		}
+		mpiGroup->bcast(iGroup);
+		mpiGroup->bcast(nGroups);
+		offStartGroup.resize(nGroups+1);
+		ikStartGroup.resize(nGroups+1);
+		mpiGroup->bcastData(offStartGroup);
+		mpiGroup->bcastData(ikStartGroup);
+		
+		//Initialize kIndexMap for searching selected k-points:
+		for(size_t ik=0; ik<k.size(); ik++)
+			kIndexMap[kIndex(k[ik])] = ik;
 	}
 	
 	//--------- k-pair selection -------------
 	std::vector<std::vector<size_t>> kpartners; //list of e-ph coupled k2 for each k1
 	std::vector<double> kpairWeight; //Econserve weight factor for all k1 pairs due to downsampling (1 if no downsmapling)
-	std::vector<std::pair<size_t,size_t>> kpairs; //pairs of k1 and k2
-	std::map<size_t,size_t> kIndexMap; //map from k-point mesh index to index in selected set
 	size_t nActivePairs; //total number of active state pairs
-	inline size_t kIndex(vector3<> k)
-	{	size_t index=0;
-		for(int iDir=0; iDir<3; iDir++)
-		{	double ki = k[iDir] - floor(k[iDir]); //wrapped to [0,1)
-			index = (size_t)round(NkFine[iDir]*(index+ki));
-		}
-		return index;
-	}
 	inline void selectActive(const double*& Ebegin, const double*& Eend, double Elo, double Ehi) //narrow pointer range to data within [Estart,Estop]
 	{	Ebegin = std::lower_bound(Ebegin, Eend, Elo);
 		Eend = &(*std::lower_bound(reverse(Eend), reverse(Ebegin), Ehi, std::greater<double>()))+1;
@@ -206,7 +279,7 @@ struct LindbladInit
 						}
 					}
 				}
-				if(Econserve) kpairs.push_back(std::make_pair(ik1,ik2));
+				if(Econserve) kpartners[ik1].push_back(ik2);
 			}
 		}
 	}
@@ -215,10 +288,6 @@ struct LindbladInit
 	}
 	void kpairSelect(const std::vector<vector3<>>& q0, size_t maxNeighbors)
 	{	
-		//Initialize kIndexMap for searching selected k-points:
-		for(size_t ik=0; ik<k.size(); ik++)
-			kIndexMap[kIndex(k[ik])] = ik;
-		
 		//Initialize sampling parameters:
 		size_t oStart, oStop; //!< range of offstes handled by this process groups
 		if(mpiGroup->isHead())
@@ -230,6 +299,7 @@ struct LindbladInit
 
 		//Find momentum-conserving k-pairs for which energy conservation is also possible for some bands:
 		nActivePairs = 0;
+		kpartners.resize(k.size());
 		logPrintf("Scanning k-pairs with e-ph coupling: "); logFlush();
 		for(size_t o=oStart; o<oStop; o++)
 		{	fw.phLoop(q0[o], LindbladInit::kpSelect, this);
@@ -239,91 +309,139 @@ struct LindbladInit
 		logPrintf("done.\n"); logFlush();
 		mpiWorld->allReduce(nActivePairs, MPIUtil::ReduceSum);
 		
-		//Synchronize selected kpairs across all processes:
-		//--- determine nk on each process and compute cumulative counts
-		std::vector<size_t> nkpPrev(mpiWorld->nProcesses()+1);
-		for(int jProc=0; jProc<mpiWorld->nProcesses(); jProc++)
-		{	size_t nkpCur = kpairs.size();
-			mpiWorld->bcast(nkpCur, jProc); //nkCur = k.size() on jProc in all processes
-			nkpPrev[jProc+1] = nkpPrev[jProc] + nkpCur; //cumulative count
-		}
-		size_t nkpairs = nkpPrev.back();
-		//--- broadcast k and E:
-		{	//Set k and E in position in global arrays:
-			std::vector<std::pair<size_t,size_t>> kpairs(nkpairs);
-			std::copy(this->kpairs.begin(), this->kpairs.end(), kpairs.begin()+nkpPrev[mpiWorld->iProcess()]);
-			//Broadcast:
-			for(int jProc=0; jProc<mpiWorld->nProcesses(); jProc++)
-			{	size_t ikpStart = nkpPrev[jProc], nkp = nkpPrev[jProc+1]-ikpStart;
-				mpiWorld->bcast(((size_t*)kpairs.data())+ikpStart*2, nkp*2, jProc);
+		//Redistribute kpartners by the processes that will deal with each ik1:
+		size_t nPartnersMin = k.size(), nPartnersMax = 0, nPartnersSum = 0;
+		size_t nPartDownMin = k.size(), nPartDownMax = 0, nPartDownSum = 0; //down-selected versions
+		kpairWeight.assign(k.size(), 0.);
+		for(size_t ik1=0; ik1<k.size(); ik1++)
+		{	//Determine which group head process is responsible for this k:
+			const bool isMyGroups = (ik1>=ikStartGroup[iGroup]) and (ik1<ikStartGroup[iGroup+1]);
+			const bool isMine = mpiGroup->isHead() and isMyGroups;
+			int whose = isMine ? mpiWorld->iProcess() : 0;
+			mpiWorld->allReduce(whose, MPIUtil::ReduceMax); //whose now points to the process which had isMine=1
+			//Transfer kpartner data to the responsible process:
+			std::vector<size_t>& kp = kpartners[ik1];
+			if(isMine)
+			{	//Get data from every other process
+				for(int jProc=0; jProc<mpiWorld->nProcesses(); jProc++)
+					if(jProc != mpiWorld->iProcess())
+					{	//Recv into a temporary buffer:
+						size_t size;
+						mpiWorld->recv(size, jProc, 0);
+						std::vector<size_t> buf(size);
+						mpiWorld->recvData(buf, jProc, 1);
+						//Append to partners list:
+						kp.insert(kp.end(), buf.begin(), buf.end());
+					}
+				//Sort partners by offset order:
+				size_t nPartners = kp.size();
+				std::vector<size_t> sortIndex(nPartners);
+				std::vector<vector3<int>> offKpartner(nPartners);
+				for(size_t iPartner=0; iPartner<nPartners; iPartner++)
+				{	sortIndex[iPartner] = iPartner;
+					offKpartner[iPartner] = offK[kp[iPartner]];
+				}
+				std::sort(sortIndex.begin(), sortIndex.end(), IndexCompare<std::vector<vector3<int>>>(offKpartner));
+				//Sort partners and optionally downselect:
+				double pSel = maxNeighbors ? std::min(1., maxNeighbors*1./nPartners) : 1.;
+				kpairWeight[ik1] = sqrt(1./pSel);
+				std::vector<size_t> kpNew; kpNew.reserve(int(ceil(pSel * nPartners)));
+				Random::seed(ik1);
+				for(size_t iSort: sortIndex)
+					if(pSel==1. or Random::uniform()<pSel)
+						kpNew.push_back(kp[iSort]);
+				std::swap(kp, kpNew);
+				size_t nPartDown = kp.size();
+				//Update stats:
+				if(nPartners < nPartnersMin) nPartnersMin = nPartners;
+				if(nPartners > nPartnersMax) nPartnersMax = nPartners;
+				nPartnersSum += nPartners;
+				if(nPartDown < nPartDownMin) nPartDownMin = nPartDown;
+				if(nPartDown > nPartDownMax) nPartDownMax = nPartDown;
+				nPartDownSum += nPartDown;
 			}
-			//Store to class variables:
-			std::swap(kpairs, this->kpairs);
+			else
+			{	//Send to the responsible process:
+				mpiWorld->send(kp.size(), whose, 0);
+				mpiWorld->sendData(kp, whose, 1);
+				kp.clear(); //no longer needed on this process
+			}
+			//Synchronize within group:
+			if(isMyGroups)
+			{	size_t size = kp.size();
+				mpiGroup->bcast(size);
+				kp.resize(size);
+				mpiGroup->bcastData(kp);
+			}
 		}
-		//--- report:
+		mpiWorld->allReduceData(kpairWeight, MPIUtil::ReduceMax); //only set on group head that owns this k
+		mpiWorld->allReduce(nPartnersMin, MPIUtil::ReduceMin);
+		mpiWorld->allReduce(nPartnersMax, MPIUtil::ReduceMax);
+		mpiWorld->allReduce(nPartnersSum, MPIUtil::ReduceSum);
+		mpiWorld->allReduce(nPartDownMin, MPIUtil::ReduceMin);
+		mpiWorld->allReduce(nPartDownMax, MPIUtil::ReduceMax);
+		mpiWorld->allReduce(nPartDownSum, MPIUtil::ReduceSum);
 		size_t nkpairsTot = k.size()*k.size();
 		logPrintf("Found %lu k-pairs with e-ph coupling from %lu total pairs of selected k-points (%.0fx reduction)\n",
-			nkpairs, nkpairsTot, round(nkpairsTot*1./nkpairs));
+			nPartnersSum, nkpairsTot, round(nkpairsTot*1./nPartnersSum));
 		size_t nStatePairsTot = std::pow(nkTot*fw.nBands, 2);
 		logPrintf("Selected %lu active state pairs from %lu total electronic state pairs (%.0fx reduction)\n",
 			nActivePairs, nStatePairsTot, round(nStatePairsTot*1./nActivePairs));
-		//--- initialize kpartners (list of k2 by k1):
-		kpartners.resize(k.size());
-		for(auto kpair: kpairs)
-			kpartners[kpair.first].push_back(kpair.second);
-		kpairs.clear();
-		size_t nPartnersMin = k.size(), nPartnersMax = 0;
-		for(std::vector<size_t>& kp: kpartners)
-		{	std::sort(kp.begin(), kp.end()); //sort k2 within each k1 array
-			const size_t& nPartners = kp.size();
-			if(nPartners < nPartnersMin) nPartnersMin = nPartners;
-			if(nPartners > nPartnersMax) nPartnersMax = nPartners;
-		}
-		logPrintf("Number of partners per k-point:  min: %lu  max: %lu  mean: %.1lf\n", nPartnersMin, nPartnersMax, nkpairs*1./k.size());
-		//--- optional downsampling:
-		kpairWeight.assign(k.size(), 1.); //default no weight enhancement
-		if(maxNeighbors)
-		{	nPartnersMin = k.size();
-			nPartnersMax = 0;
-			nkpairs = 0;
-			for(size_t ik=0; ik<k.size(); ik++)
-			{	std::vector<size_t>& kp = kpartners[ik];
-				if(kp.size() > maxNeighbors)
-				{	//Reduce neighbors to maxNeighbors:
-					kpairWeight[ik] = sqrt(kp.size()*1./maxNeighbors);
-					Random::seed(size_t(NkFine[2]*(k[ik][2]+NkFine[1]*(k[ik][1]+NkFine[0]*k[ik][0])))); //make seed depend only on k and not its order
-					//--- permute array by Fisher-Yates shuffle:
-					for(size_t iN=kp.size()-1; iN>0; iN--)
-					{	size_t jN = Random::uniformInt(iN+1);
-						std::swap(kp[iN], kp[jN]);
-					}
-					//--- reduce size and re-sort:
-					kp.resize(maxNeighbors);
-					std::sort(kp.begin(), kp.end()); //sort k2 within each k1 array
-					mpiWorld->bcastData(kp); //ensure consistency
-				}
-				const size_t& nPartners = kp.size();
-				if(nPartners < nPartnersMin) nPartnersMin = nPartners;
-				if(nPartners > nPartnersMax) nPartnersMax = nPartners;
-				nkpairs += nPartners;
-			}
-			mpiWorld->bcastData(kpairWeight);
-			logPrintf("          After down-selection:  min: %lu  max: %lu  mean: %.1lf\n", nPartnersMin, nPartnersMax, nkpairs*1./k.size());
-		}
-		logPrintf("\n");
+		logPrintf("Number of partners per k-point:  min: %lu  max: %lu  mean: %.1lf\n", nPartnersMin, nPartnersMax, nPartnersSum*1./k.size());
+		if(maxNeighbors) logPrintf("%9s After down-selection:  min: %lu  max: %lu  mean: %.1lf\n", "", nPartDownMin, nPartDownMax, nPartDownSum*1./k.size());
 	}
 
 	//--------- Save data -------------
-	void saveData(string outFile)
+	std::vector<LindbladFile::Kpoint> kpAll; //array of kpoint data for all active k-points
+	std::vector<LindbladFile::Kpoint> kpOffset; //array of kpoint data for current offset
+	std::vector<int> kpWhose; //index of process in mpiWorld that owns each entry in kpAll
+	std::vector<size_t> kpSize; //size in bytes of each entry in kpAll when written to file
+	
+	//Initialize k-point data:
+	void initKpoint(const FeynWann::StateE& state)
+	{	LindbladFile::Kpoint& kp = kpOffset[state.ik];
+		if(kp.E.size()) return; //already initialized
+		
+		//Find k-point index in global list:
+		kp.k = state.k;
+		const std::map<size_t,size_t>::iterator iter = kIndexMap.find(kIndex(kp.k));
+		if(iter == kIndexMap.end()) return; //not an active k-point
+		size_t ik = iter->second;
+		
+		//Determine energy ranges:
+		const double *Ebegin = E.data()+ik*fw.nBands, *Eend = Ebegin+fw.nBands;
+		//--- pump-active (inner) energy range:
+		const double *EinnerBegin = Ebegin, *EinnerEnd = Eend;
+		selectActive(EinnerBegin, EinnerEnd, Estart, Estop);
+		kp.nInner = EinnerEnd - EinnerBegin;
+		//--- probe-active (outer) energy range:
+		const double *EouterBegin = Ebegin, *EouterEnd = Eend;
+		selectActive(EouterBegin, EouterEnd,
+			(*EinnerBegin)-probeOmegaMax, //lowest occupied energy accessible from bottom of active window
+			(*(EinnerEnd-1))+probeOmegaMax);  //highest unoccupied energy accessible from top of active window
+		kp.nOuter = EouterEnd - EouterBegin;
+		kp.innerStart = EinnerBegin - EouterBegin;
+		int innerOffset = EinnerBegin - Ebegin; //offset from original bands to inner window
+		int outerOffset = EouterBegin - Ebegin; //offset from original bands to outer window
+		
+		//Save energy and matrix elements to kp:
+		//Energies:
+		kp.E.assign(EouterBegin, EouterEnd);
+		//Momenta:
+		for(int iDir=0; iDir<3; iDir++)
+			kp.P[iDir] = state.v[iDir](innerOffset,innerOffset+kp.nInner, outerOffset,outerOffset+kp.nOuter);
+		//Spin:
+		if(fw.nSpinor == 2)
+			for(int iDir=0; iDir<3; iDir++)
+				kp.S[iDir] = state.S[iDir](innerOffset,innerOffset+kp.nInner, innerOffset,innerOffset+kp.nInner);
+	}
+	static void initKpoint(const FeynWann::StateE& state, void* params)
+	{	((LindbladInit*)params)->initKpoint(state);
+	}
+	
+	void saveData(const std::vector<vector3<>>& k0, string outFile)
 	{
-		//Initialize and write header:
-		#ifdef MPI_SAFE_WRITE
-		FILE* fp = NULL;
-		if(mpiWorld->isHead()) fp = fopen(outFile.c_str(), "w"); //I/O from world head alone
-		#else
-		MPIUtil::File fp;
-		if(mpiGroup->isHead()) mpiGroupHead->fopenWrite(fp, "ldbd.dat"); //I/O collectively only from group heads
-		#endif
+		//Prepare the file header:
 		LindbladFile::Header h;
 		h.dmuMin = dmuMin;
 		h.dmuMax = dmuMax;
@@ -336,75 +454,121 @@ struct LindbladInit
 		h.spinorial = (fw.nSpinor==2);
 		h.spinWeight = fw.spinWeight;
 		h.R = fw.R;
+		
+		//Loop over offsets in current group:
+		logPrintf("\nGenerating matrix elements: "); logFlush();
+		kpAll.clear(); kpAll.resize(k.size());
+		kpWhose.assign(k.size(), -1);
+		kpSize.assign(k.size(), 0);
+		size_t nOffMine = offStartGroup[iGroup+1] - offStartGroup[iGroup];
+		size_t offInterval = std::max(1, int(round(nOffMine/50.))); //interval for reporting progress
+		for(size_t iOffMine=0; iOffMine<nOffMine; iOffMine++)
+		{	size_t iOff = offStartGroup[iGroup] + iOffMine; //current offset index
+			size_t ikStart = ikStartOff[iOff]; //range start of k in this offset
+			size_t ikStop = ikStartOff[iOff+1]; //range end of k in this offset
+			offKcur = offKuniq[iOff];
+			vector3<> k01 = k0[offKcur[0]] + fw.qOffset[offKcur[1]];
+			
+			//Initialize mask of active states:
+			std::vector<bool> mask(fw.eCountPerOffset(), false);
+			for(size_t ik=ikStart; ik<ikStop; ik++) mask[offK[ik][2]] = true;
+			
+			kpOffset.clear();
+			kpOffset.resize(fw.eCountPerOffset());
+			
+			if(ePhEnabled)
+			{	die("Not yet implemented.\n");
+			}
+			else
+			{	fw.eLoop(k01, initKpoint, this, &mask);
+			}
+			
+			//Save active k-points to global array:
+			for(size_t ik=ikStart; ik<ikStop; ik++)
+			{	std::swap(kpAll[ik], kpOffset[offK[ik][2]]);
+				if(kpAll[ik].E.size())
+				{	kpWhose[ik] = mpiWorld->iProcess();
+					kpSize[ik] = kpAll[ik].nBytes(h);
+				}
+			}
+			
+			//Print progress:
+			if((iOffMine+1)%offInterval==0) { logPrintf("%d%% ", int(round((iOffMine+1)*100./nOffMine))); logFlush(); }
+		}
+		mpiWorld->allReduceData(kpWhose, MPIUtil::ReduceMax); //now each process knows who owns a specific k-point data
+		mpiWorld->allReduceData(kpSize, MPIUtil::ReduceMax); //... and its size when written to file
+		logPrintf("done.\n"); logFlush();
+		
+		//Compute offsets to each k-point within file:
+		std::vector<size_t> byteOffsets(h.nk);
+		byteOffsets[0] = h.nBytes() + h.nk*sizeof(size_t); //offset to first k-point (header + byteOffsets array)
+		for(size_t ik=0; ik+1<h.nk; ik++)
+			byteOffsets[ik+1] = byteOffsets[ik] + kpSize[ik];
+		
+		//Write file:
+		//--- Open file
+		#ifdef MPI_SAFE_WRITE
+		FILE* fp = NULL;
+		if(mpiWorld->isHead()) fp = fopen(outFile.c_str(), "w"); //I/O from world head alone
+		#else
+		MPIUtil::File fp;
+		mpiWorld->fopenWrite(fp, outFile.c_str()); //I/O collectively from all processes
+		#endif
+		//--- Header and byte offsets to each k
 		if(mpiWorld->isHead())
 		{	std::ostringstream oss;
 			h.write(oss);
 			#ifdef MPI_SAFE_WRITE
 			fwrite(oss.str().data(), 1, h.nBytes(), fp);
+			fwrite(byteOffsets.data(), sizeof(size_t), byteOffsets.size(), fp);
 			#else
-			mpiGroupHead->fwrite(oss.str().data(), 1, h.nBytes(), fp);
+			mpiWorld->fwrite(oss.str().data(), 1, h.nBytes(), fp);
+			mpiWorld->fwriteData(byteOffsets, fp);
 			#endif
 		}
-		size_t nBytesWritten = h.nBytes();
-		
-		//Chunk for storing byte offsets to each k-point data before location for data:
-		std::vector<size_t> byteOffsets;
-		size_t byteOffsetLocation = nBytesWritten; //this is where byteOffsets will be put
-		nBytesWritten += sizeof(size_t)*h.nk; //skip ahead now; write at the end once known
-		byteOffsets.push_back(nBytesWritten); //offset to first k-point
-		
-		//Make group index and count available on all processes of each group:
-		size_t iGroup, nGroups;
-		if(mpiGroup->isHead())
-		{	iGroup = mpiGroupHead->iProcess();
-			nGroups = mpiGroupHead->nProcesses();
-		}
-		mpiGroup->bcast(iGroup);
-		mpiGroup->bcast(nGroups);
-		
-		//Loop over k-points in parallel over process groups:
-		size_t nPasses = ceildiv(k.size(), nGroups);
-		size_t passInterval = std::max(1, int(round(nPasses/50.))); //interval for reporting progress
-		logPrintf("Writing ldbd.dat: "); logFlush();
-		for(size_t iPass=0; iPass<nPasses; iPass++)
-		{	size_t ik = iPass*nGroups + iGroup;
-			LindbladFile::Kpoint kp;
-			if(ik < k.size())
-			{	kp.k = k[ik];
-				
-				//Determine energy ranges:
-				const double *Ebegin = E.data()+ik*fw.nBands, *Eend = Ebegin+fw.nBands;
-				//--- pump-active (inner) energy range:
-				const double *EinnerBegin = Ebegin, *EinnerEnd = Eend;
-				selectActive(EinnerBegin, EinnerEnd, Estart, Estop);
-				kp.nInner = EinnerEnd - EinnerBegin;
-				//--- probe-active (outer) energy range:
-				const double *EouterBegin = Ebegin, *EouterEnd = Eend;
-				selectActive(EouterBegin, EouterEnd,
-					(*EinnerBegin)-probeOmegaMax, //lowest occupied energy accessible from bottom of active window
-					(*(EinnerEnd-1))+probeOmegaMax);  //highest unoccupied energy accessible from top of active window
-				kp.nOuter = EouterEnd - EouterBegin;
-				kp.innerStart = EinnerBegin - EouterBegin;
-				int innerOffset = EinnerBegin - Ebegin; //offset from original bands to inner window
-				int outerOffset = EouterBegin - Ebegin; //offset from original bands to outer window
-				
-				//Calculate electronic state:
-				FeynWann::StateE ei;
-				fw.eCalc(kp.k, ei);
-				
-				//Save energy and matrix elements to kp:
-				if(mpiGroup->isHead())
-				{	//Energies:
-					kp.E.assign(EouterBegin, EouterEnd);
-					//Momenta:
-					for(int iDir=0; iDir<3; iDir++)
-						kp.P[iDir] = ei.v[iDir](innerOffset,innerOffset+kp.nInner, outerOffset,outerOffset+kp.nOuter);
-					//Spin:
-					if(h.spinorial)
-						for(int iDir=0; iDir<3; iDir++)
-							kp.S[iDir] = ei.S[iDir](innerOffset,innerOffset+kp.nInner, innerOffset,innerOffset+kp.nInner);
+		//--- Write data:
+		logPrintf("Writing %s: ", outFile.c_str()); logFlush();
+		size_t ikInterval = std::max(1, int(round(h.nk/50.))); //interval for reporting progress
+		for(size_t ik=0; ik<h.nk; ik++)
+		{	const LindbladFile::Kpoint& kp = kpAll[ik];
+			std::ostringstream oss; //buffer containing serialization of kp
+			bool isMine = (kpWhose[ik] == mpiWorld->iProcess());
+			if(isMine)
+			{	kp.write(oss, h);
+				#ifdef MPI_SAFE_WRITE
+				if(not mpiWorld->isHead()) //send to head to write:
+					mpiWorld->send(oss.str().data(), kpSize[ik], 0, ik);
+				#else
+				//Write from each process in parallel:
+				mpiWorld->fseek(fp, byteOffsets[ik], SEEK_SET);
+				mpiWorld->fwrite(oss.str().data(), 1, kpSize[ik], fp);
+				#endif
+			}
+			#ifdef MPI_SAFE_WRITE
+			//Write data from head:
+			if(mpiWorld->isHead())
+			{	std::vector<char> buf;
+				if(not isMine) //Recv data to write
+				{	buf.resize(kpSize[ik]);
+					mpiWorld->recvData(buf, kpWhose[ik], ik);
 				}
-				
+				const char* bufData = isMine ? oss.str().data() : buf.data();
+				fseek(fp, byteOffsets[ik], SEEK_SET);
+				fwrite(bufData, 1, kpSize[ik], fp);
+			}
+			#endif
+			//Print progress:
+			if((ik+1)%ikInterval==0) { logPrintf("%d%% ", int(round((ik+1)*100./h.nk))); logFlush(); }
+		}
+		logPrintf("done.\n"); logFlush();
+		///--- Close file:
+		#ifdef MPI_SAFE_WRITE
+		if(mpiWorld->isHead()) fclose(fp);
+		#else
+		mpiWorld->fclose(fp);
+		#endif
+
+/*
 				//Electron-phonon matrix elements:
 				if(h.ePhEnabled)
 				{
@@ -454,75 +618,7 @@ struct LindbladInit
 						}
 					}
 				}
-			}
-			
-			//Synchronize write from group heads (or send data to world head if MPI_SAFE_WRITE) to make sure kpoints are written in order:
-			if(mpiGroup->isHead())
-			{
-				for(size_t jGroup=0; jGroup<nGroups; jGroup++)
-				{	size_t byteOffsetNext = byteOffsets.back();
-					if(jGroup==iGroup and ik<k.size())
-						byteOffsetNext += kp.nBytes(h);
-					mpiGroupHead->bcast(byteOffsetNext, jGroup);
-					byteOffsets.push_back(byteOffsetNext); //available on all group heads for all k
-				}
-				
-				if(ik<k.size())
-				{	std::ostringstream oss;
-					kp.write(oss, h);
-					#ifdef MPI_SAFE_WRITE
-					//Send data to world head to write (may be necessary on NFS locations due to MPI-IO issues):
-					if(mpiGroupHead->isHead()) //on head already; write:
-					{	fseek(fp, byteOffsets[ik], SEEK_SET);
-						fwrite(oss.str().data(), 1, kp.nBytes(h), fp);
-					}
-					else
-						mpiGroupHead->send(oss.str().data(), kp.nBytes(h), 0, iGroup);//send to head to write
-					#else
-					//Write from each process in parallel based on offset determined above:
-					mpiGroupHead->fseek(fp, byteOffsets[ik], SEEK_SET);
-					mpiGroupHead->fwrite(oss.str().data(), 1, kp.nBytes(h), fp);
-					#endif
-				}
-				#ifdef MPI_SAFE_WRITE
-				//Write data from other processes on head:
-				if(mpiGroupHead->isHead())
-				{	for(size_t jGroup=1; jGroup<nGroups; jGroup++)
-					{	size_t ikRemote = iPass*nGroups + jGroup;
-						if(ikRemote < k.size())
-						{	std::vector<char> buf(byteOffsets[ikRemote+1]-byteOffsets[ikRemote]);
-							mpiGroupHead->recvData(buf, jGroup, jGroup); //recv data to write
-							fseek(fp, byteOffsets[ikRemote], SEEK_SET);
-							fwrite(buf.data(), 1, buf.size(), fp);
-						}
-					}
-				}
-				#endif
-				
-				nBytesWritten = byteOffsets.back();
-			}
-			
-			//Print progress:
-			if((iPass+1)%passInterval==0) { logPrintf("%d%% ", int(round((iPass+1)*100./nPasses))); logFlush(); }
-		}
-		logPrintf("done.\n"); logFlush();
-		
-		//Write byte offsets:
-		if(mpiWorld->isHead())
-		{	byteOffsets.resize(h.nk); //drop the end values (only keep start for the actual k's written)
-			#ifdef MPI_SAFE_WRITE
-			fseek(fp, byteOffsetLocation, SEEK_SET);
-			fwrite(byteOffsets.data(), sizeof(size_t), byteOffsets.size(), fp);
-			#else
-			mpiGroupHead->fseek(fp, byteOffsetLocation, SEEK_SET);
-			mpiGroupHead->fwriteData(byteOffsets, fp);
-			#endif
-		}
-		#ifdef MPI_SAFE_WRITE
-		if(mpiWorld->isHead()) fclose(fp);
-		#else
-		if(mpiGroup->isHead()) mpiGroupHead->fclose(fp);
-		#endif
+*/
 	}
 };
 
@@ -610,7 +706,7 @@ int main(int argc, char** argv)
 	
 	//First pass (e only): select k-points
 	lb.kpointSelect(k0);
-	if(mpiWorld->isHead()) logPrintf("%lu active k-points parallelized over %d process groups.\n", lb.k.size(), mpiGroupHead->nProcesses());
+	if(mpiWorld->isHead()) logPrintf("%lu active q-mesh offsets parallelized over %d process groups.\n", lb.offKuniq.size(), mpiGroupHead->nProcesses());
 	
 	if(ip.dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
@@ -625,7 +721,7 @@ int main(int argc, char** argv)
 		lb.kpairSelect(q0, maxNeighbors);
 	
 	//Final pass: output electronic and e-ph quantities
-	lb.saveData(outFile);
+	lb.saveData(k0, outFile);
 	
 	//Cleanup:
 	fw.free();
