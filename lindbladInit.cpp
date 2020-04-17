@@ -344,24 +344,18 @@ struct LindbladInit
 						//Append to partners list:
 						kp.insert(kp.end(), buf.begin(), buf.end());
 					}
-				//Sort partners by offset order:
+				//Sort partners (automatically by offset order since k's sorted that way):
 				size_t nPartners = kp.size();
-				std::vector<size_t> sortIndex(nPartners);
-				std::vector<vector3<int>> offKpartner(nPartners);
-				for(size_t iPartner=0; iPartner<nPartners; iPartner++)
-				{	sortIndex[iPartner] = iPartner;
-					offKpartner[iPartner] = offK[kp[iPartner]];
-				}
-				std::sort(sortIndex.begin(), sortIndex.end(), IndexCompare<std::vector<vector3<int>>>(offKpartner));
+				std::sort(kp.begin(), kp.end());
 				//Sort partners and optionally downselect:
 				double pSel = maxNeighbors ? std::min(1., maxNeighbors*1./nPartners) : 1.;
 				kpairWeight[ik1] = sqrt(1./pSel);
-				std::vector<size_t> kpNew; kpNew.reserve(int(ceil(pSel * nPartners)));
-				Random::seed(ik1);
-				for(size_t iSort: sortIndex)
-					if(pSel==1. or Random::uniform()<pSel)
-						kpNew.push_back(kp[iSort]);
-				std::swap(kp, kpNew);
+				if(pSel < 1.)
+				{	std::vector<size_t> kpNew; kpNew.reserve(int(ceil(pSel * nPartners)));
+					Random::seed(ik1);
+					for(size_t ik: kp) if(Random::uniform()<pSel) kpNew.push_back(ik);
+					std::swap(kp, kpNew);
+				}
 				size_t nPartDown = kp.size();
 				//Update stats:
 				if(nPartners < nPartnersMin) nPartnersMin = nPartners;
@@ -624,6 +618,7 @@ struct LindbladInit
 				if(kpAll[ik].E.size())
 				{	kpWhose[ik] = mpiWorld->iProcess();
 					kpSize[ik] = kpAll[ik].nBytes(h);
+					std::sort(kpAll[ik].GePh.begin(), kpAll[ik].GePh.end()); //sort e-ph matrix elements by partner index
 				}
 			}
 			

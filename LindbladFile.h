@@ -138,6 +138,12 @@ namespace LindbladFile
 			mpiUtil->recv((char*)G.data(), sizeof(SparseEntry)*Gsize, src, tag);
 		}
 		
+		//For sorting partner lists (by partner index and then phonon frequency):
+		inline bool operator<(const GePhEntry& other) const
+		{	if(jk != other.jk) return jk < other.jk;
+			else return omegaPh < other.omegaPh;
+		}
+		
 		//For searching partner lists:
 		inline bool operator<(const size_t jk2) const
 		{	return jk < jk2;
