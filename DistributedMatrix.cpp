@@ -378,11 +378,11 @@ void DistributedMatrix::compute(vector3<> k)
 			&zero, buf.data(), 1);
 	}
 	//Collect data on head:
-	collectHead();
+	collectProc();
 	watch.stop();
 }
 
-void DistributedMatrix::compute(vector3<> k1, vector3<> k2)
+void DistributedMatrix::compute(vector3<> k1, vector3<> k2, int ik, int iProc)
 {	static StopWatch watch("DistributedMatrix::compute2"); watch.start();
 	assert(squared);
 	//Initialize phases:
@@ -392,8 +392,9 @@ void DistributedMatrix::compute(vector3<> k1, vector3<> k2)
 			cell.phase02 = cis(+2*M_PI*dot(cell.iR, k2));
 		}
 	//Discrete Fourier transform over k1 and k2:
+	ManagedArray<complex> bufTmp; bufTmp.init(std::max(1, nElems));
 	const complex* matData = mat.data();
-	complex* bufData = buf.data();
+	complex* bufData = bufTmp.data(); //work with a temporary buffer before collecting on one process
 	int atomStride = 3*nBands*nBands; //number of elements per atom
 	int iAtomStart = iElemStart / atomStride;
 	int iAtomStop = ceildiv(iElemStart+nElems, atomStride);
@@ -438,28 +439,34 @@ void DistributedMatrix::compute(vector3<> k1, vector3<> k2)
 			#undef CALC_w
 		}
 	//Collect data on head:
-	collectHead();
+	collectProc(bufTmp.data(), ik, iProc);
 	watch.stop();
 }
 
-void DistributedMatrix::collectHead()
+void DistributedMatrix::collectProc(complex* bufSrc, int ik, int iProc)
 {
+	//Copy data of current process into location (needed even without MPI if using a different source):
+	if(bufSrc and nElems and iProc==mpiUtil->iProcess())
+	{	complex* bufDest = (complex*)getResult(ik);
+		eblas_copy(bufDest+iElemStart, bufSrc, nElems);
+	}
 #ifdef MPI_ENABLED
 	if(mpiUtil->nProcesses() > 1)
-	{	if(mpiUtil->isHead())
-		{	std::vector<MPIUtil::Request> requests; requests.reserve(mpiUtil->nProcesses()-1);
-			for(int jProc=1; jProc<mpiUtil->nProcesses(); jProc++)
+	{	if(iProc == mpiUtil->iProcess())
+		{	complex* bufDest = (complex*)getResult(ik);
+			std::vector<MPIUtil::Request> requests; requests.reserve(mpiUtil->nProcesses()-1);
+			for(int jProc=0; jProc<mpiUtil->nProcesses(); jProc++) if(jProc != iProc)
 			{	int nElems_j = iElemStartProc[jProc+1] - iElemStartProc[jProc];
 				if(nElems_j)
 				{	requests.push_back(MPIUtil::Request());
-					mpiUtil->recv(buf.data()+iElemStartProc[jProc], nElems_j, jProc, jProc, &(requests.back()));
+					mpiUtil->recv(bufDest+iElemStartProc[jProc], nElems_j, jProc, jProc, &(requests.back()));
 				}
 			}
 			if(requests.size()) mpiUtil->waitAll(requests);
 		}
 		else
 		{	if(nElems)
-				mpiUtil->send(buf.data(), nElems, 0, mpiUtil->iProcess());
+				mpiUtil->send(bufSrc ? bufSrc : buf.data(), nElems, iProc, mpiUtil->iProcess());
 		}
 		MPI_Barrier(mpiUtil->communicator());
 	}

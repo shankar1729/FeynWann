@@ -28,8 +28,8 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 FeynWannParams::FeynWannParams(InputMap* inputMap)
 : iSpin(0), totalEprefix("Wannier/totalE"), phononPrefix("Wannier/phonon"), wannierPrefix("Wannier/wannier"),
 needSymmetries(false), needPhonons(false), needVelocity(false), needSpin(false),
-needLinewidth_ee(false), needLinewidth_ePh(false), needLinewidthP_ePh(false), ePhHeadOnly(false),
-EzExt(0.), scissor(0.)
+needLinewidth_ee(false), needLinewidth_ePh(false), needLinewidthP_ePh(false),
+ePhHeadOnly(false), maskOptimize(false), EzExt(0.), scissor(0.)
 {
 	if(inputMap)
 	{	const double nm = 10*Angstrom;
@@ -119,7 +119,7 @@ std::vector<vector3<>> readArrayVec3(string fname); //Read an array of vector3<>
 
 
 FeynWann::FeynWann(FeynWannParams& fwp)
-: fwp(fwp), nAtoms(0), nSpins(0), nSpinor(0), spinWeight(0), mu(NAN), nElectrons(0), polar(false), ePhEstart(0.), ePhEstop(0.), inEphLoop(false)
+: fwp(fwp), nAtoms(0), nSpins(0), nSpinor(0), spinWeight(0), mu(NAN), nElectrons(0), polar(false), ePhEstart(0.), ePhEstop(0.), tTransformByCompute(1), inEphLoop(false)
 {	
 	//Create inter-group communicator if requested:
 	std::shared_ptr<MPIUtil> mpiInterGroup;
@@ -468,6 +468,29 @@ FeynWann::FeynWann(FeynWannParams& fwp)
 			phononCellWeights.read_real(fname.c_str());
 			logPrintf("done.\n");
 		}
+		
+		//Benchmark e-ph transform and compute to optimize masked computations, if needed:
+		if(fwp.maskOptimize)
+		{	logPrintf("Benchmarking e-ph transform and single-point compute: "); logFlush();
+			const double tMin = 0.5; //time for at least 0.5 s
+			const int nMin = 3; //time at least 3 evaluations
+			#define TIMErepeated(funcName) \
+				double funcName##Time = 0.; \
+				{	double tStart = clock_sec(), t=0.; \
+					int nTries = 0; \
+					while(nTries<nMin or t<tMin) \
+					{	HePhW->funcName(vector3<>(), vector3<>()); \
+						nTries++; \
+						t = clock_sec()-tStart; \
+					} \
+					funcName##Time = t / nTries; \
+				}
+			TIMErepeated(compute)
+			TIMErepeated(transform)
+			#undef TIMErepeated
+			logPrintf("tCompute[s]: %lg tTransform[s]: %lg\n", computeTime, transformTime);
+			logPrintf("Will switch from transform to compute when mask count <= %d\n", int(floor(transformTime/computeTime)));
+		}
 	}
 	
 	//Read wannier hamiltonian
@@ -728,8 +751,35 @@ void FeynWann::ePhLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::ePh
 	}
 	if(not (withinRange1 and withinRange2)) return; //no pairs of states within active window
 	
+	//Initialize net mask combining range entries and specified mask (if any):
+	std::vector<bool> pairMask(ePhMask ? *ePhMask : std::vector<bool>(prodOffsetDimSq, true));
+	if(fwp.ePhHeadOnly) { pairMask.assign(prodOffsetDimSq, false); pairMask[0] = true; } //only first entry
+	auto pairIter = pairMask.begin();
+	int nNZ = 0;
+	for(int ik1=0; ik1<prodOffsetDim; ik1++)
+		for(int ik2=0; ik2<prodOffsetDim; ik2++)
+		{	bool netMask = (*pairIter) and e1[ik1].withinRange and e2[ik2].withinRange;
+			if(netMask) nNZ++;
+			*(pairIter++) = netMask;
+		}
+	bool bypassTransform = (nNZ <= tTransformByCompute);
+	
 	//Calculate electron-phonon matrix elements:
-	HePhW->transform(k01, k02);
+	if(bypassTransform)
+	{	//Loop over computes, stores data in same locations as transform:
+		int ikPair = 0;
+		int iProc = 0; //which process should contain this data:
+		auto pairIter = pairMask.begin();
+		for(int ik1=0; ik1<prodOffsetDim; ik1++)
+			for(int ik2=0; ik2<prodOffsetDim; ik2++)
+			{	if(*(pairIter++)) HePhW->compute(e1[ik1].k, e2[ik2].k, ikPair, iProc);
+				ikPair++;
+				while(iProc+1<mpiGroup->nProcesses() and ikPair==HePhW->ikStartProc[iProc+1]) iProc++;
+			}
+	}
+	else HePhW->transform(k01, k02); //generate all data in a single transform
+	
+	//Process call back function using these matrix elements:
 	int ikPair = 0;
 	int ikPairStart = HePhW->ikStart;
 	int ikPairStop = ikPairStart + HePhW->nk;
@@ -740,8 +790,7 @@ void FeynWann::ePhLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::ePh
 			PartialLoop3D(offsetDim, ik2, prodOffsetDim, k2, k02,
 				if(ikPair>=ikPairStart and ikPair<ikPairStop //subset to be evaluated on this process
 					and (not (fwp.ePhHeadOnly and ikPair)) //overridden in k-path debug mode to be ikPair==0 alone
-					and e2[ik2].withinRange //k2 has at least one state within active energy range
-					and ((not ePhMask) or ePhMask->at(ikPair)) ) //state pair is not masked out explicitly
+					and pairMask[ikPair] ) //state pair is active (includes e2.withinRange due to net mask constructed above)
 				{	//Identify associated phonon states:
 					int iqIndex = calculateIndex(ik1v - ik2v, offsetDim);
 					//Set e-ph matrix elements:

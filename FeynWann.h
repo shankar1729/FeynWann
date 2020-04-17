@@ -36,6 +36,7 @@ struct FeynWannParams
 	bool needLinewidth_ePh; //!< whether to provide e-ph line-width (default: false)
 	bool needLinewidthP_ePh; //!< whether to provide momentum-relaxation e-ph line-width (default: false)
 	bool ePhHeadOnly; //!< if true, only evaluate ePh callback function at head of each offset for debugging (default: false)
+	bool maskOptimize; //!< if true, optimize for heavily masked loops by switching between transform and compute based on a benchmark performed at startup
 	static const std::vector<double> fGrid_ePh; //!< fillings grid used for e-ph linewidths
 	
 	vector3<> Bext; //!< external magentic field (added as a Zeeman perturbation to hamiltonian in FeynWann:setState)
@@ -181,6 +182,7 @@ public:
 	std::shared_ptr<DistributedMatrix> HePhSumW; //electron-phonon matrix element sum rule in Wannier basis
 	std::shared_ptr<DistributedMatrix> Dw; //gradient matrix elements for sum rule enforcement
 	double ePhEstart, ePhEstop; //energy range restriction of ePhloop, enabled if ePhEstart < ePhEstop
+	int tTransformByCompute; //benchmark ratio of transform time to compute time used to switch between transform and compute in ePhLoop (if maskOptimize = true)
 	void setMatrix(const StateE& e1, const StateE& e2, const StatePh& ph, int ikPair, MatrixEph& m); //set e-ph properties for e1.ik, e2.ik and ph.iq in m
 	
 private:

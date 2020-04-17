@@ -746,6 +746,7 @@ int main(int argc, char** argv)
 	fwp.needVelocity = true;
 	fwp.needSpin = true;
 	fwp.needPhonons = ePhEnabled;
+	fwp.maskOptimize = true;
 	FeynWann fw(fwp);
 	
 	//Construct mesh of k-offsets:

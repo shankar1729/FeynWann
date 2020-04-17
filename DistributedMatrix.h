@@ -63,7 +63,8 @@ public:
 	
 	//Alternatve interface for single k-points (insted of offsets):
 	void compute(vector3<> k); //!< prepare results for single point k (squared=false only)
-	void compute(vector3<> k1, vector3<> k2); //!< prepare results for single pair k1,k2 (squared=true only)
+	void compute(vector3<> k1, vector3<> k2, int ik=0, int iProc=0); //!< prepare results for single pair k1,k2 (squared=true only),
+		//!< optionally at an offset index ik (default 0) and stored at a specific process (default head). Note: ik should be local on iProc.
 	
 private:
 	ManagedArray<complex> mat; //!< input matrix elements
@@ -81,7 +82,8 @@ private:
 	};
 	std::vector<std::vector<Cell>> uniqueCells;
 	int nAtoms, nBands;
-	void collectHead(); //!< collect buf results on mpiUtil head for compute (single k-point versions of transform)
+	void collectProc(complex* bufSrc=0, int ik=0, int iProc=0); //!< collect buf results, optionally from a different source bufSrc
+		//!< at offset ik (default 0) on process iProc of mpiUtil (default head) for compute (single k-point versions of transform)
 };
 
 //Calculate flat index given 3D coordinates and sample counts
