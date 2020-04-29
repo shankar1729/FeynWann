@@ -108,24 +108,24 @@ struct DebugEph
 		logPrintf("\n");
 		logFlush();
 		
-		/*
 		//---- Spin commutator debug ---
-		matrix S1z = degenerateProject(mEph.e1->S[2], E1);
-		matrix S2z = degenerateProject(mEph.e2->S[2], E2);
-		double Gsq = 0., SGsq = 0.; //traced over specified band and mode range
-		const matrix& G = mEph.M[modeStart];
-		matrix SGcomm = S1z * G - G * S2z;
-		for(int mode=modeStart; mode<modeStop; mode++)
-		{	const matrix& G = mEph.M[mode];
+		if(spinAvailable)
+		{	matrix S1z = degenerateProject(mEph.e1->S[2], E1);
+			matrix S2z = degenerateProject(mEph.e2->S[2], E2);
+			double Gsq = 0., SGsq = 0.; //traced over specified band and mode range
+			const matrix& G = mEph.M[modeStart];
 			matrix SGcomm = S1z * G - G * S2z;
-			for(int b1=bandStart; b1<bandStop; b1++)
-			for(int b2=bandStart; b2<bandStop; b2++)
-			{	Gsq += G(b1,b2).norm();
-				SGsq += SGcomm(b1,b2).norm();
+			for(int mode=modeStart; mode<modeStop; mode++)
+			{	const matrix& G = mEph.M[mode];
+				matrix SGcomm = S1z * G - G * S2z;
+				for(int b1=bandStart; b1<bandStop; b1++)
+				for(int b2=bandStart; b2<bandStop; b2++)
+				{	Gsq += G(b1,b2).norm();
+					SGsq += SGcomm(b1,b2).norm();
+				}
 			}
+			logPrintf("SGcommDEBUG: %le %le\n", sqrt(Gsq), sqrt(SGsq));
 		}
-		logPrintf("SGcommDEBUG: %le %le\n", sqrt(Gsq), sqrt(SGsq));
-		*/
 	}
 	static void ePhProcess(const FeynWann::MatrixEph& mEph, void* params)
 	{	((DebugEph*)params)->process(mEph);
@@ -276,7 +276,7 @@ int main(int argc, char** argv)
 		fw.ePhCalc(src.e1, src.e2, src.ph, src.m);
 		
 		if(mpiGroup->isHead()) src.process(src.m); //directly use much faster single-k version (test of single-k skipped above)
-		fw.ePhLoop(k1, k2, DebugEph::ePhProcess, &src); //Call ePh loop to test the single-k stuff above
+		//fw.ePhLoop(k1, k2, DebugEph::ePhProcess, &src); //Call ePh loop to test the single-k stuff above
 	}
 	
 	fw.free();
