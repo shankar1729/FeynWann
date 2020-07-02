@@ -43,6 +43,7 @@ struct Lindblad : public Integrator<DM1>
 	
 	const double dmu, T, invT; //!< Fermi level position relative to neutral value / VBM, and temperature
 	const double pumpOmega, pumpA0, pumpTau; const vector3<complex> pumpPol; const bool pumpEvolve; //!< pump parameters
+	const bool pumpBfield; const vector3<> pumpB; //pump parameters for Bfield mode
 	const double omegaMin, domega, omegaMax; const int nomega; //!< probe frequency grid
 	const double tau; const std::vector<vector3<complex>> pol; //!< probe parameters
 	const double dE; //!< energy resolution for distribution functions
@@ -69,11 +70,13 @@ struct Lindblad : public Integrator<DM1>
 	double Emin, Emax; //!< energy range of active space across all k (for spin and number density output)
 	
 	Lindblad(double dmu, double T, double pumpOmega, double pumpA0, double pumpTau, vector3<complex> pumpPol, bool pumpEvolve,
+		bool pumpBfield, vector3<> pumpB,
 		double omegaMin, double omegaMax, double domega, double tau, std::vector<vector3<complex>> pol, double dE,
 		bool ePhEnabled, bool verbose)
 	: stepID(0),
 		dmu(dmu), T(T), invT(1./T),
 		pumpOmega(pumpOmega), pumpA0(pumpA0), pumpTau(pumpTau), pumpPol(pumpPol), pumpEvolve(pumpEvolve),
+		pumpBfield(pumpBfield), pumpB(pumpB),
 		omegaMin(omegaMin), domega(domega), omegaMax(omegaMax), nomega(1+int(round((omegaMax-omegaMin)/domega))),
 		tau(tau), pol(pol), dE(dE), ePhEnabled(ePhEnabled), verbose(verbose),
 		Emin(+DBL_MAX), Emax(-DBL_MAX)
@@ -137,7 +140,7 @@ struct Lindblad : public Integrator<DM1>
 			die("dmu = %lg eV is out of range [ %lg , %lg ] eV specified in lindbladInit.\n", dmu/eV, h.dmuMin/eV, h.dmuMax/eV);
 		if(T > h.Tmax)
 			die("T = %lg K is larger than Tmax = %lg K specified in lindbladInit.\n", T/Kelvin, h.Tmax/Kelvin);
-		if(pumpOmega > h.pumpOmegaMax)
+		if((not pumpBfield) and (pumpOmega > h.pumpOmegaMax))
 			die("pumpOmega = %lg eV is larger than pumpOmegaMax = %lg eV specified in lindbladInit.\n", pumpOmega/eV, h.pumpOmegaMax/eV);
 		if(omegaMax > h.probeOmegaMax)
 			die("omegaMax = %lg eV is larger than probeOmegaMax = %lg eV specified in lindbladInit.\n", omegaMax/eV, h.probeOmegaMax/eV);
@@ -148,6 +151,8 @@ struct Lindblad : public Integrator<DM1>
 		R = h.R; Omega = fabs(det(R));
 		if(ePhEnabled != h.ePhEnabled)
 			die("ePhEnabled = %s differs from the mode specified in lindbladInit.\n", boolMap.getString(ePhEnabled));
+		if(pumpBfield and (not spinorial))
+			die("Bfield pump mode requires spin matrix elements from a spinorial calculation.\n");
 		
 		//Read k-point offsets:
 		std::vector<size_t> byteOffsets(h.nk);
@@ -175,15 +180,17 @@ struct Lindblad : public Integrator<DM1>
 			Emin = std::min(Emin, s.E[s.innerStart]);
 			Emax = std::max(Emax, s.E[s.innerStop-1]);
 			//--- Pump matrix elements with energy conservation
-			s.pumpPD = dot(s.P, pumpPol)(0,s.nInner, s.innerStart,s.innerStop); //restrict to inner active
-			double normFac = sqrt(pumpTau/sqrt(M_PI));
-			complex* PDdata = s.pumpPD.data();
-			for(int b2=s.innerStart; b2<s.innerStop; b2++)
-				for(int b1=s.innerStart; b1<s.innerStop; b1++)
-				{	//Multiply energy conservation:
-					double tauDeltaE = pumpTau*(s.E[b1] - s.E[b2] - pumpOmega);
-					*(PDdata++) *= normFac * exp(-0.5*tauDeltaE*tauDeltaE);
-				}
+			if(not pumpBfield)
+			{	s.pumpPD = dot(s.P, pumpPol)(0,s.nInner, s.innerStart,s.innerStop); //restrict to inner active
+				double normFac = sqrt(pumpTau/sqrt(M_PI));
+				complex* PDdata = s.pumpPD.data();
+				for(int b2=s.innerStart; b2<s.innerStop; b2++)
+					for(int b1=s.innerStart; b1<s.innerStop; b1++)
+					{	//Multiply energy conservation:
+						double tauDeltaE = pumpTau*(s.E[b1] - s.E[b2] - pumpOmega);
+						*(PDdata++) *= normFac * exp(-0.5*tauDeltaE*tauDeltaE);
+					}
+			}
 			
 			//Set initial occupations:
 			s.rho0.resize(s.nInner);
@@ -344,16 +351,32 @@ struct Lindblad : public Integrator<DM1>
 		for(size_t ik=ikStart; ik<ikStop; ik++)
 		{	const State& s = *(sPtr++);
 			const matrix rhoCur = getRho(rho.data()+rhoOffset[ik], s.nInner);
-			matrix rhoBar = eye(s.nInner) - rhoCur; //1-rho
-			//Compute and apply perturbation:
-			matrix P = s.pumpPD; //P-
-			matrix Pdag = dagger(P); //P+
-			matrix deltaRho;
-			for(int s=-1; s<=+1; s+=2)
-			{	deltaRho += rhoBar*P*rhoCur*Pdag - Pdag*rhoBar*P*rhoCur;
-				std::swap(P, Pdag); //P- <--> P+
+			if(pumpBfield)
+			{	//Construct Hamiltonian including magnetic field contribution:
+				matrix Htot(s.E(s.innerStart, s.innerStart+s.nInner));
+				for(int iDir=0; iDir<3; iDir++) //Add Zeeman Hamiltonian
+					Htot -= pumpB[iDir] * s.S[iDir];
+				//Set rho to Fermi function of this perturbed Hamiltonian:
+				diagMatrix Epert; matrix Vpert;
+				Htot.diagonalize(Vpert, Epert);
+				diagMatrix fPert(s.nInner);
+				for(int b=0; b<s.nInner; b++)
+					fPert[b] = fermi((Epert[b]-dmu)*invT);
+				matrix rhoPert = Vpert * fPert * dagger(Vpert);
+				accumRhoHC(0.5*(rhoPert-rhoCur), rho.data()+rhoOffset[ik]);
 			}
-			accumRhoHC((M_PI*pumpA0*pumpA0) * deltaRho, rho.data()+rhoOffset[ik]);
+			else
+			{	matrix rhoBar = eye(s.nInner) - rhoCur; //1-rho
+				//Compute and apply perturbation:
+				matrix P = s.pumpPD; //P-
+				matrix Pdag = dagger(P); //P+
+				matrix deltaRho;
+				for(int s=-1; s<=+1; s+=2)
+				{	deltaRho += rhoBar*P*rhoCur*Pdag - Pdag*rhoBar*P*rhoCur;
+					std::swap(P, Pdag); //P- <--> P+
+				}
+				accumRhoHC((M_PI*pumpA0*pumpA0) * deltaRho, rho.data()+rhoOffset[ik]);
+			}
 		}
 		watch.stop();
 	}
@@ -555,17 +578,19 @@ inline vector3<complex> normalize(const vector3<complex>& v) { return v * (1./sq
 int main(int argc, char** argv)
 {	
 	InitParams ip = FeynWann::initialize(argc, argv, "Lindblad dynamics in an ab initio Wannier basis");
-
+	
 	//Get the system parameters:
 	InputMap inputMap(ip.inputFilename);
 	//--- doping / temperature
 	const double dmu = inputMap.get("dmu", 0.) * eV; //optional: shift in fermi level from neutral value / VBM in eV (default: 0)
 	const double T = inputMap.get("T") * Kelvin; //temperature in Kelvin (ambient phonon T = initial electron T)
 	//--- pump
-	const string pumpMode = inputMap.getString("pumpMode"); //must be Perturb or Evolve
-	if(pumpMode!="Evolve" and pumpMode!="Perturb")
-		die("\npumpMode must be 'Evolve' or 'Perturb'\n");
-	const double pumpOmega = inputMap.get("pumpOmega") * eV; //pump frequency in eV
+	const string pumpMode = inputMap.getString("pumpMode"); //must be Evolve, Perturb or Bfield
+	if(pumpMode!="Evolve" and pumpMode!="Perturb" and pumpMode!="Bfield")
+		die("\npumpMode must be 'Evolve' or 'Perturb' pr 'Bfield'\n");
+	const double Tesla = Joule/(Ampere*meter*meter);
+	const vector3<> pumpB = inputMap.getVector("pumpB", vector3<>()) * Tesla; //perturbing initial magnetic field in Tesla (used only in Bfield mode)
+	const double pumpOmega = inputMap.get("pumpOmega") * eV; //pump frequency in eV (used only in Evolve or Perturb modes)
 	const double pumpA0 = inputMap.get("pumpA0"); //pump pulse amplitude / intensity (Units TBD)
 	const double pumpTau = inputMap.get("pumpTau")*fs; //Gaussian pump pulse width (sigma of amplitude) in fs
 	const vector3<complex> pumpPol = normalize(
@@ -606,6 +631,7 @@ int main(int argc, char** argv)
 	logPrintf("dmu = %lg\n", dmu);
 	logPrintf("T = %lg\n", T);
 	logPrintf("pumpMode = %s\n", pumpMode.c_str());
+	logPrintf("pumpB = "); pumpB.print(globalLog, " %lg ");
 	logPrintf("pumpOmega = %lg\n", pumpOmega);
 	logPrintf("pumpA0 = %lg\n", pumpA0);
 	logPrintf("pumpTau = %lg\n", pumpTau);
@@ -630,6 +656,7 @@ int main(int argc, char** argv)
 	//Create and initialize lindblad calculator:
 	Lindblad lb(dmu, T,
 		pumpOmega, pumpA0, pumpTau, pumpPol, (pumpMode=="Evolve"),
+		(pumpMode=="Bfield"), pumpB,
 		omegaMin, omegaMax, domega, tau, pol, dE, ePhEnabled, verbose);
 	lb.initialize(inFile);
 	logPrintf("Initialization completed successfully at t[s]: %9.2lf\n\n", clock_sec());
@@ -643,18 +670,18 @@ int main(int argc, char** argv)
 	}
 	logPrintf("\n");
 	
-	if(pumpMode=="Perturb" and (not ePhEnabled))
+	if(pumpMode!="Evolve" and (not ePhEnabled))
 	{	//Simple probe-pump-probe with no relaxation:
 		lb.report(-dt, lb.rho);
-		lb.applyPump();
+		lb.applyPump(); //takes care of optical pump or B-field excitation
 		lb.report(0., lb.rho);
 	}
 	else
 	{	double tStart = 0.;
-		if(pumpMode=="Perturb")
+		if(pumpMode!="Evolve")
 		{	//Do an initial report akin to above and apply the pump:
 			lb.report(-dt, lb.rho);
-			lb.applyPump();
+			lb.applyPump(); //takes care of optical pump or B-field excitation
 			tStart = 0.; //integrate will report at t=0 below, before evolving ePh relaxation
 		}
 		else
