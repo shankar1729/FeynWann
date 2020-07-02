@@ -422,10 +422,6 @@ struct Lindblad : public Integrator<DM1>
 						//Loop over all connections to the same partner k:
 						while((g != s.GePh.end()) and (g->jk == ik2))
 						{	//Phonon occupation factor:
-// 							double omegaPhByT = g->omegaPh/T;
-// 							double nPh = bose(std::max(1e-3, omegaPhByT));
-// 							rho1dot += (prefac*nPh) * (rho1bar * SMSdag(g->G, rho2)) - (SMSdag(g->G, rho2bar) * rho1) * (prefac*(nPh+1)); //+ h.c. added together below
-// 							rho2dot += (prefac*(nPh+1)) * (SdagMS(g->G, rho1) * rho2bar) - (rho2 * SdagMS(g->G, rho1bar)) * (prefac*nPh); //+ h.c. added together below
 							rho1dot += prefac * (rho1bar * SMSdag(g->Am, rho2) - SMSdag(g->Ap, rho2bar) * rho1); //+ h.c. added together below
 							rho2dot += prefac * (SdagMS(g->Ap, rho1) * rho2bar - rho2 * SdagMS(g->Am, rho1bar)); //+ h.c. added together below
 							//Move to next element:
