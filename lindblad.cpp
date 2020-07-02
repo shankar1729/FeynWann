@@ -475,7 +475,7 @@ struct Lindblad : public Integrator<DM1>
 		int nDist = spinorial ? 4 : 1; //number distribution only, or also spin distribution
 		std::vector<Histogram> dist(nDist, Histogram(Emin, dE, Emax));
 		const double prefac = spinWeight*(1./nkTot); //BZ integration weight
-		double Etot = 0., dfMax = 0.;
+		double Etot = 0., dfMax = 0.; vector3<> Stot;
 		const State* sPtr = state.data();
 		for(size_t ik=ikStart; ik<ikStop; ik++)
 		{	const State& s = *(sPtr++);
@@ -491,28 +491,26 @@ struct Lindblad : public Integrator<DM1>
 				dist[0].addEvent(Ecur, weight);
 				drhoData += (s.nInner+1); //advance to next diagonal entry
 			}
-			//Spin distribution of available:
+			//Spin distribution (if available):
 			if(spinorial)
 			{	const complex* drhoData = drho.data();
 				vector3<const complex*> Sdata; for(int k=0; k<3; k++) Sdata[k] = s.S[k].data();
+				std::vector<vector3<>> Sband(s.nInner); //spin expectation by band S_b := sum_a S_ba drho_ab
 				for(int b2=0; b2<s.nInner; b2++)
-				{	int i = b2*s.nInner; //offset into data
-					const double& E2 = s.E[b2+s.innerStart];
-					for(int b1=0; b1<=b2; b1++) //use Hermitian symmetry
-					{	complex weight = ((b1==b2 ? 1 : 2) * prefac) * drhoData[i];
-						const double& E1 = s.E[b1+s.innerStart];
-						if(fabs(E1-E2) < degeneracyThreshold)
-						{	//Precalculate histogram position:
-							double E = 0.5*(E1+E2);
-							int iEvent; double tEvent;
-							if(dist[1].eventPrecalc(E, iEvent, tEvent))
-							{	//Collect spin densities:
-								for(int k=0; k<3; k++)
-									dist[k+1].addEventPrecalc(iEvent, tEvent, (weight * Sdata[k][i]).real());
-							}
-						}
-						//Advance to next entry of Hermitian matrix:
-						i++;
+				{	for(int b1=0; b1<s.nInner; b1++)
+					{	complex weight = prefac * (*(drhoData++));
+						for(int iDir=0; iDir<3; iDir++)
+							Sband[b2][iDir] += (weight * (*(Sdata[iDir]++))).real();
+					}
+					Stot += Sband[b2];
+				}
+				//Collect distribution based on per-band spin:
+				for(int b=0; b<s.nInner; b++)
+				{	const double& E = s.E[b+s.innerStart];
+					int iEvent; double tEvent;
+					if(dist[1].eventPrecalc(E, iEvent, tEvent))
+					{	for(int iDir=0; iDir<3; iDir++)
+							dist[iDir+1].addEventPrecalc(iEvent, tEvent, Sband[b][iDir]);
 					}
 				}
 			}
@@ -522,7 +520,9 @@ struct Lindblad : public Integrator<DM1>
 		for(Histogram& h: dist) h.reduce(MPIUtil::ReduceSum);
 		if(mpiWorld->isHead())
 		{	//Report step ID and energy:
-			logPrintf("Integrate: Step: %4d   t[fs]: %6.1lf   Etot[eV]: %.6lf   dfMax: %.3lg\n", stepID, t/fs, Etot/eV, dfMax);
+			logPrintf("Integrate: Step: %4d   t[fs]: %6.1lf   Etot[eV]: %.6lf   dfMax: %.3lg", stepID, t/fs, Etot/eV, dfMax);
+			if(spinorial) logPrintf("   S: [ %.8lf %.8lf %.8lf ]", Stot[0],  Stot[1],  Stot[2]);
+			logPrintf("\n"); logFlush();
 			//Save distribution functions:
 			ofstream ofs("dist."+ossID.str());
 			ofs << "#E-mu/VBM[eV] n[eV^-1]";
