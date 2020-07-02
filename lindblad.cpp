@@ -589,6 +589,8 @@ int main(int argc, char** argv)
 	const double dE = inputMap.get("dE") * eV; //energy resolution for distribution functions
 	const double dt = inputMap.get("dt") * fs; //time interval between reports
 	const double tStop = inputMap.get("tStop") * fs; //stopping time for simulation
+	const double tStep = inputMap.get("tStep", 0.) * fs; //if non-zero, time step for fixed-step (non-adaptive) integrator
+	const double tolAdaptive = inputMap.get("tolAdaptive", 1e-3); //relative tolerance for adaptive integrator
 	
 	const string ePhMode = inputMap.getString("ePhMode"); //must be Off or DiagK (add FullK in future)
 	if(ePhMode!="Off" and ePhMode!="DiagK")
@@ -619,6 +621,8 @@ int main(int argc, char** argv)
 	logPrintf("dE = %lg\n", dE);
 	logPrintf("dt = %lg\n", dt);
 	logPrintf("tStop = %lg\n", tStop);
+	logPrintf("tStep = %lg\n", tStep);
+	logPrintf("tolAdaptive = %lg\n", tolAdaptive);
 	logPrintf("ePhMode = %s\n", ePhMode.c_str());
 	logPrintf("verbose = %s\n", verboseMode.c_str());
 	logPrintf("inFile = %s\n", inFile.c_str());
@@ -658,7 +662,10 @@ int main(int argc, char** argv)
 			tStart = -dt * ceil(5.*tau/dt);
 		}
 		//Evolve:
-		lb.integrateAdaptive(lb.rho, tStart, tStop, 1e-3, dt);
+		if(tStep) //Fixed-step integrator:
+			lb.integrateFixed(lb.rho, tStart, tStop, tStep, dt);
+		else //Adaptive integrator:
+			lb.integrateAdaptive(lb.rho, tStart, tStop, tolAdaptive, dt);
 	}
 	
 	//Cleanup:
