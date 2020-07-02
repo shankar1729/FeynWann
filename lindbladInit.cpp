@@ -32,7 +32,7 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 template<class T> constexpr std::reverse_iterator<T*> reverse(T* i) { return std::reverse_iterator<T*>(i); }
 
 static const double omegaPhCut = 1e-6;
-static const double nEphDelta = 4.; //number of ePhDelta to include in output
+static const double nEphDelta = 5.; //number of ePhDelta to include in output
 
 //Helper class to "argsort" an array i.e. determine the indices that sort it
 template<typename ArrayType> struct IndexCompare
@@ -284,7 +284,7 @@ struct LindbladInit
 			{	for(const double* E2=E2begin; E2<E2end; E2++) //E2 in active range
 				{	for(const double omegaPh: state.omega) if(omegaPh>omegaPhCut) //loop over non-zero phonon frequencies
 					{	double deltaE = (*E1) - (*E2) - omegaPh; //energy conservation violation
-						if(fabs(deltaE) < nEphDelta*ePhDelta) //else negligible at the 10^-3 level for a Gaussian
+						if(fabs(deltaE) < nEphDelta*ePhDelta) //else negligible
 						{	Econserve = true;
 							nActivePairs++;
 						}
@@ -474,7 +474,7 @@ struct LindbladInit
 			g.omegaPh = ph.omega[alpha];
 			if(g.omegaPh < omegaPhCut) continue; //avoid zero frequency phonons
 			double sigmaInv = 1./std::min(ePhDelta, g.omegaPh/(nEphDelta+1)); //make sure flipped energies not included within energy conservation
-			double deltaPrefac = sqrt(sigmaInv/sqrt(M_PI)) * kpairWeight[ik1]; //account for down-sampling weight (1 if no down-sampling)
+			double deltaPrefac = sqrt(sigmaInv/sqrt(2.*M_PI)) * kpairWeight[ik1]; //account for down-sampling weight (1 if no down-sampling)
 			const matrix& M = mEph.M[alpha];
 			for(int n2=innerOffset2; n2<innerOffset2+nInner2; n2++)
 				for(int n1=innerOffset1; n1<innerOffset1+nInner1; n1++)
@@ -483,7 +483,7 @@ struct LindbladInit
 					{	SparseEntry s;
 						s.i = n1 - innerOffset1;
 						s.j = n2 - innerOffset2;
-						s.val = M(n1,n2) * (deltaPrefac*exp(-0.5*deltaEbySigma*deltaEbySigma)); //apply e-conservation factor
+						s.val = M(n1,n2) * (deltaPrefac*exp(-0.25*deltaEbySigma*deltaEbySigma)); //apply e-conservation factor (sqrt(normalized gaussian))
 						g.G.push_back(s);
 					}
 				}

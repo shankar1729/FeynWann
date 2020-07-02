@@ -567,7 +567,7 @@ int main(int argc, char** argv)
 		die("\npumpMode must be 'Evolve' or 'Perturb'\n");
 	const double pumpOmega = inputMap.get("pumpOmega") * eV; //pump frequency in eV
 	const double pumpA0 = inputMap.get("pumpA0"); //pump pulse amplitude / intensity (Units TBD)
-	const double pumpTau = inputMap.get("pumpTau")*fs; //Gaussian pump pulse width in fs
+	const double pumpTau = inputMap.get("pumpTau")*fs; //Gaussian pump pulse width (sigma of amplitude) in fs
 	const vector3<complex> pumpPol = normalize(
 		complex(1,0)*inputMap.getVector("pumpPolRe", vector3<>(1.,0.,0.)) +  //Real part of polarization
 		complex(0,1)*inputMap.getVector("pumpPolIm", vector3<>(0.,0.,0.)) ); //Imag part of polarization
@@ -575,7 +575,7 @@ int main(int argc, char** argv)
 	const double omegaMin = inputMap.get("omegaMin") * eV; //start of frequency grid for probe response
 	const double omegaMax = inputMap.get("omegaMax") * eV; //end of frequency grid for probe response
 	const double domega = inputMap.get("domega") * eV; //frequency resolution for probe calculation
-	const double tau = inputMap.get("tau") * fs; //Gaussian probe pulse width in fs
+	const double tau = inputMap.get("tau") * fs; //Gaussian probe pulse width (sigma of amplitude) in fs
 	std::vector<vector3<complex>> pol;
 	while(true)
 	{	int iPol = int(pol.size())+1;
