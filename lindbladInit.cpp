@@ -473,7 +473,7 @@ struct LindbladInit
 			g.jk = ik2;
 			g.omegaPh = ph.omega[alpha];
 			if(g.omegaPh < omegaPhCut) continue; //avoid zero frequency phonons
-			double sigmaInv = 1./std::min(ePhDelta, g.omegaPh/(nEphDelta+1)); //make sure flipped energies not included within energy conservation
+			double sigmaInv = 1./ePhDelta;
 			double deltaPrefac = sqrt(sigmaInv/sqrt(2.*M_PI)) * kpairWeight[ik1]; //account for down-sampling weight (1 if no down-sampling)
 			const matrix& M = mEph.M[alpha];
 			for(int n2=innerOffset2; n2<innerOffset2+nInner2; n2++)
