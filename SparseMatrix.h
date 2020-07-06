@@ -27,11 +27,18 @@ struct SparseEntry
 {	int i, j;
 	complex val;
 };
-typedef std::vector<SparseEntry> SparseMatrix;
+struct SparseMatrix : public std::vector<SparseEntry>
+{	int nRows, nCols;
+    SparseMatrix(int nRows=0, int nCols=0, int nNZexpected=0) : nRows(nRows), nCols(nCols)
+	{	if(nNZexpected) reserve(nNZexpected);
+	}
+};
 
 //Multiply dagger(S)*M*S for sparse matrix S and dense matrix M
 inline SparseMatrix SdagMS(const SparseMatrix& S, const matrix& M)
-{	SparseMatrix result; result.reserve(S.size()*S.size());
+{	assert(S.nRows == M.nRows()); //for Sdag * M
+	assert(M.nCols() == S.nRows); //for M * S
+	SparseMatrix result(S.nCols, S.nCols, S.size()*S.size());
 	const complex* m = M.data();
 	for(const SparseEntry& s1: S)
 		for(const SparseEntry& s2: S)
@@ -46,7 +53,9 @@ inline SparseMatrix SdagMS(const SparseMatrix& S, const matrix& M)
 
 //Multiply S*M*dagger(S) for sparse matrix S and dense matrix M
 inline SparseMatrix SMSdag(const SparseMatrix& S, const matrix& M)
-{	SparseMatrix result; result.reserve(S.size()*S.size());
+{	assert(S.nCols == M.nRows()); //for S * M
+	assert(M.nCols() == S.nCols); //for M * Sdag
+	SparseMatrix result(S.nRows, S.nRows, S.size()*S.size());
 	const complex* m = M.data();
 	for(const SparseEntry& s1: S)
 		for(const SparseEntry& s2: S)
@@ -60,8 +69,10 @@ inline SparseMatrix SMSdag(const SparseMatrix& S, const matrix& M)
 }
 
 //Extract diagonal part of product of sparse matrices:
-inline diagMatrix diagSS(const SparseMatrix& S1, const SparseMatrix& S2, int N)
-{	diagMatrix result(N);
+inline diagMatrix diagSS(const SparseMatrix& S1, const SparseMatrix& S2)
+{	assert(S1.nCols == S2.nRows); //for S1 * S2 to be meaningful
+	assert(S1.nRows == S2.nCols); //for result to be square
+	diagMatrix result(S1.nRows);
 	for(const SparseEntry& s1: S1)
 		for(const SparseEntry& s2: S2)
 			if(s1.i==s2.j && s1.j==s2.i)
@@ -71,8 +82,9 @@ inline diagMatrix diagSS(const SparseMatrix& S1, const SparseMatrix& S2, int N)
 
 //Multiply sparse matrix with dense matrix on left:
 inline matrix operator*(const matrix& M, const SparseMatrix& S)
-{	int nRows = M.nRows();
-	matrix R = zeroes(nRows, M.nCols()); //same size as M because S is square
+{	assert(M.nCols() == S.nRows);
+	int nRows = M.nRows();
+	matrix R = zeroes(nRows, S.nCols);
 	complex* r = R.data();
 	const complex* m = M.data();
 	for(const SparseEntry& s: S)
@@ -86,17 +98,18 @@ inline matrix operator*(const matrix& M, const SparseMatrix& S)
 
 //Multiply sparse matrix with dense matrix on right:
 inline matrix operator*(const SparseMatrix& S, const matrix& M)
-{	int nRows = M.nRows(), nCols = M.nCols();
-	matrix R = zeroes(nRows, nCols); //same size as M because S is square
+{	assert(S.nCols == M.nRows());
+	int nCols = M.nCols();
+	matrix R = zeroes(S.nRows, nCols);
 	complex* r = R.data();
 	const complex* m = M.data();
 	for(const SparseEntry& s: S)
 	{	complex* rCur = r + s.i;
 		const complex* mCur = m + s.j;
-		int offset = 0;
 		for(int k=0; k<nCols; k++)
-		{	rCur[offset] += s.val * mCur[offset];
-			offset += nRows;
+		{	(*rCur) += s.val * (*mCur);
+			rCur += R.nRows();
+			mCur += M.nRows();
 		}
 	}
 	return R;

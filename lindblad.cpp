@@ -253,6 +253,8 @@ struct Lindblad : public Integrator<DM1>
 			{	const double* Ei = &(s.E[s.innerStart]);
 				for(LindbladFile::GePhEntry& g: s.GePh)
 				{	const double* Ej = &(Eall[nInnerPrev[g.jk]]);
+					g.G.nRows = s.nInner;
+					g.G.nCols = nInnerAll[g.jk];
 					g.initA(Ei, Ej, T);
 				}
 			}

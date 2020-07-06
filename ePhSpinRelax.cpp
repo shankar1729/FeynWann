@@ -56,7 +56,8 @@ struct SpinRelaxCollect
 	}
 	
 	inline SparseMatrix degenerateProject(const matrix& M, const diagMatrix& E, int bStart, int bStop)
-	{	SparseMatrix result; result.reserve(bStop-bStart); //typically diagonal (Rashba) or block diagonal with size 2 (Kramer-degenerate)
+	{	int bCount = bStop-bStart;
+		SparseMatrix result(bCount, bCount, bCount); //nNZ estimate based on diagonal (Rashba)
 		for(int b2=bStart; b2<bStop; b2++)
 		{	const complex* Mdata = M.data() + (b2*M.nRows() + bStart);
 			for(int b1=bStart; b1<bStop; b1++)
@@ -270,7 +271,7 @@ struct SpinRelaxCollect
 		std::vector<matrix3<>> contribChi(nBands);
 		for(int iDir=0; iDir<3; iDir++)
 		for(int jDir=0; jDir<3; jDir++)
-		{	diagMatrix SiSj = diagSS(Sdeg[iDir], Sdeg[jDir], nBandsSel);
+		{	diagMatrix SiSj = diagSS(Sdeg[iDir], Sdeg[jDir]);
 			for(int b=bStart; b<bStop; b++)
 				contribChi[b](iDir,jDir) = prefacChi * SiSj[b-bStart];
 		}

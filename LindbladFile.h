@@ -91,7 +91,7 @@ namespace LindbladFile
 	{	static constexpr const char* marker = "GEPH";
 		size_t jk; //index of second k-point
 		double omegaPh; //phonon frequency
-		SparseMatrix G; //e-ph matrix elements (with energy conservation sqrt included)
+		SparseMatrix G; //e-ph matrix elements (with energy conservation sqrt included). Note that nRows, nCols are not stored/retrieved from file.
 		SparseMatrix Am, Ap; //G with sqrt(nPh) and sqrt(nPh+1) respectively multiplied (not stored by lindbladInit, but computed on startup in lindblad) 
 		
 		size_t nBytes() const
@@ -151,8 +151,8 @@ namespace LindbladFile
 		
 		//Initialize Am and Ap given energy arrays and T:
 		void initA(const double* Ei, const double* Ej, double T)
-		{	Am.clear(); Am.reserve(G.size());
-			Ap.clear(); Ap.reserve(G.size());
+		{	Am.clear(); Am.reserve(G.size()); Am.nRows = G.nRows; Am.nCols = G.nCols;
+			Ap.clear(); Ap.reserve(G.size()); Ap.nRows = G.nRows; Ap.nCols = G.nCols;
 			for(const SparseEntry& se: G)
 			{	double omegaEff = Ei[se.i] - Ej[se.j]; //phonon frequency with exact energy conservation
 				if(omegaEff < 1e-3*T) continue;
