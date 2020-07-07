@@ -80,38 +80,54 @@ inline diagMatrix diagSS(const SparseMatrix& S1, const SparseMatrix& S2)
 	return result;
 }
 
-//Multiply sparse matrix with dense matrix on left:
-inline matrix operator*(const matrix& M, const SparseMatrix& S)
+//Accumulate product of sparse matrix with dense matrix on left to dense matrix:
+inline void axpyProd(double alpha, const matrix& M, const SparseMatrix& S, matrix& R)
 {	assert(M.nCols() == S.nRows);
 	int nRows = M.nRows();
-	matrix R = zeroes(nRows, S.nCols);
+	assert(R.nRows() == nRows);
+	assert(R.nCols() == S.nCols);
 	complex* r = R.data();
 	const complex* m = M.data();
 	for(const SparseEntry& s: S)
-	{	complex* rCur = r + nRows*s.j;
+	{	complex prefac = alpha * s.val;
+		complex* rCur = r + nRows*s.j;
 		const complex* mCur = m + nRows*s.i;
 		for(int k=0; k<nRows; k++)
-			*(rCur++) += *(mCur++) * s.val;
+			*(rCur++) += *(mCur++) * prefac;
 	}
+}
+
+//Multiply sparse matrix with dense matrix on left:
+inline matrix operator*(const matrix& M, const SparseMatrix& S)
+{	matrix R = zeroes(M.nRows(), S.nCols);
+	axpyProd(1., M, S, R);
 	return R;
 }
 
-//Multiply sparse matrix with dense matrix on right:
-inline matrix operator*(const SparseMatrix& S, const matrix& M)
+//Accumulate product of sparse matrix with dense matrix on left to dense matrix:
+inline void axpyProd(double alpha, const SparseMatrix& S, const matrix& M, matrix& R)
 {	assert(S.nCols == M.nRows());
 	int nCols = M.nCols();
-	matrix R = zeroes(S.nRows, nCols);
+	assert(R.nRows() == S.nRows);
+	assert(R.nCols() == nCols);
 	complex* r = R.data();
 	const complex* m = M.data();
 	for(const SparseEntry& s: S)
-	{	complex* rCur = r + s.i;
+	{	complex prefac = alpha * s.val;
+		complex* rCur = r + s.i;
 		const complex* mCur = m + s.j;
 		for(int k=0; k<nCols; k++)
-		{	(*rCur) += s.val * (*mCur);
+		{	(*rCur) += prefac * (*mCur);
 			rCur += R.nRows();
 			mCur += M.nRows();
 		}
 	}
+}
+
+//Multiply sparse matrix with dense matrix on right:
+inline matrix operator*(const SparseMatrix& S, const matrix& M)
+{	matrix R = zeroes(S.nRows, M.nCols());
+	axpyProd(1., S, M, R);
 	return R;
 }
 

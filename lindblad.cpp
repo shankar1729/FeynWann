@@ -387,6 +387,8 @@ struct Lindblad : public Integrator<DM1>
 	DM1 compute(double t, const DM1& rho)
 	{	static StopWatch watchPump("Lindblad::compute::Pump");
 		static StopWatch watchEph("Lindblad::compute::ePh");
+		static StopWatch watchEphInner("Lindblad::compute::ePhInner");
+		
 		DM1 rhoDot(rho.size(), 0.);
 		//Pump contribution:
 		if(pumpEvolve)
@@ -445,13 +447,18 @@ struct Lindblad : public Integrator<DM1>
 						const matrix rho2bar = eye(nInner2) - rho2;
 						matrix rho2dot = zeroes(nInner2, nInner2);
 						//Loop over all connections to the same partner k:
+						watchEphInner.start();
 						while((g != s.GePh.end()) and (g->jk == ik2))
-						{	//Phonon occupation factor:
-							rho1dot += prefac * (rho1bar * SMSdag(g->Am, rho2) - SMSdag(g->Ap, rho2bar) * rho1); //+ h.c. added together below
-							rho2dot += prefac * (SdagMS(g->Ap, rho1) * rho2bar - rho2 * SdagMS(g->Am, rho1bar)); //+ h.c. added together below
+						{	//Contributions to rho1dot: (+ h.c. added together by accumRhoHC)
+							axpyProd(+prefac, rho1bar, SMSdag(g->Am, rho2), rho1dot); //+ h.c. added together below
+							axpyProd(-prefac, SMSdag(g->Ap, rho2bar), rho1, rho1dot); //+ h.c. added together below
+							//Contributions to rho2dot: (+ h.c. added together by accumRhoHC)
+							axpyProd(+prefac, SdagMS(g->Ap, rho1), rho2bar, rho2dot); //+ h.c. added together below
+							axpyProd(-prefac, rho2, SdagMS(g->Am, rho1bar), rho2dot); //+ h.c. added together below
 							//Move to next element:
 							g++;
 						}
+						watchEphInner.stop();
 						//Accumulate rho2 gradients:
 						accumRhoHC(rho2dot, rhoDot_j.data()+rhoOffset[ik2]);
 					}
