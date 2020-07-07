@@ -34,6 +34,18 @@ inline matrix dot(const matrix* P, vector3<complex> pol)
 {	return pol[0]*P[0] + pol[1]*P[1] + pol[2]*P[2];
 }
 
+//Construct identity - X:
+inline matrix bar(const matrix& X)
+{	matrix Xbar(X);
+	complex* XbarData = Xbar.data();
+	for(int j=0; j<X.nCols(); j++)
+		for(int i=0; i<X.nRows(); i++)
+		{	(*XbarData) = (i==j ? 1. : 0.) - (*XbarData);
+			XbarData++;
+		}
+	return Xbar;
+}
+
 static const double degeneracyThreshold = 1e-5; //!< currently used only for spin-density calculation in report()
 
 //Lindblad initialization, time evolution and measurement operators using FeynWann callback
@@ -276,7 +288,7 @@ struct Lindblad : public Integrator<DM1>
 			matrix rhoCur = zeroes(s.nOuter, s.nOuter);
 			if(s.innerStart) rhoCur.set(0,s.innerStart, 0,s.innerStart, eye(s.innerStart));
 			rhoCur.set(s.innerStart,s.innerStop, s.innerStart,s.innerStop, rhoCurSub);
-			matrix rhoBar = eye(s.nOuter) - rhoCur; //1-rho
+			matrix rhoBar(bar(rhoCur)); //1-rho
 			//Expand probe matrix elements:
 			std::vector<matrix> Ppol(pol.size(), zeroes(s.nOuter, s.nOuter));
 			for(int iDir=0; iDir<3; iDir++)
@@ -367,7 +379,7 @@ struct Lindblad : public Integrator<DM1>
 				accumRhoHC(0.5*(rhoPert-rhoCur), rho.data()+rhoOffset[ik]);
 			}
 			else
-			{	matrix rhoBar = eye(s.nInner) - rhoCur; //1-rho
+			{	matrix rhoBar(bar(rhoCur)); //1-rho
 				//Compute and apply perturbation:
 				matrix P = s.pumpPD; //P-
 				matrix Pdag = dagger(P); //P+
@@ -398,7 +410,7 @@ struct Lindblad : public Integrator<DM1>
 			for(size_t ik=ikStart; ik<ikStop; ik++)
 			{	const State& s = *(sPtr++);
 				const matrix rhoCur = getRho(rho.data()+rhoOffset[ik], s.nInner);
-				const matrix rhoBar = eye(s.nInner) - rhoCur; //1-rho
+				const matrix rhoBar(bar(rhoCur)); //1-rho
 				//Compute and apply perturbation:
 				matrix P = s.pumpPD; //P-
 				matrix Pdag = dagger(P); //P+
@@ -434,7 +446,7 @@ struct Lindblad : public Integrator<DM1>
 				{	const State& s = *(sPtr++);
 					const int& nInner1 = nInnerAll[ik1];
 					const matrix rho1 = getRho(rho.data()+rhoOffset[ik1], nInner1);
-					const matrix rho1bar = eye(nInner1) - rho1;
+					const matrix rho1bar(bar(rho1));
 					matrix rho1dot = zeroes(nInner1, nInner1);
 					//Find first entry of GePh whose partner is on jProc (if any):
 					std::vector<LindbladFile::GePhEntry>::const_iterator g = std::lower_bound(s.GePh.begin(), s.GePh.end(), jkStart);
@@ -443,7 +455,7 @@ struct Lindblad : public Integrator<DM1>
 						const size_t& ik2 = g->jk;
 						const int& nInner2 = nInnerAll[ik2];
 						const matrix rho2 = getRho(rho_j.data()+rhoOffset[ik2], nInner2);
-						const matrix rho2bar = eye(nInner2) - rho2;
+						const matrix rho2bar(bar(rho2));
 						matrix rho2dot = zeroes(nInner2, nInner2);
 						//Loop over all connections to the same partner k:
 						watchEphInner.start();
