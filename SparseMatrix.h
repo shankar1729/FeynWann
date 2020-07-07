@@ -26,43 +26,38 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 struct SparseEntry
 {	int i, j;
 	complex val;
+	//Accessors supporting dagger operation:
+	template<bool dagger=false> int I() const { return dagger ? j : i; }
+	template<bool dagger=false> int J() const { return dagger ? i : j; }
+	template<bool dagger=false> complex Val() const { return dagger ? val.conj() : val; }
 };
 struct SparseMatrix : public std::vector<SparseEntry>
-{	int nRows, nCols;
-    SparseMatrix(int nRows=0, int nCols=0, int nNZexpected=0) : nRows(nRows), nCols(nCols)
-	{	if(nNZexpected) reserve(nNZexpected);
+{
+private:
+	int nr, nc;
+public:
+    inline SparseMatrix(int nRows=0, int nCols=0, int nNZexpected=0) { init(nRows, nCols, nNZexpected); }
+	inline void init(int nRows, int nCols, int nNZexpected=0)
+	{	nr = nRows; nc = nCols;
+		if(nNZexpected) reserve(nNZexpected);
 	}
+	//Accessors supporting dagger operation:
+	template<bool dagger=false> int nRows() const { return dagger ? nc : nr; }
+	template<bool dagger=false> int nCols() const { return dagger ? nr : nc; }
 };
 
-//Multiply dagger(S)*M*S for sparse matrix S and dense matrix M
-inline SparseMatrix SdagMS(const SparseMatrix& S, const matrix& M)
-{	assert(S.nRows == M.nRows()); //for Sdag * M
-	assert(M.nCols() == S.nRows); //for M * S
-	SparseMatrix result(S.nCols, S.nCols, S.size()*S.size());
+//Multiply S1 * M * S2 for sparse matrices S1 and S2 (each optionally daggered), and dense matrix M
+template<bool dag1, bool dag2> SparseMatrix SMS(const SparseMatrix& S1, const matrix& M, const SparseMatrix& S2)
+{	assert(S1.nCols<dag1>() == M.nRows());
+	assert(M.nCols() == S2.nRows<dag2>());
+	SparseMatrix result(S1.nRows<dag1>(), S2.nCols<dag2>(), S1.size()*S2.size());
 	const complex* m = M.data();
-	for(const SparseEntry& s1: S)
-		for(const SparseEntry& s2: S)
+	for(const SparseEntry& s1: S1)
+		for(const SparseEntry& s2: S2)
 		{	SparseEntry sr;
-			sr.i = s1.j;
-			sr.j = s2.j;
-			sr.val = s1.val.conj() * m[M.index(s1.i,s2.i)] * s2.val;
-			result.push_back(sr);
-		}
-	return result;
-}
-
-//Multiply S*M*dagger(S) for sparse matrix S and dense matrix M
-inline SparseMatrix SMSdag(const SparseMatrix& S, const matrix& M)
-{	assert(S.nCols == M.nRows()); //for S * M
-	assert(M.nCols() == S.nCols); //for M * Sdag
-	SparseMatrix result(S.nRows, S.nRows, S.size()*S.size());
-	const complex* m = M.data();
-	for(const SparseEntry& s1: S)
-		for(const SparseEntry& s2: S)
-		{	SparseEntry sr;
-			sr.i = s1.i;
-			sr.j = s2.i;
-			sr.val = s1.val * m[M.index(s1.j,s2.j)] * s2.val.conj();
+			sr.i = s1.I<dag1>();
+			sr.j = s2.J<dag2>();
+			sr.val = s1.Val<dag1>() * m[M.index(s1.J<dag1>(),s2.I<dag2>())] * s2.Val<dag2>();
 			result.push_back(sr);
 		}
 	return result;
@@ -70,9 +65,9 @@ inline SparseMatrix SMSdag(const SparseMatrix& S, const matrix& M)
 
 //Extract diagonal part of product of sparse matrices:
 inline diagMatrix diagSS(const SparseMatrix& S1, const SparseMatrix& S2)
-{	assert(S1.nCols == S2.nRows); //for S1 * S2 to be meaningful
-	assert(S1.nRows == S2.nCols); //for result to be square
-	diagMatrix result(S1.nRows);
+{	assert(S1.nCols() == S2.nRows()); //for S1 * S2 to be meaningful
+	assert(S1.nRows() == S2.nCols()); //for result to be square
+	diagMatrix result(S1.nRows());
 	for(const SparseEntry& s1: S1)
 		for(const SparseEntry& s2: S2)
 			if(s1.i==s2.j && s1.j==s2.i)
@@ -82,10 +77,10 @@ inline diagMatrix diagSS(const SparseMatrix& S1, const SparseMatrix& S2)
 
 //Accumulate product of sparse matrix with dense matrix on left to dense matrix:
 inline void axpyProd(double alpha, const matrix& M, const SparseMatrix& S, matrix& R)
-{	assert(M.nCols() == S.nRows);
+{	assert(M.nCols() == S.nRows());
 	int nRows = M.nRows();
 	assert(R.nRows() == nRows);
-	assert(R.nCols() == S.nCols);
+	assert(R.nCols() == S.nCols());
 	complex* r = R.data();
 	const complex* m = M.data();
 	for(const SparseEntry& s: S)
@@ -99,16 +94,16 @@ inline void axpyProd(double alpha, const matrix& M, const SparseMatrix& S, matri
 
 //Multiply sparse matrix with dense matrix on left:
 inline matrix operator*(const matrix& M, const SparseMatrix& S)
-{	matrix R = zeroes(M.nRows(), S.nCols);
+{	matrix R = zeroes(M.nRows(), S.nCols());
 	axpyProd(1., M, S, R);
 	return R;
 }
 
 //Accumulate product of sparse matrix with dense matrix on left to dense matrix:
 inline void axpyProd(double alpha, const SparseMatrix& S, const matrix& M, matrix& R)
-{	assert(S.nCols == M.nRows());
+{	assert(S.nCols() == M.nRows());
 	int nCols = M.nCols();
-	assert(R.nRows() == S.nRows);
+	assert(R.nRows() == S.nRows());
 	assert(R.nCols() == nCols);
 	complex* r = R.data();
 	const complex* m = M.data();
@@ -126,7 +121,7 @@ inline void axpyProd(double alpha, const SparseMatrix& S, const matrix& M, matri
 
 //Multiply sparse matrix with dense matrix on right:
 inline matrix operator*(const SparseMatrix& S, const matrix& M)
-{	matrix R = zeroes(S.nRows, M.nCols());
+{	matrix R = zeroes(S.nRows(), M.nCols());
 	axpyProd(1., S, M, R);
 	return R;
 }

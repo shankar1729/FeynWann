@@ -151,8 +151,8 @@ namespace LindbladFile
 		
 		//Initialize Am and Ap given energy arrays and T:
 		void initA(const double* Ei, const double* Ej, double T)
-		{	Am.clear(); Am.reserve(G.size()); Am.nRows = G.nRows; Am.nCols = G.nCols;
-			Ap.clear(); Ap.reserve(G.size()); Ap.nRows = G.nRows; Ap.nCols = G.nCols;
+		{	Am.clear(); Am.init(G.nRows(), G.nCols(), G.size());
+			Ap.clear(); Ap.init(G.nRows(), G.nCols(), G.size());
 			for(const SparseEntry& se: G)
 			{	double omegaEff = Ei[se.i] - Ej[se.j]; //phonon frequency with exact energy conservation
 				if(omegaEff < 1e-3*T) continue;

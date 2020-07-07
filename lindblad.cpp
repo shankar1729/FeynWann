@@ -253,8 +253,7 @@ struct Lindblad : public Integrator<DM1>
 			{	const double* Ei = &(s.E[s.innerStart]);
 				for(LindbladFile::GePhEntry& g: s.GePh)
 				{	const double* Ej = &(Eall[nInnerPrev[g.jk]]);
-					g.G.nRows = s.nInner;
-					g.G.nCols = nInnerAll[g.jk];
+					g.G.init(s.nInner, nInnerAll[g.jk]);
 					g.initA(Ei, Ej, T);
 				}
 			}
@@ -450,11 +449,11 @@ struct Lindblad : public Integrator<DM1>
 						watchEphInner.start();
 						while((g != s.GePh.end()) and (g->jk == ik2))
 						{	//Contributions to rho1dot: (+ h.c. added together by accumRhoHC)
-							axpyProd(+prefac, rho1bar, SMSdag(g->Am, rho2), rho1dot); //+ h.c. added together below
-							axpyProd(-prefac, SMSdag(g->Ap, rho2bar), rho1, rho1dot); //+ h.c. added together below
+							axpyProd(+prefac, rho1bar, SMS<false,true>(g->Am, rho2, g->Am), rho1dot); //+ h.c. added together below
+							axpyProd(-prefac, SMS<false,true>(g->Ap, rho2bar, g->Ap), rho1, rho1dot); //+ h.c. added together below
 							//Contributions to rho2dot: (+ h.c. added together by accumRhoHC)
-							axpyProd(+prefac, SdagMS(g->Ap, rho1), rho2bar, rho2dot); //+ h.c. added together below
-							axpyProd(-prefac, rho2, SdagMS(g->Am, rho1bar), rho2dot); //+ h.c. added together below
+							axpyProd(+prefac, SMS<true,false>(g->Ap, rho1, g->Ap), rho2bar, rho2dot); //+ h.c. added together below
+							axpyProd(-prefac, rho2, SMS<true,false>(g->Am, rho1bar, g->Am), rho2dot); //+ h.c. added together below
 							//Move to next element:
 							g++;
 						}
