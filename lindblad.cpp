@@ -62,6 +62,7 @@ struct Lindblad : public Integrator<DM1>
 	
 	const bool ePhEnabled; //!< whether e-ph coupling is enabled
 	const bool verbose; //!< whether to print more detailed stats during evolution
+	const string checkpointFile; //!< file name to save checkpoint data to
 	bool spinorial; //!< whether spin is available
 	int spinWeight; //!< weight of spin in BZ integration
 	matrix3<> R; double Omega; //!< lattice vectors and unit cell volume
@@ -84,13 +85,13 @@ struct Lindblad : public Integrator<DM1>
 	Lindblad(double dmu, double T, double pumpOmega, double pumpA0, double pumpTau, vector3<complex> pumpPol, bool pumpEvolve,
 		bool pumpBfield, vector3<> pumpB,
 		double omegaMin, double omegaMax, double domega, double tau, std::vector<vector3<complex>> pol, double dE,
-		bool ePhEnabled, bool verbose)
+		bool ePhEnabled, bool verbose, string checkpointFile)
 	: stepID(0),
 		dmu(dmu), T(T), invT(1./T),
 		pumpOmega(pumpOmega), pumpA0(pumpA0), pumpTau(pumpTau), pumpPol(pumpPol), pumpEvolve(pumpEvolve),
 		pumpBfield(pumpBfield), pumpB(pumpB),
 		omegaMin(omegaMin), domega(domega), omegaMax(omegaMax), nomega(1+int(round((omegaMax-omegaMin)/domega))),
-		tau(tau), pol(pol), dE(dE), ePhEnabled(ePhEnabled), verbose(verbose),
+		tau(tau), pol(pol), dE(dE), ePhEnabled(ePhEnabled), verbose(verbose), checkpointFile(checkpointFile),
 		Emin(+DBL_MAX), Emax(-DBL_MAX)
 	{
 	}
@@ -580,11 +581,49 @@ struct Lindblad : public Integrator<DM1>
 				ofs << '\n';
 			}
 		}
+		//Write checkpoint file if needed:
+		if(checkpointFile.length())
+		{
+			#ifdef MPI_SAFE_WRITE
+			if(mpiWorld->isHead())
+			{	FILE* fp = fopen(checkpointFile.c_str(), "w");
+				fwrite(&stepID, sizeof(int), 1, fp);
+				fwrite(&t, sizeof(double), 1, fp);
+				//Data from head:
+				fwrite(rho.data(), sizeof(double), rho.size(), fp);
+				//Data from remaining processes:
+				for(int jProc=1; jProc<mpiWorld->nProcesses(); jProc++)
+				{	DM1 buf(rhoSize[jProc]);
+					mpiWorld->recvData(buf, jProc, 0); //recv data to be written
+					fwrite(buf.data(), sizeof(double), buf.size(), fp);
+				}
+				fclose(fp);
+			}
+			else mpiWorld->sendData(rho, 0, 0); //send to head for writing
+			#else
+			//Write in parallel using MPI I/O:
+			MPIUtil::File fp; mpiWorld->fopenWrite(fp, checkpointFile.c_str());
+			//--- Write current step and time as a header:
+			if(mpiWorld->isHead())
+			{	mpiWorld->fwrite(&stepID, sizeof(int), 1, fp);
+				mpiWorld->fwrite(&t, sizeof(double), 1, fp);
+			}
+			//--- Move to location of this process's data:
+			size_t offset = sizeof(int) + sizeof(double); //offset due to header
+			for(int jProc=0; jProc<mpiWorld->iProcess(); jProc++)
+				offset += sizeof(double) * rhoSize[jProc]; //offset due to data from previous processes
+			mpiWorld->fseek(fp, offset, SEEK_SET);
+			//--- Write this process's data:
+			mpiWorld->fwrite(rho.data(), sizeof(double), rho.size(), fp);
+			mpiWorld->fclose(fp);
+			#endif
+		}
 		watch.stop();
 		//Probe responses if present:
 		diagMatrix imEps = calcImEps();
 		if(imEps.size())
 			writeImEps("imEps."+ossID.str(), imEps);
+		//Increment stepID:
 		((Lindblad*)this)->stepID++;
 	}
 };
@@ -646,6 +685,7 @@ int main(int argc, char** argv)
 		die("\nverboseMode must be 'yes' or 'no'\n");
 	const bool verbose = (verboseMode=="yes");
 	const string inFile = inputMap.has("inFile") ? inputMap.getString("inFile") : "ldbd.dat"; //input file name
+	const string checkpointFile = inputMap.has("checkpointFile") ? inputMap.getString("checkpointFile") : ""; //checkpoint file name
 	
 	logPrintf("\nInputs after conversion to atomic units:\n");
 	logPrintf("dmu = %lg\n", dmu);
@@ -677,7 +717,8 @@ int main(int argc, char** argv)
 	Lindblad lb(dmu, T,
 		pumpOmega, pumpA0, pumpTau, pumpPol, (pumpMode=="Evolve"),
 		(pumpMode=="Bfield"), pumpB,
-		omegaMin, omegaMax, domega, tau, pol, dE, ePhEnabled, verbose);
+		omegaMin, omegaMax, domega, tau, pol, dE,
+		ePhEnabled, verbose, checkpointFile);
 	lb.initialize(inFile);
 	logPrintf("Initialization completed successfully at t[s]: %9.2lf\n\n", clock_sec());
 	logFlush();
@@ -698,7 +739,32 @@ int main(int argc, char** argv)
 	}
 	else
 	{	double tStart = 0.;
-		if(pumpMode!="Evolve")
+		bool checkpointExists = false;
+		if(mpiWorld->isHead())
+			checkpointExists = (checkpointFile.length()>0) and (fileSize(checkpointFile.c_str())>0);
+		mpiWorld->bcast(checkpointExists);
+		if(checkpointExists)
+		{	logPrintf("Reading checkpoint from '%s' ... ", checkpointFile.c_str()); logFlush(); 
+			//Determine offset of current process data and total expected file length:
+			size_t offset = sizeof(int)+sizeof(double); //offset due to header
+			for(int jProc=0; jProc<mpiWorld->iProcess(); jProc++)
+				offset += sizeof(double) * lb.rhoSize[jProc]; //offset due to data from previous processes
+			size_t fsizeExpected = offset;
+			for(int jProc=mpiWorld->iProcess(); jProc<mpiWorld->nProcesses(); jProc++)
+				fsizeExpected += sizeof(double) * lb.rhoSize[jProc];
+			mpiWorld->bcast(fsizeExpected);
+			//Open check point file and rrad time header:
+			MPIUtil::File fp; mpiWorld->fopenRead(fp, checkpointFile.c_str(), fsizeExpected);
+			mpiWorld->fread(&(lb.stepID), sizeof(int), 1, fp);
+			mpiWorld->fread(&tStart, sizeof(double), 1, fp);
+			mpiWorld->bcast(tStart);
+			//Read density matrix from check point file:
+			mpiWorld->fseek(fp, offset, SEEK_SET);
+			mpiWorld->fread(lb.rho.data(), sizeof(double), lb.rho.size(), fp);
+			mpiWorld->fclose(fp);
+			logPrintf("done.\n");
+		}
+		else if(pumpMode!="Evolve")
 		{	//Do an initial report akin to above and apply the pump:
 			lb.report(-dt, lb.rho);
 			lb.applyPump(); //takes care of optical pump or B-field excitation
