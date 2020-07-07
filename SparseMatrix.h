@@ -46,22 +46,58 @@ public:
 	template<bool dagger=false> int nCols() const { return dagger ? nr : nc; }
 };
 
-//Multiply S1 * M * S2 for sparse matrices S1 and S2 (each optionally daggered), and dense matrix M
-template<bool dag1, bool dag2> SparseMatrix SMS(const SparseMatrix& S1, const matrix& M, const SparseMatrix& S2)
-{	assert(S1.nCols<dag1>() == M.nRows());
-	assert(M.nCols() == S2.nRows<dag2>());
-	SparseMatrix result(S1.nRows<dag1>(), S2.nCols<dag2>(), S1.size()*S2.size());
-	const complex* m = M.data();
+//Accumulate S1 * M1 * S2 * M2 for sparse matrices S1 and S2 (each optionally daggered), and dense matrices M1 and M2
+template<bool dag1, bool dag2> void axpySMSM(double alpha, const SparseMatrix& S1, const matrix& M1, const SparseMatrix& S2, const matrix& M2, matrix& R)
+{	assert(R.nRows() == S1.nRows<dag1>());
+	assert(S1.nCols<dag1>() == M1.nRows());
+	assert(M1.nCols() == S2.nRows<dag2>());
+	assert(S2.nCols<dag2>() == M2.nRows());
+	assert(M2.nCols() == R.nCols());
+	const complex* m1 = M1.data();
+	const complex* m2 = M2.data();
+	complex* r = R.data();
 	for(const SparseEntry& s1: S1)
 		for(const SparseEntry& s2: S2)
-		{	SparseEntry sr;
-			sr.i = s1.I<dag1>();
-			sr.j = s2.J<dag2>();
-			sr.val = s1.Val<dag1>() * m[M.index(s1.J<dag1>(),s2.I<dag2>())] * s2.Val<dag2>();
-			result.push_back(sr);
+		{	//Get sparse entry corresponding to alpha * S1 * M1 * S2:
+			int i = s1.I<dag1>();
+			int j = s2.J<dag2>();
+			complex val = alpha * s1.Val<dag1>() * m1[M1.index(s1.J<dag1>(),s2.I<dag2>())] * s2.Val<dag2>();
+			//Implement its multiplication with M2 on the right:
+			complex* rCur = r + i;
+			const complex* m2cur = m2 + j;
+			for(int k=0; k<R.nCols(); k++)
+			{	(*rCur) += val * (*m2cur);
+				rCur += R.nRows();
+				m2cur += M2.nRows();
+			}
 		}
-	return result;
 }
+
+//Accumulate M1 * S1 * M2 * S2 for sparse matrices S1 and S2 (each optionally daggered), and dense matrices M1 and M2
+template<bool dag1, bool dag2> void axpyMSMS(double alpha, const matrix& M1, const SparseMatrix& S1, const matrix& M2, const SparseMatrix& S2, matrix& R)
+{	int nRows = R.nRows();
+	assert(R.nRows() == M1.nRows());
+	assert(M1.nCols() == S1.nRows<dag1>());
+	assert(S1.nCols<dag1>() == M2.nRows());
+	assert(M2.nCols() == S2.nRows<dag2>());
+	assert(S2.nCols<dag2>() == R.nCols());
+	const complex* m1 = M1.data();
+	const complex* m2 = M2.data();
+	complex* r = R.data();
+	for(const SparseEntry& s1: S1)
+		for(const SparseEntry& s2: S2)
+		{	//Get sparse entry corresponding to alpha * S1 * M2 * S2:
+			int i = s1.I<dag1>();
+			int j = s2.J<dag2>();
+			complex val = alpha * s1.Val<dag1>() * m2[M2.index(s1.J<dag1>(),s2.I<dag2>())] * s2.Val<dag2>();
+			//Implement its multiplication with M1 on the left:
+			complex* rCur = r + nRows*j;
+			const complex* m1cur = m1 + nRows*i;
+			for(int k=0; k<nRows; k++)
+				*(rCur++) += *(m1cur++) * val;
+		}
+}
+
 
 //Extract diagonal part of product of sparse matrices:
 inline diagMatrix diagSS(const SparseMatrix& S1, const SparseMatrix& S2)
@@ -75,54 +111,38 @@ inline diagMatrix diagSS(const SparseMatrix& S1, const SparseMatrix& S2)
 	return result;
 }
 
-//Accumulate product of sparse matrix with dense matrix on left to dense matrix:
-inline void axpyProd(double alpha, const matrix& M, const SparseMatrix& S, matrix& R)
-{	assert(M.nCols() == S.nRows());
-	int nRows = M.nRows();
-	assert(R.nRows() == nRows);
-	assert(R.nCols() == S.nCols());
-	complex* r = R.data();
-	const complex* m = M.data();
-	for(const SparseEntry& s: S)
-	{	complex prefac = alpha * s.val;
-		complex* rCur = r + nRows*s.j;
-		const complex* mCur = m + nRows*s.i;
-		for(int k=0; k<nRows; k++)
-			*(rCur++) += *(mCur++) * prefac;
-	}
-}
-
 //Multiply sparse matrix with dense matrix on left:
 inline matrix operator*(const matrix& M, const SparseMatrix& S)
-{	matrix R = zeroes(M.nRows(), S.nCols());
-	axpyProd(1., M, S, R);
-	return R;
-}
-
-//Accumulate product of sparse matrix with dense matrix on left to dense matrix:
-inline void axpyProd(double alpha, const SparseMatrix& S, const matrix& M, matrix& R)
-{	assert(S.nCols() == M.nRows());
-	int nCols = M.nCols();
-	assert(R.nRows() == S.nRows());
-	assert(R.nCols() == nCols);
+{	assert(M.nCols() == S.nRows());
+	int nRows = M.nRows();
+	matrix R = zeroes(M.nRows(), S.nCols());
 	complex* r = R.data();
 	const complex* m = M.data();
 	for(const SparseEntry& s: S)
-	{	complex prefac = alpha * s.val;
-		complex* rCur = r + s.i;
-		const complex* mCur = m + s.j;
-		for(int k=0; k<nCols; k++)
-		{	(*rCur) += prefac * (*mCur);
-			rCur += R.nRows();
-			mCur += M.nRows();
-		}
+	{	complex* rCur = r + nRows*s.j;
+		const complex* mCur = m + nRows*s.i;
+		for(int k=0; k<nRows; k++)
+			*(rCur++) += *(mCur++) * s.val;
 	}
+	return R;
 }
 
 //Multiply sparse matrix with dense matrix on right:
 inline matrix operator*(const SparseMatrix& S, const matrix& M)
-{	matrix R = zeroes(S.nRows(), M.nCols());
-	axpyProd(1., S, M, R);
+{	assert(S.nCols() == M.nRows());
+	int nCols = M.nCols();
+	matrix R = zeroes(S.nRows(), M.nCols());
+	complex* r = R.data();
+	const complex* m = M.data();
+	for(const SparseEntry& s: S)
+	{	complex* rCur = r + s.i;
+		const complex* mCur = m + s.j;
+		for(int k=0; k<nCols; k++)
+		{	(*rCur) += s.val * (*mCur);
+			rCur += R.nRows();
+			mCur += M.nRows();
+		}
+	}
 	return R;
 }
 
