@@ -82,6 +82,10 @@ struct Lindblad : public Integrator<DM1>
 	std::vector<int> nInnerAll; //!< nInner for all k-points on all processes
 	double Emin, Emax; //!< energy range of active space across all k (for spin and number density output)
 	
+	std::vector<double> Eall; //!< inner window energies for all k (only needed and initialized when ePhEnabled)
+	std::vector<size_t> nInnerPrev; //!< cumulative nInner for each k, which is the offset into the Eall array for each k
+	double tPrev; //last time at which compute() was called; used internally to update e-ph operator phases
+	
 	Lindblad(double dmu, double T, double pumpOmega, double pumpA0, double pumpTau, vector3<complex> pumpPol, bool pumpEvolve,
 		bool pumpBfield, vector3<> pumpB,
 		double omegaMin, double omegaMax, double domega, double tau, std::vector<vector3<complex>> pol, double dE,
@@ -92,7 +96,7 @@ struct Lindblad : public Integrator<DM1>
 		pumpBfield(pumpBfield), pumpB(pumpB),
 		omegaMin(omegaMin), domega(domega), omegaMax(omegaMax), nomega(1+int(round((omegaMax-omegaMin)/domega))),
 		tau(tau), pol(pol), dE(dE), ePhEnabled(ePhEnabled), verbose(verbose), checkpointFile(checkpointFile),
-		Emin(+DBL_MAX), Emax(-DBL_MAX)
+		Emin(+DBL_MAX), Emax(-DBL_MAX), tPrev(0.)
 	{
 	}
 	
@@ -247,10 +251,10 @@ struct Lindblad : public Integrator<DM1>
 		//Initialize A+ and A- for e-ph matrix elements if required:
 		if(ePhEnabled)
 		{	//Make inner-window energies available for all processes:
-			std::vector<size_t> nInnerPrev(nk+1, 0);
+			nInnerPrev.assign(nk+1, 0);
 			for(size_t ik=0; ik<nk; ik++)
 				nInnerPrev[ik+1] = nInnerPrev[ik] + nInnerAll[ik];
-			std::vector<double> Eall(nInnerPrev.back());
+			Eall.resize(nInnerPrev.back());
 			for(size_t ik=ikStart; ik<ikStop; ik++)
 			{	const State& s = state[ik-ikStart];
 				const double* Ei = &(s.E[s.innerStart]);
@@ -274,7 +278,7 @@ struct Lindblad : public Integrator<DM1>
 	}
 	
 	//Calculate probe response at current rho (update this->imEps)
-	diagMatrix calcImEps() const
+	diagMatrix calcImEps(double t) const
 	{	static StopWatch watch("Lindblad::calcImEps");
 		size_t nImEps = pol.size() * nomega;
 		if(nImEps==0) return diagMatrix(); //no probe specified
@@ -306,20 +310,20 @@ struct Lindblad : public Integrator<DM1>
 			for(int iomega=0; iomega<nomega; iomega++)
 			{	double omega = omegaMin + iomega*domega;
 				double prefac = (4*std::pow(M_PI,2)*spinWeight)/(nkTot * Omega * std::pow(std::max(omega, 1./tau), 3));
-				//Energy conservation factors for all pair of bands at this frequency:
-				std::vector<double> delta(s.nOuter*s.nOuter);
-				double* deltaData = delta.data();
+				//Energy conservation and phase factors for all pair of bands at this frequency:
+				std::vector<complex> delta(s.nOuter*s.nOuter);
+				complex* deltaData = delta.data();
 				double normFac = sqrt(tau/sqrt(M_PI));
 				for(int b2=0; b2<s.nOuter; b2++)
 					for(int b1=0; b1<s.nOuter; b1++)
 					{	double tauDeltaE = tau*(s.E[b1] - s.E[b2] - omega);
-						*(deltaData++) = normFac * exp(-0.5*tauDeltaE*tauDeltaE);
+						*(deltaData++) = normFac * exp(-0.5*tauDeltaE*tauDeltaE) * cis(t*(s.E[b1]-s.E[b2]));
 					}
 				//Loop over polarizations:
 				for(int iPol=0; iPol<int(pol.size()); iPol++)
 				{	//Multiply matrix elements with energy conservation:
 					matrix P = Ppol[iPol];
-					eblas_zmuld(P.nData(), delta.data(),1, P.data(),1); //P-
+					eblas_zmul(P.nData(), delta.data(),1, P.data(),1); //P-
 					matrix Pdag = dagger(P); //P+
 					//Loop over directions of excitations:
 					diagMatrix deltaRhoDiag(s.nOuter);
@@ -449,6 +453,7 @@ struct Lindblad : public Integrator<DM1>
 					const matrix rho1 = getRho(rho.data()+rhoOffset[ik1], nInner1);
 					const matrix rho1bar(bar(rho1));
 					matrix rho1dot = zeroes(nInner1, nInner1);
+					const double* E1 = &(s.E[s.innerStart]);
 					//Find first entry of GePh whose partner is on jProc (if any):
 					std::vector<LindbladFile::GePhEntry>::const_iterator g = std::lower_bound(s.GePh.begin(), s.GePh.end(), jkStart);
 					while(g != s.GePh.end())
@@ -458,15 +463,25 @@ struct Lindblad : public Integrator<DM1>
 						const matrix rho2 = getRho(rho_j.data()+rhoOffset[ik2], nInner2);
 						const matrix rho2bar(bar(rho2));
 						matrix rho2dot = zeroes(nInner2, nInner2);
+						const double* E2 = &(Eall[nInnerPrev[ik2]]);
 						//Loop over all connections to the same partner k:
 						watchEphInner.start();
 						while((g != s.GePh.end()) and (g->jk == ik2))
-						{	//Contributions to rho1dot: (+ h.c. added together by accumRhoHC)
-							axpyMSMS<false,true>(+prefac, rho1bar, g->Am, rho2, g->Am, rho1dot);
-							axpySMSM<false,true>(-prefac, g->Ap, rho2bar, g->Ap, rho1, rho1dot);
+						{	//Update phases for A+ and A- (interaction picture):
+							SparseMatrix& Am = (SparseMatrix&)g->Am;
+							SparseMatrix& Ap = (SparseMatrix&)g->Ap;
+							for(SparseMatrix::iterator sm=Am.begin(),sp=Ap.begin(); sm!=Am.end(); sm++,sp++)
+							{	double deltaE = E1[sm->i] - E2[sm->j];
+								complex phase = cis(deltaE*(t-tPrev));
+								sm->val *= phase;
+								sp->val *= phase;
+							}
+							//Contributions to rho1dot: (+ h.c. added together by accumRhoHC)
+							axpyMSMS<false,true>(+prefac, rho1bar, Am, rho2, Am, rho1dot);
+							axpySMSM<false,true>(-prefac, Ap, rho2bar, Ap, rho1, rho1dot);
 							//Contributions to rho2dot: (+ h.c. added together by accumRhoHC)
-							axpySMSM<true,false>(+prefac, g->Ap, rho1, g->Ap, rho2bar, rho2dot);
-							axpyMSMS<true,false>(-prefac, rho2, g->Am, rho1bar, g->Am, rho2dot);
+							axpySMSM<true,false>(+prefac, Ap, rho1, Ap, rho2bar, rho2dot);
+							axpyMSMS<true,false>(-prefac, rho2, Am, rho1bar, Am, rho2dot);
 							//Move to next element:
 							g++;
 						}
@@ -508,6 +523,8 @@ struct Lindblad : public Integrator<DM1>
 		}
 		else logPrintf("(t[fs]: %lg) ", t/fs);
 		logFlush();
+		
+		tPrev = t;
 		return rhoDot;
 	}
 	
@@ -540,9 +557,10 @@ struct Lindblad : public Integrator<DM1>
 			{	const complex* drhoData = drho.data();
 				vector3<const complex*> Sdata; for(int k=0; k<3; k++) Sdata[k] = s.S[k].data();
 				std::vector<vector3<>> Sband(s.nInner); //spin expectation by band S_b := sum_a S_ba drho_ab
+				const double* Einner = s.E.data() + s.innerStart;
 				for(int b2=0; b2<s.nInner; b2++)
 				{	for(int b1=0; b1<s.nInner; b1++)
-					{	complex weight = prefac * (*(drhoData++));
+					{	complex weight = prefac * (*(drhoData++)).conj() * cis((Einner[b1]-Einner[b2])*t);
 						for(int iDir=0; iDir<3; iDir++)
 							Sband[b2][iDir] += (weight * (*(Sdata[iDir]++))).real();
 					}
@@ -620,7 +638,7 @@ struct Lindblad : public Integrator<DM1>
 		}
 		watch.stop();
 		//Probe responses if present:
-		diagMatrix imEps = calcImEps();
+		diagMatrix imEps = calcImEps(t);
 		if(imEps.size())
 			writeImEps("imEps."+ossID.str(), imEps);
 		//Increment stepID:
