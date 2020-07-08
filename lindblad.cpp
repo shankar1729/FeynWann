@@ -583,7 +583,7 @@ struct Lindblad : public Integrator<DM1>
 		if(mpiWorld->isHead())
 		{	//Report step ID and energy:
 			logPrintf("Integrate: Step: %4d   t[fs]: %6.1lf   Etot[eV]: %.6lf   dfMax: %.3lg", stepID, t/fs, Etot/eV, dfMax);
-			if(spinorial) logPrintf("   S: [ %.8lf %.8lf %.8lf ]", Stot[0],  Stot[1],  Stot[2]);
+			if(spinorial) logPrintf("   S: [ %.4lg %.4lg %.4lg ]", Stot[0],  Stot[1],  Stot[2]);
 			logPrintf("\n"); logFlush();
 			//Save distribution functions:
 			ofstream ofs("dist."+ossID.str());
