@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 2.8)
 
 set(JDFTX_SRC "<full-path-to-jdftx-src>" CACHE STRING "Full path to the jdftx source root")
 set(JDFTX_BUILD "<full-path-to-jdftx-build>" CACHE STRING "Full path to the jdftx build directory")
-set(CMAKE_MODULE_PATH "${JDFTX_SRC}/CMake-Modules/")
+set(CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/CMake-Modules/ ${JDFTX_SRC}/CMake-Modules/)
 
 #Package configuration:
 set(CPACK_PACKAGE_NAME "FeynWann")
@@ -126,3 +126,13 @@ add_FeynWann_executable(ePhSpinRelax)
 add_FeynWann_executable(debugEph)
 
 target_link_libraries(lindblad ${GSL_BLAS_LIBRARY})
+
+#Optional lindbladian linear dynamics and spectrum that requires SLEPc
+option(EnableSLEPc "Enable lindbladian linear dynamics and spectrum using SLEPc" OFF)
+if(EnableSLEPc)
+	find_package(PETSc REQUIRED)
+	find_package(SLEPc REQUIRED)
+	add_FeynWann_executable(lindbladLinear)
+	target_link_libraries(lindbladLinear ${GSL_BLAS_LIBRARY} ${PETSC_LIBRARY} ${SLEPC_LIBRARY})
+endif()
+
