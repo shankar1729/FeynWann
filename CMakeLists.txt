@@ -132,6 +132,8 @@ option(EnableSLEPc "Enable lindbladian linear dynamics and spectrum using SLEPc"
 if(EnableSLEPc)
 	find_package(PETSc REQUIRED)
 	find_package(SLEPc REQUIRED)
+	include_directories("${PETSC_INCLUDE_DIR}")
+	include_directories("${SLEPC_INCLUDE_DIR}")
 	add_FeynWann_executable(lindbladLinear)
 	target_link_libraries(lindbladLinear ${GSL_BLAS_LIBRARY} ${PETSC_LIBRARY} ${SLEPC_LIBRARY})
 endif()

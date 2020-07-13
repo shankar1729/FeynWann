@@ -29,6 +29,13 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 #include "LindbladFile.h"
 #include "Integrator.h"
 #include <core/Units.h>
+#include <slepceps.h>
+
+//Slightly more graceful wrapper to CHKERRQ() macro from Petsc:
+PetscInt iErr = 0;
+#define CHECKERR(codeLine) \
+	iErr = codeLine; \
+	CHKERRQ(iErr);
 
 inline matrix dot(const matrix* P, vector3<complex> pol)
 {	return pol[0]*P[0] + pol[1]*P[1] + pol[2]*P[2];
@@ -49,7 +56,7 @@ inline matrix bar(const matrix& X)
 static const double degeneracyThreshold = 1e-5; //!< currently used only for spin-density calculation in report()
 
 //Lindblad initialization, time evolution and measurement operators using FeynWann callback
-struct Lindblad : public Integrator<DM1>
+struct LindbladLinear : public Integrator<DM1>
 {	
 	int stepID; //current time and reporting step number
 	
@@ -86,7 +93,7 @@ struct Lindblad : public Integrator<DM1>
 	std::vector<size_t> nInnerPrev; //!< cumulative nInner for each k, which is the offset into the Eall array for each k
 	double tPrev; //last time at which compute() was called; used internally to update e-ph operator phases
 	
-	Lindblad(double dmu, double T, double pumpOmega, double pumpA0, double pumpTau, vector3<complex> pumpPol, bool pumpEvolve,
+	LindbladLinear(double dmu, double T, double pumpOmega, double pumpA0, double pumpTau, vector3<complex> pumpPol, bool pumpEvolve,
 		bool pumpBfield, vector3<> pumpB,
 		double omegaMin, double omegaMax, double domega, double tau, std::vector<vector3<complex>> pol, double dE,
 		bool ePhEnabled, bool verbose, string checkpointFile)
@@ -578,6 +585,7 @@ struct Lindblad : public Integrator<DM1>
 			}
 		}
 		mpiWorld->reduce(Etot, MPIUtil::ReduceSum);
+		mpiWorld->reduce(Stot, MPIUtil::ReduceSum);
 		mpiWorld->reduce(dfMax, MPIUtil::ReduceMax);
 		for(Histogram& h: dist) h.reduce(MPIUtil::ReduceSum);
 		if(mpiWorld->isHead())
@@ -642,7 +650,7 @@ struct Lindblad : public Integrator<DM1>
 		if(imEps.size())
 			writeImEps("imEps."+ossID.str(), imEps);
 		//Increment stepID:
-		((Lindblad*)this)->stepID++;
+		((LindbladLinear*)this)->stepID++;
 	}
 };
 
@@ -655,6 +663,7 @@ inline vector3<complex> normalize(const vector3<complex>& v) { return v * (1./sq
 int main(int argc, char** argv)
 {	
 	InitParams ip = FeynWann::initialize(argc, argv, "Lindblad dynamics in an ab initio Wannier basis");
+	int argcSlepc=1; CHECKERR(SlepcInitialize(&argcSlepc, &argv, (char*)0, "")); //don't let slepc see the actual command line (too many conflicts)
 	
 	//Get the system parameters:
 	InputMap inputMap(ip.inputFilename);
@@ -662,9 +671,9 @@ int main(int argc, char** argv)
 	const double dmu = inputMap.get("dmu", 0.) * eV; //optional: shift in fermi level from neutral value / VBM in eV (default: 0)
 	const double T = inputMap.get("T") * Kelvin; //temperature in Kelvin (ambient phonon T = initial electron T)
 	//--- pump
-	const string pumpMode = inputMap.getString("pumpMode"); //must be Evolve, Perturb or Bfield
-	if(pumpMode!="Evolve" and pumpMode!="Perturb" and pumpMode!="Bfield")
-		die("\npumpMode must be 'Evolve' or 'Perturb' pr 'Bfield'\n");
+	const string pumpMode = inputMap.getString("pumpMode"); //must be Perturb or Bfield (Evolve not allowed)
+	if(pumpMode!="Perturb" and pumpMode!="Bfield")
+		die("\npumpMode must be 'Perturb' or 'Bfield' (Evolve not supported by lindbladLinear)'\n");
 	const double Tesla = Joule/(Ampere*meter*meter);
 	const vector3<> pumpB = inputMap.getVector("pumpB", vector3<>()) * Tesla; //perturbing initial magnetic field in Tesla (used only in Bfield mode)
 	const double pumpOmega = inputMap.get("pumpOmega") * eV; //pump frequency in eV (used only in Evolve or Perturb modes)
@@ -732,28 +741,29 @@ int main(int argc, char** argv)
 	logPrintf("inFile = %s\n", inFile.c_str());
 	
 	//Create and initialize lindblad calculator:
-	Lindblad lb(dmu, T,
+	LindbladLinear lbl(dmu, T,
 		pumpOmega, pumpA0, pumpTau, pumpPol, (pumpMode=="Evolve"),
 		(pumpMode=="Bfield"), pumpB,
 		omegaMin, omegaMax, domega, tau, pol, dE,
 		ePhEnabled, verbose, checkpointFile);
-	lb.initialize(inFile);
+	lbl.initialize(inFile);
 	logPrintf("Initialization completed successfully at t[s]: %9.2lf\n\n", clock_sec());
 	logFlush();
 	
-	logPrintf("%lu active k-points parallelized over %d processes.\n", lb.nk, mpiWorld->nProcesses());
+	logPrintf("%lu active k-points parallelized over %d processes.\n", lbl.nk, mpiWorld->nProcesses());
 	if(ip.dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
+		CHECKERR(SlepcFinalize());
 		FeynWann::finalize();
 		return 0;
 	}
 	logPrintf("\n");
 	
-	if(pumpMode!="Evolve" and (not ePhEnabled))
+	if(not ePhEnabled)
 	{	//Simple probe-pump-probe with no relaxation:
-		lb.report(-dt, lb.rho);
-		lb.applyPump(); //takes care of optical pump or B-field excitation
-		lb.report(0., lb.rho);
+		lbl.report(-dt, lbl.rho);
+		lbl.applyPump(); //takes care of optical pump or B-field excitation
+		lbl.report(0., lbl.rho);
 	}
 	else
 	{	double tStart = 0.;
@@ -766,40 +776,37 @@ int main(int argc, char** argv)
 			//Determine offset of current process data and total expected file length:
 			size_t offset = sizeof(int)+sizeof(double); //offset due to header
 			for(int jProc=0; jProc<mpiWorld->iProcess(); jProc++)
-				offset += sizeof(double) * lb.rhoSize[jProc]; //offset due to data from previous processes
+				offset += sizeof(double) * lbl.rhoSize[jProc]; //offset due to data from previous processes
 			size_t fsizeExpected = offset;
 			for(int jProc=mpiWorld->iProcess(); jProc<mpiWorld->nProcesses(); jProc++)
-				fsizeExpected += sizeof(double) * lb.rhoSize[jProc];
+				fsizeExpected += sizeof(double) * lbl.rhoSize[jProc];
 			mpiWorld->bcast(fsizeExpected);
 			//Open check point file and rrad time header:
 			MPIUtil::File fp; mpiWorld->fopenRead(fp, checkpointFile.c_str(), fsizeExpected);
-			mpiWorld->fread(&(lb.stepID), sizeof(int), 1, fp);
+			mpiWorld->fread(&(lbl.stepID), sizeof(int), 1, fp);
 			mpiWorld->fread(&tStart, sizeof(double), 1, fp);
 			mpiWorld->bcast(tStart);
 			//Read density matrix from check point file:
 			mpiWorld->fseek(fp, offset, SEEK_SET);
-			mpiWorld->fread(lb.rho.data(), sizeof(double), lb.rho.size(), fp);
+			mpiWorld->fread(lbl.rho.data(), sizeof(double), lbl.rho.size(), fp);
 			mpiWorld->fclose(fp);
 			logPrintf("done.\n");
 		}
-		else if(pumpMode!="Evolve")
-		{	//Do an initial report akin to above and apply the pump:
-			lb.report(-dt, lb.rho);
-			lb.applyPump(); //takes care of optical pump or B-field excitation
-			tStart = 0.; //integrate will report at t=0 below, before evolving ePh relaxation
-		}
 		else
-		{	//Set start time to a multiple of dt that covers pulse:
-			tStart = -dt * ceil(5.*tau/dt);
+		{	//Do an initial report akin to above and apply the pump/B-field:
+			lbl.report(-dt, lbl.rho);
+			lbl.applyPump(); //takes care of optical pump or B-field excitation
+			tStart = 0.; //integrate will report at t=0 below, before evolving ePh relaxation
 		}
 		//Evolve:
 		if(tStep) //Fixed-step integrator:
-			lb.integrateFixed(lb.rho, tStart, tStop, tStep, dt);
+			lbl.integrateFixed(lbl.rho, tStart, tStop, tStep, dt);
 		else //Adaptive integrator:
-			lb.integrateAdaptive(lb.rho, tStart, tStop, tolAdaptive, dt);
+			lbl.integrateAdaptive(lbl.rho, tStart, tStop, tolAdaptive, dt);
 	}
 	
 	//Cleanup:
+	CHECKERR(SlepcFinalize());
 	FeynWann::finalize();
 	return 0;
 }
