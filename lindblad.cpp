@@ -578,6 +578,7 @@ struct Lindblad : public Integrator<DM1>
 			}
 		}
 		mpiWorld->reduce(Etot, MPIUtil::ReduceSum);
+		mpiWorld->reduce(Stot, MPIUtil::ReduceSum);
 		mpiWorld->reduce(dfMax, MPIUtil::ReduceMax);
 		for(Histogram& h: dist) h.reduce(MPIUtil::ReduceSum);
 		if(mpiWorld->isHead())
