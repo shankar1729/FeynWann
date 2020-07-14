@@ -52,6 +52,11 @@ inline matrix bar(const matrix& X)
 		}
 	return Xbar;
 }
+inline diagMatrix bar(const diagMatrix& X)
+{	diagMatrix Xbar(X);
+	for(double& x: Xbar) x = 1. - x;
+	return Xbar;
+}
 
 static const double degeneracyThreshold = 1e-5; //!< currently used only for spin-density calculation in report()
 
@@ -61,7 +66,7 @@ struct LindbladLinear : public Integrator<DM1>
 	int stepID; //current time and reporting step number
 	
 	const double dmu, T, invT; //!< Fermi level position relative to neutral value / VBM, and temperature
-	const double pumpOmega, pumpA0, pumpTau; const vector3<complex> pumpPol; const bool pumpEvolve; //!< pump parameters
+	const double pumpOmega, pumpA0, pumpTau; const vector3<complex> pumpPol; //!< pump parameters
 	const bool pumpBfield; const vector3<> pumpB; //pump parameters for Bfield mode
 	const double omegaMin, domega, omegaMax; const int nomega; //!< probe frequency grid
 	const double tau; const std::vector<vector3<complex>> pol; //!< probe parameters
@@ -89,29 +94,26 @@ struct LindbladLinear : public Integrator<DM1>
 	std::vector<int> nInnerAll; //!< nInner for all k-points on all processes
 	double Emin, Emax; //!< energy range of active space across all k (for spin and number density output)
 	
-	std::vector<double> Eall; //!< inner window energies for all k (only needed and initialized when ePhEnabled)
-	std::vector<size_t> nInnerPrev; //!< cumulative nInner for each k, which is the offset into the Eall array for each k
-	double tPrev; //last time at which compute() was called; used internally to update e-ph operator phases
-	
-	LindbladLinear(double dmu, double T, double pumpOmega, double pumpA0, double pumpTau, vector3<complex> pumpPol, bool pumpEvolve,
+	LindbladLinear(double dmu, double T, double pumpOmega, double pumpA0, double pumpTau, vector3<complex> pumpPol,
 		bool pumpBfield, vector3<> pumpB,
 		double omegaMin, double omegaMax, double domega, double tau, std::vector<vector3<complex>> pol, double dE,
 		bool ePhEnabled, bool verbose, string checkpointFile)
 	: stepID(0),
 		dmu(dmu), T(T), invT(1./T),
-		pumpOmega(pumpOmega), pumpA0(pumpA0), pumpTau(pumpTau), pumpPol(pumpPol), pumpEvolve(pumpEvolve),
+		pumpOmega(pumpOmega), pumpA0(pumpA0), pumpTau(pumpTau), pumpPol(pumpPol),
 		pumpBfield(pumpBfield), pumpB(pumpB),
 		omegaMin(omegaMin), domega(domega), omegaMax(omegaMax), nomega(1+int(round((omegaMax-omegaMin)/domega))),
 		tau(tau), pol(pol), dE(dE), ePhEnabled(ePhEnabled), verbose(verbose), checkpointFile(checkpointFile),
-		Emin(+DBL_MAX), Emax(-DBL_MAX), tPrev(0.)
+		Emin(+DBL_MAX), Emax(-DBL_MAX)
 	{
 	}
 	
-	
 	//---- Flat density matrix storage and access functions ----
-	DM1 rho; //!< flat array of density matrices of all k stored on this process
+	DM1 drho; //!< flat array of density matrix changes of all k stored on this process
 	std::vector<size_t> rhoOffset; //!< array of offsets into process's rho for each k
 	std::vector<size_t> rhoSize; //!< total size of rho on each process
+	size_t rhoOffsetGlobal; //!< offset of current process rho data in the overall data
+	size_t rhoSizeTot; //!< total size of rho
 	
 	//Get an NxN complex Hermitian matrix from a real array of length N^2
 	inline matrix getRho(const double* rhoData, int N) const
@@ -153,8 +155,45 @@ struct LindbladLinear : public Integrator<DM1>
 			}
 	}
 	
+	//--------- Time evolution sparse matrix and SLEPc conversion -----------
+	
+	struct Triplet { int i, j; double val; bool local; }; //entry in triplet format matrix (along with tage for process locality)for initial construction
+	Mat evolveMat; //Time evolution operator
+	Vec vRho, vRhoDot; //!< temporary copies of drho and rdhoDot data in Petsc format
+	
+	//Clean up Petsc quantities
+	PetscErrorCode cleanup()
+	{	CHECKERR(MatDestroy(&evolveMat));
+		CHECKERR(VecDestroy(&vRho));
+		CHECKERR(VecDestroy(&vRhoDot));
+	}
+	
+	//Initialize a distributed square matrix M from (distributed) triplet format in entries:
+	PetscErrorCode matInit(Mat& M, const std::vector<Triplet> entries)
+	{	int N = rhoSizeTot;
+		int Nmine = rhoSize[mpiWorld->iProcess()];
+		//Determine non-zero sizes:
+		std::vector<int> nnzD(N), nnzO(N); //number of process-diagonal and process off-diagonal entries by row
+		for(const Triplet& entry: entries)
+			(entry.local ? nnzD : nnzO)[entry.i]++;
+		MPI_Allreduce(MPI_IN_PLACE, nnzD.data(), N, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+		MPI_Allreduce(MPI_IN_PLACE, nnzO.data(), N, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+		for(size_t i=rhoOffsetGlobal; i<rhoOffsetGlobal+Nmine; i++)
+		{	nnzD[i] = std::min(nnzD[i], Nmine);
+			nnzO[i] = std::min(nnzO[i], N - Nmine);
+		}
+		CHECKERR(MatCreateAIJ(PETSC_COMM_WORLD, Nmine, Nmine, N, N,
+			0, nnzD.data()+rhoOffsetGlobal, 0, nnzO.data()+rhoOffsetGlobal, &M));
+		CHECKERR(MatSetOption(M, MAT_NEW_NONZERO_ALLOCATION_ERR, PETSC_FALSE));
+		for(const Triplet& entry: entries)
+			CHECKERR(MatSetValue(M, entry.i, entry.j, entry.val, ADD_VALUES));
+		CHECKERR(MatAssemblyBegin(M, MAT_FINAL_ASSEMBLY));
+		CHECKERR(MatAssemblyEnd(M, MAT_FINAL_ASSEMBLY));
+		return 0;
+	}
+	
 	//--------- Initialize -------------
-	void initialize(string inFile)
+	PetscErrorCode initialize(string inFile)
 	{
 		//Read header and check parameters:
 		MPIUtil::File fp;
@@ -236,6 +275,7 @@ struct LindbladLinear : public Integrator<DM1>
 		//Compute sizes of and offsets into flattened rho for all processes:
 		rhoOffset.resize(nk);
 		rhoSize.resize(mpiWorld->nProcesses());
+		rhoSizeTot = 0;
 		for(int jProc=0; jProc<mpiWorld->nProcesses(); jProc++)
 		{	size_t jkStart = kDivision.start(jProc);
 			size_t jkStop = kDivision.stop(jProc);
@@ -245,23 +285,23 @@ struct LindbladLinear : public Integrator<DM1>
 				offset += nInnerAll[jk]*nInnerAll[jk];
 			}
 			rhoSize[jProc] = offset;
+			if(jProc == mpiWorld->iProcess()) rhoOffsetGlobal = rhoSizeTot;
+			rhoSizeTot += offset; //cumulative over all processes
 		}
 		
 		//Initialize rho:
-		rho.resize(rhoSize[mpiWorld->iProcess()]);
-		const State* sPtr = state.data();
-		for(size_t ik=ikStart; ik<ikStop; ik++)
-		{	const State& s = *(sPtr++);
-			accumRho(s.rho0, rho.data()+rhoOffset[ik]);
-		}
+		drho.assign(rhoSize[mpiWorld->iProcess()], 0.);
 		
-		//Initialize A+ and A- for e-ph matrix elements if required:
+		//Initialize sparse matrix corresponding to net time evolution (if required):
 		if(ePhEnabled)
 		{	//Make inner-window energies available for all processes:
-			nInnerPrev.assign(nk+1, 0);
+			std::vector<size_t> nInnerPrev(nk+1); //cumulative nInner for each k, which is the offset into the Eall array for each k
+			std::vector<size_t> nRhoPrev(nk+1); //cumulative nInner^2 for each k, which is the offset into the global rho structure for each k
 			for(size_t ik=0; ik<nk; ik++)
-				nInnerPrev[ik+1] = nInnerPrev[ik] + nInnerAll[ik];
-			Eall.resize(nInnerPrev.back());
+			{	nInnerPrev[ik+1] = nInnerPrev[ik] + nInnerAll[ik];
+				nRhoPrev[ik+1] = nRhoPrev[ik] +  nInnerAll[ik]*nInnerAll[ik];
+			}
+			std::vector<double> Eall(nInnerPrev.back()); //inner window energies for all k
 			for(size_t ik=ikStart; ik<ikStop; ik++)
 			{	const State& s = state[ik-ikStart];
 				const double* Ei = &(s.E[s.innerStart]);
@@ -272,35 +312,135 @@ struct LindbladLinear : public Integrator<DM1>
 				size_t iEstop = nInnerPrev[kDivision.stop(jProc)];
 				mpiWorld->bcast(&Eall[iEstart], iEstop-iEstart, jProc);
 			}
-			//Initialize A+ and A- for all matrix elements:
-			for(State& s: state)
-			{	const double* Ei = &(s.E[s.innerStart]);
-				for(LindbladFile::GePhEntry& g: s.GePh)
-				{	const double* Ej = &(Eall[nInnerPrev[g.jk]]);
-					g.G.init(s.nInner, nInnerAll[g.jk]);
-					g.initA(Ei, Ej, T);
+			//Collect matrix elements in triplet format:
+			std::vector<Triplet> evolveEntries;
+			State* sPtr = state.data();
+			logPrintf("Initialing time evolution operator ... "); logFlush();
+			for(size_t ik1=ikStart; ik1<ikStop; ik1++)
+			{	State& s = *(sPtr++);
+				//Coherent evolution (only in spectrum mode):
+				//TODO
+				//Electron-phonon part:
+				const double prefacEph = 2*M_PI/nkTot; //factor of 2 from the +h.c. contribution
+				const double* E1 = &(s.E[s.innerStart]);
+				const int& nInner1 = nInnerAll[ik1];
+				const int N1 = nInner1*nInner1; //number of density matrix entries
+				const int& nRhoPrev1 = nRhoPrev[ik1];
+				const int whose1 = mpiWorld->iProcess();
+				const diagMatrix& f1 = s.rho0;
+				const diagMatrix f1bar = bar(f1);
+				std::vector<LindbladFile::GePhEntry>::iterator g = s.GePh.begin();
+				while(g != s.GePh.end())
+				{	const size_t& ik2 = g->jk;
+					const int& nInner2 = nInnerAll[ik2];
+					const int N2 = nInner2*nInner2; //number of density matrix entries
+					const int& nRhoPrev2 = nRhoPrev[ik2];
+					const int whose2 = whose(ik2);
+					const double* E2 = &(Eall[nInnerPrev[ik2]]);
+					diagMatrix f2(nInner2); for(int b2=0; b2<nInner2; b2++) f2[b2] = fermi(invT*(E2[b2]-dmu));
+					const diagMatrix f2bar = bar(f2);
+					//Store results in dense complex blocks of the superoperator first:
+					matrix L12 = zeroes(N1,N2); complex* L12data = L12.data();
+					matrix L21 = zeroes(N2,N1); complex* L21data = L21.data();
+					matrix L11 = zeroes(N1,N1); complex* L11data = L11.data();
+					matrix L22 = zeroes(N2,N2); complex* L22data = L22.data();
+					#define L(i,a,b, j,c,d) L##i##j##data[L##i##j.index(a+b*nInner##i, c+d*nInner##j)] //access superoperator block element
+					//Loop over all connections to the same ik2:
+					while((g != s.GePh.end()) and (g->jk == ik2))
+					{	g->G.init(nInner1, nInner2);
+						g->initA(E1, E2, T);
+						//Loop over A- and A+
+						for(int pm=0; pm<2; pm++) 
+						{	const SparseMatrix& Acur = pm ? g->Ap : g->Am;
+							const diagMatrix& f1cur = pm ? f1 : f1bar;
+							const diagMatrix& f2cur = pm ? f2bar : f2;
+							//Loop oover all pairs of non-zero entries:
+							for(const SparseEntry& s1: Acur)
+							{	int a = s1.i, b = s1.j; //to match derivation's notation
+								for(const SparseEntry& s2: Acur)
+								{	int c = s2.i, d = s2.j; //to match derivation's notation
+									complex M = prefacEph * (s1.val * s2.val.conj());
+									L(1,a,c, 2,b,d) += f1cur[a] * M;
+									L(2,d,b, 1,c,a) += f2cur[d] * M;
+									if(b == d) for(int e=0; e<nInner1; e++) L(1,e,c, 1,e,a) -= f2cur[b] * M;
+									if(a == c) for(int e=0; e<nInner2; e++) L(2,e,b, 2,e,d) -= f1cur[c] * M;
+								}
+							}
+						}
+						//Move to next element:
+						g++;
+					}
+					#undef L
+					//Convert from complex to real input and real outputs (based on h.c. symmetry):
+					#define CreateRandInv(i) \
+						SparseMatrix R##i(N##i,N##i,2*N##i), Rinv##i(N##i,N##i,2*N##i); \
+						for(int a=0; a<nInner##i; a++) \
+						{	for(int b=0; b<a; b++) \
+							{	int ab = a+b*nInner##i, ba = b+a*nInner##i; \
+								R##i.push_back(SparseEntry{ab,ab,complex(1,0)}); R##i.push_back(SparseEntry{ab,ba,complex(0,+1)}); \
+								R##i.push_back(SparseEntry{ba,ab,complex(1,0)}); R##i.push_back(SparseEntry{ba,ba,complex(0,-1)}); \
+								Rinv##i.push_back(SparseEntry{ab,ab,complex(+0.5,0)}); Rinv##i.push_back(SparseEntry{ab,ba,complex(+0.5,0)}); \
+								Rinv##i.push_back(SparseEntry{ba,ab,complex(0,-0.5)}); Rinv##i.push_back(SparseEntry{ba,ba,complex(0,+0.5)}); \
+							} \
+							int aa = a+a*nInner##i; \
+							R##i.push_back(SparseEntry{aa,aa,1.}); \
+							Rinv##i.push_back(SparseEntry{aa,aa,1.}); \
+						}
+					CreateRandInv(1)
+					CreateRandInv(2)
+					#undef CreateRandInv
+					L12 = Rinv1 * (L12 * R2);
+					L21 = Rinv2 * (L21 * R1);
+					L11 = Rinv1 * (L11 * R1);
+					L22 = Rinv2 * (L22 * R2);
+					//Extract non-zero entries in triplet:
+					#define EXTRACT_NNZ(i,j) \
+					{	bool isLocal = (whose##i == whose##j); \
+						const complex* data = L##i##j.data(); \
+						for(int col=0; col<L##i##j.nCols(); col++) \
+						{	for(int row=0; row<L##i##j.nRows(); row++) \
+							{	double M = (data++)->real(); \
+								if(M) \
+								{	evolveEntries.push_back(Triplet{row+nRhoPrev##i, col+nRhoPrev##j, M, isLocal}); \
+								} \
+							} \
+						} \
+					}
+					EXTRACT_NNZ(1,2)
+					EXTRACT_NNZ(2,1)
+					EXTRACT_NNZ(1,1)
+					EXTRACT_NNZ(2,2)
+					#undef EXTRACT_NNZ
 				}
 			}
+			logPrintf("done.\n");
+			//Convert to Petsc matrix:
+			logPrintf("Converting to PETSc sparse matrix ... "); logFlush();
+			matInit(evolveMat, evolveEntries);
+			MatInfo info; CHECKERR(MatGetInfo(evolveMat, MAT_GLOBAL_SUM, &info));
+			logPrintf("done. Net sparsity: %.0lf non-zero in %lu x %lu matrix (%.1lf%% fill)\n",
+				info.nz_used, rhoSizeTot, rhoSizeTot, info.nz_used*100./(rhoSizeTot*rhoSizeTot));
+			logFlush();
+			CHECKERR(MatCreateVecs(evolveMat, &vRho, &vRhoDot));
 		}
+		return 0;
 	}
 	
-	//Calculate probe response at current rho (update this->imEps)
-	diagMatrix calcImEps(double t) const
+	//Calculate change in probe response due to current drho:
+	diagMatrix calcDeltaImEps(double t, const DM1& drho) const
 	{	static StopWatch watch("Lindblad::calcImEps");
 		size_t nImEps = pol.size() * nomega;
 		if(nImEps==0) return diagMatrix(); //no probe specified
 		watch.start();
-		diagMatrix imEps(nImEps);
+		diagMatrix dimEps(nImEps);
 		//Collect contributions from each k at this process:
 		const State* sPtr = state.data();
 		for(size_t ik=ikStart; ik<ikStop; ik++)
 		{	const State& s = *(sPtr++);
-			const matrix rhoCurSub = getRho(rho.data()+rhoOffset[ik], s.nInner);
+			const matrix drhoCurSub = getRho(drho.data()+rhoOffset[ik], s.nInner);
 			//Expand density matrix:
-			matrix rhoCur = zeroes(s.nOuter, s.nOuter);
-			if(s.innerStart) rhoCur.set(0,s.innerStart, 0,s.innerStart, eye(s.innerStart));
-			rhoCur.set(s.innerStart,s.innerStop, s.innerStart,s.innerStop, rhoCurSub);
-			matrix rhoBar(bar(rhoCur)); //1-rho
+			matrix drhoCur = zeroes(s.nOuter, s.nOuter);
+			drhoCur.set(s.innerStart,s.innerStop, s.innerStart,s.innerStop, drhoCurSub);
 			//Expand probe matrix elements:
 			std::vector<matrix> Ppol(pol.size(), zeroes(s.nOuter, s.nOuter));
 			for(int iDir=0; iDir<3; iDir++)
@@ -332,35 +472,31 @@ struct LindbladLinear : public Integrator<DM1>
 					matrix P = Ppol[iPol];
 					eblas_zmul(P.nData(), delta.data(),1, P.data(),1); //P-
 					matrix Pdag = dagger(P); //P+
-					//Loop over directions of excitations:
-					diagMatrix deltaRhoDiag(s.nOuter);
-					for(int s=-1; s<=+1; s+=2)
-					{	deltaRhoDiag += diag(rhoBar*P*rhoCur*Pdag - Pdag*rhoBar*P*rhoCur);
-						std::swap(P, Pdag); //P- <--> P+
-					}
-					imEps[iPol*nomega+iomega] += prefac * dot(s.E, deltaRhoDiag);
+					//Compute change in rho due to probe (summed over excitation/deexcitational already):
+					diagMatrix deltaRhoDiag = diag(Pdag*drhoCur*P + P*drhoCur*Pdag - drhoCur*P*Pdag - Pdag*P*drhoCur);
+					dimEps[iPol*nomega+iomega] += prefac * dot(s.E, deltaRhoDiag);
 				}
 			}
 		}
 		//Accumulate contributions from all processes on head:
-		mpiWorld->reduceData(imEps, MPIUtil::ReduceSum);
+		mpiWorld->reduceData(dimEps, MPIUtil::ReduceSum);
 		watch.stop();
-		return imEps;
+		return dimEps;
 	}
 	
-	//Write current imEps to plain-text file:
-	void writeImEps(string fname, const diagMatrix& imEps) const
+	//Write change in imEps to plain-text file:
+	void writeDeltaImEps(string fname, const diagMatrix& dimEps) const
 	{	if(mpiWorld->isHead())
 		{	ofstream ofs(fname);
 			ofs << "#omega[eV]";
 			for(int iPol=0; iPol<int(pol.size()); iPol++)
-				ofs << " ImEps" << (iPol+1);
+				ofs << " dImEps" << (iPol+1);
 			ofs << "\n";
 			for(int iomega=0; iomega<nomega; iomega++)
 			{	double omega = omegaMin + iomega*domega;
 				ofs << omega/eV;
 				for(int iPol=0; iPol<int(pol.size()); iPol++)
-					ofs << '\t' << imEps[iPol*nomega+iomega];
+					ofs << '\t' << dimEps[iPol*nomega+iomega];
 				ofs << '\n';
 			}
 		}
@@ -369,13 +505,11 @@ struct LindbladLinear : public Integrator<DM1>
 	//Apply pump using perturbation theory (instantly go from before to after pump, skipping time evolution)
 	void applyPump()
 	{	static StopWatch watch("Lindblad::applyPump"); 
-		if(pumpEvolve) return; //only use this function when perturbing instantly
 		watch.start();
 		const State* sPtr = state.data();
 		//Perturb each k separately:
 		for(size_t ik=ikStart; ik<ikStop; ik++)
 		{	const State& s = *(sPtr++);
-			const matrix rhoCur = getRho(rho.data()+rhoOffset[ik], s.nInner);
 			if(pumpBfield)
 			{	//Construct Hamiltonian including magnetic field contribution:
 				matrix Htot(s.E(s.innerStart, s.innerStart+s.nInner));
@@ -388,155 +522,77 @@ struct LindbladLinear : public Integrator<DM1>
 				for(int b=0; b<s.nInner; b++)
 					fPert[b] = fermi((Epert[b]-dmu)*invT);
 				matrix rhoPert = Vpert * fPert * dagger(Vpert);
-				accumRhoHC(0.5*(rhoPert-rhoCur), rho.data()+rhoOffset[ik]);
+				accumRhoHC(0.5*(rhoPert-s.rho0), drho.data()+rhoOffset[ik]);
 			}
 			else
-			{	matrix rhoBar(bar(rhoCur)); //1-rho
+			{	const diagMatrix& rho0 = s.rho0;
+				matrix rho0bar(bar(rho0)); //1-rho0
 				//Compute and apply perturbation:
 				matrix P = s.pumpPD; //P-
 				matrix Pdag = dagger(P); //P+
 				matrix deltaRho;
 				for(int s=-1; s<=+1; s+=2)
-				{	deltaRho += rhoBar*P*rhoCur*Pdag - Pdag*rhoBar*P*rhoCur;
+				{	deltaRho += rho0bar*P*rho0*Pdag - Pdag*rho0bar*P*rho0;
 					std::swap(P, Pdag); //P- <--> P+
 				}
-				accumRhoHC((M_PI*pumpA0*pumpA0) * deltaRho, rho.data()+rhoOffset[ik]);
+				accumRhoHC((M_PI*pumpA0*pumpA0) * deltaRho, drho.data()+rhoOffset[ik]);
 			}
 		}
 		watch.stop();
 	}
 	
 	//Time evolution operator returning drho/dt
-	DM1 compute(double t, const DM1& rho)
+	DM1 compute(double t, const DM1& drho)
 	{	static StopWatch watchPump("Lindblad::compute::Pump");
 		static StopWatch watchEph("Lindblad::compute::ePh");
 		static StopWatch watchEphInner("Lindblad::compute::ePhInner");
 		
-		DM1 rhoDot(rho.size(), 0.);
-		//Pump contribution:
-		if(pumpEvolve)
-		{	watchPump.start();
-			double prefac = sqrt(M_PI)*pumpA0*pumpA0/pumpTau * exp(-(t*t)/(pumpTau*pumpTau));
-			//Each k contributes separately:
-			const State* sPtr = state.data();
-			for(size_t ik=ikStart; ik<ikStop; ik++)
-			{	const State& s = *(sPtr++);
-				const matrix rhoCur = getRho(rho.data()+rhoOffset[ik], s.nInner);
-				const matrix rhoBar(bar(rhoCur)); //1-rho
-				//Compute and apply perturbation:
-				matrix P = s.pumpPD; //P-
-				matrix Pdag = dagger(P); //P+
-				matrix rhoDotCur = zeroes(s.nInner, s.nInner);
-				for(int s=-1; s<=+1; s+=2)
-				{	rhoDotCur += rhoBar*P*rhoCur*Pdag - Pdag*rhoBar*P*rhoCur;
-					std::swap(P, Pdag); //P- <--> P+
-				}
-				accumRhoHC(prefac*rhoDotCur, rhoDot.data()+rhoOffset[ik]);
-			}
-			watchPump.stop();
-		}
+		DM1 drhoDot(drho.size(), 0.);
 		
 		//E-ph relaxation contribution:
 		if(ePhEnabled)
-		{	watchEph.start();
-			const double prefac = M_PI/nkTot;
-			//Loop over process poviding other k data:
-			int iProc = mpiWorld->iProcess(); //current process
-			for(int jProc=0; jProc<mpiWorld->nProcesses(); jProc++)
-			{	//Make data from jProc available:
-				DM1 rho_j, rhoDot_j(rhoSize[jProc]);
-				if(jProc==iProc)
-					rho_j = rho;
-				else
-					rho_j.resize(rhoSize[jProc]);
-				mpiWorld->bcastData(rho_j, jProc);
-				size_t jkStart = kDivision.start(jProc);
-				size_t jkStop = kDivision.stop(jProc);
-				//Loop over rho1 local to each process:
-				const State* sPtr = state.data();
-				for(size_t ik1=ikStart; ik1<ikStop; ik1++)
-				{	const State& s = *(sPtr++);
-					const int& nInner1 = nInnerAll[ik1];
-					const matrix rho1 = getRho(rho.data()+rhoOffset[ik1], nInner1);
-					const matrix rho1bar(bar(rho1));
-					matrix rho1dot = zeroes(nInner1, nInner1);
-					const double* E1 = &(s.E[s.innerStart]);
-					//Find first entry of GePh whose partner is on jProc (if any):
-					std::vector<LindbladFile::GePhEntry>::const_iterator g = std::lower_bound(s.GePh.begin(), s.GePh.end(), jkStart);
-					while(g != s.GePh.end())
-					{	if(g->jk >= jkStop) break;
-						const size_t& ik2 = g->jk;
-						const int& nInner2 = nInnerAll[ik2];
-						const matrix rho2 = getRho(rho_j.data()+rhoOffset[ik2], nInner2);
-						const matrix rho2bar(bar(rho2));
-						matrix rho2dot = zeroes(nInner2, nInner2);
-						const double* E2 = &(Eall[nInnerPrev[ik2]]);
-						//Loop over all connections to the same partner k:
-						watchEphInner.start();
-						while((g != s.GePh.end()) and (g->jk == ik2))
-						{	//Update phases for A+ and A- (interaction picture):
-							SparseMatrix& Am = (SparseMatrix&)g->Am;
-							SparseMatrix& Ap = (SparseMatrix&)g->Ap;
-							for(SparseMatrix::iterator sm=Am.begin(),sp=Ap.begin(); sm!=Am.end(); sm++,sp++)
-							{	double deltaE = E1[sm->i] - E2[sm->j];
-								complex phase = cis(deltaE*(t-tPrev));
-								sm->val *= phase;
-								sp->val *= phase;
-							}
-							//Contributions to rho1dot: (+ h.c. added together by accumRhoHC)
-							axpyMSMS<false,true>(+prefac, rho1bar, Am, rho2, Am, rho1dot);
-							axpySMSM<false,true>(-prefac, Ap, rho2bar, Ap, rho1, rho1dot);
-							//Contributions to rho2dot: (+ h.c. added together by accumRhoHC)
-							axpySMSM<true,false>(+prefac, Ap, rho1, Ap, rho2bar, rho2dot);
-							axpyMSMS<true,false>(-prefac, rho2, Am, rho1bar, Am, rho2dot);
-							//Move to next element:
-							g++;
-						}
-						watchEphInner.stop();
-						//Accumulate rho2 gradients:
-						accumRhoHC(rho2dot, rhoDot_j.data()+rhoOffset[ik2]);
-					}
-					//Accumulate rho1 gradients:
-					accumRhoHC(rho1dot, rhoDot.data()+rhoOffset[ik1]);
-				}
-				//Collect remote contributions:
-				mpiWorld->reduceData(rhoDot_j, MPIUtil::ReduceSum, jProc);
-				if(jProc==iProc) axpy(1., rhoDot_j, rhoDot);
-			}
-			watchEph.stop();
+		{	//Copy rho data to PETSc:
+			double* vRhoPtr;  VecGetArray(vRho, &vRhoPtr);
+			eblas_copy(vRhoPtr, drho.data(), drho.size());
+			VecRestoreArray(vRho, &vRhoPtr);
+			//Apply sparse operator using PETSc:
+			MatMult(evolveMat, vRho, vRhoDot);
+			//Copy rhoDot data back:
+			const double* vRhoDotPtr;  VecGetArrayRead(vRhoDot, &vRhoDotPtr);
+			eblas_copy(drhoDot.data(), vRhoDotPtr, drhoDot.size());
+			VecRestoreArrayRead(vRhoDot, &vRhoDotPtr);
 		}
 		
 		if(verbose)
 		{	//Report current statistics:
-			double rhoDotMax = 0., rhoEigMin = +DBL_MAX, rhoEigMax = -DBL_MAX;
+			double drhoDotMax = 0., drhoEigMin = +DBL_MAX, drhoEigMax = -DBL_MAX;
 			const State* sPtr = state.data();
 			for(size_t ik=ikStart; ik<ikStop; ik++)
 			{	const State& s = *(sPtr++);
 				//max(rhoDot)
-				const matrix rhoDotCur = getRho(rhoDot.data()+rhoOffset[ik], s.nInner);
-				rhoDotMax = std::max(rhoDotMax, rhoDotCur.data()[cblas_izamax(rhoDotCur.nData(), rhoDotCur.data(), 1)].abs());
+				const matrix drhoDotCur = getRho(drhoDot.data()+rhoOffset[ik], s.nInner);
+				drhoDotMax = std::max(drhoDotMax, drhoDotCur.data()[cblas_izamax(drhoDotCur.nData(), drhoDotCur.data(), 1)].abs());
 				//eig(rho):
-				const matrix rhoCur = getRho(rho.data()+rhoOffset[ik], s.nInner);
+				const matrix drhoCur = getRho(drho.data()+rhoOffset[ik], s.nInner);
 				matrix V; diagMatrix f;
-				rhoCur.diagonalize(V, f);
-				rhoEigMin = std::min(rhoEigMin, f.front());
-				rhoEigMax = std::max(rhoEigMax, f.back());
+				drhoCur.diagonalize(V, f);
+				drhoEigMin = std::min(drhoEigMin, f.front());
+				drhoEigMax = std::max(drhoEigMax, f.back());
 			}
-			mpiWorld->reduce(rhoDotMax, MPIUtil::ReduceMax);
-			mpiWorld->reduce(rhoEigMax, MPIUtil::ReduceMax);
-			mpiWorld->reduce(rhoEigMin, MPIUtil::ReduceMin);
-			logPrintf("\n\tComputed at t[fs]: %lg  max(rhoDot): %lg rhoEigRange: [ %lg %lg ] ",
-				t/fs, rhoDotMax, rhoEigMin, rhoEigMax); logFlush();
+			mpiWorld->reduce(drhoDotMax, MPIUtil::ReduceMax);
+			mpiWorld->reduce(drhoEigMax, MPIUtil::ReduceMax);
+			mpiWorld->reduce(drhoEigMin, MPIUtil::ReduceMin);
+			logPrintf("\n\tComputed at t[fs]: %lg  max(drhoDot): %lg drhoEigRange: [ %lg %lg ] ",
+				t/fs, drhoDotMax, drhoEigMin, drhoEigMax); logFlush();
 		}
 		else logPrintf("(t[fs]: %lg) ", t/fs);
 		logFlush();
 		
-		tPrev = t;
-		return rhoDot;
+		return drhoDot;
 	}
 	
 	//Print / dump quantities at each checkpointed step
-	void report(double t, const DM1& rho) const
+	void report(double t, const DM1& drho) const
 	{	static StopWatch watch("Lindblad::report"); watch.start();
 		ostringstream ossID; ossID << stepID;
 		//Compute total energy and distributions:
@@ -547,10 +603,9 @@ struct LindbladLinear : public Integrator<DM1>
 		const State* sPtr = state.data();
 		for(size_t ik=ikStart; ik<ikStop; ik++)
 		{	const State& s = *(sPtr++);
-			const matrix rhoCur = getRho(rho.data()+rhoOffset[ik], s.nInner);
-			matrix drho = rhoCur - s.rho0;
+			const matrix drhoCur = getRho(drho.data()+rhoOffset[ik], s.nInner);
 			//Energy and distribution:
-			const complex* drhoData = drho.data();
+			const complex* drhoData = drhoCur.data();
 			for(int b=0; b<s.nInner; b++)
 			{	double weight = prefac * drhoData->real();
 				const double& Ecur = s.E[b+s.innerStart];
@@ -561,7 +616,7 @@ struct LindbladLinear : public Integrator<DM1>
 			}
 			//Spin distribution (if available):
 			if(spinorial)
-			{	const complex* drhoData = drho.data();
+			{	const complex* drhoData = drhoCur.data();
 				vector3<const complex*> Sdata; for(int k=0; k<3; k++) Sdata[k] = s.S[k].data();
 				std::vector<vector3<>> Sband(s.nInner); //spin expectation by band S_b := sum_a S_ba drho_ab
 				const double* Einner = s.E.data() + s.innerStart;
@@ -616,7 +671,7 @@ struct LindbladLinear : public Integrator<DM1>
 				fwrite(&stepID, sizeof(int), 1, fp);
 				fwrite(&t, sizeof(double), 1, fp);
 				//Data from head:
-				fwrite(rho.data(), sizeof(double), rho.size(), fp);
+				fwrite(drho.data(), sizeof(double), drho.size(), fp);
 				//Data from remaining processes:
 				for(int jProc=1; jProc<mpiWorld->nProcesses(); jProc++)
 				{	DM1 buf(rhoSize[jProc]);
@@ -625,7 +680,7 @@ struct LindbladLinear : public Integrator<DM1>
 				}
 				fclose(fp);
 			}
-			else mpiWorld->sendData(rho, 0, 0); //send to head for writing
+			else mpiWorld->sendData(drho, 0, 0); //send to head for writing
 			#else
 			//Write in parallel using MPI I/O:
 			MPIUtil::File fp; mpiWorld->fopenWrite(fp, checkpointFile.c_str());
@@ -640,15 +695,15 @@ struct LindbladLinear : public Integrator<DM1>
 				offset += sizeof(double) * rhoSize[jProc]; //offset due to data from previous processes
 			mpiWorld->fseek(fp, offset, SEEK_SET);
 			//--- Write this process's data:
-			mpiWorld->fwrite(rho.data(), sizeof(double), rho.size(), fp);
+			mpiWorld->fwrite(drho.data(), sizeof(double), drho.size(), fp);
 			mpiWorld->fclose(fp);
 			#endif
 		}
 		watch.stop();
 		//Probe responses if present:
-		diagMatrix imEps = calcImEps(t);
+		diagMatrix imEps = calcDeltaImEps(t, drho);
 		if(imEps.size())
-			writeImEps("imEps."+ossID.str(), imEps);
+			writeDeltaImEps("dimEps."+ossID.str(), imEps);
 		//Increment stepID:
 		((LindbladLinear*)this)->stepID++;
 	}
@@ -742,11 +797,11 @@ int main(int argc, char** argv)
 	
 	//Create and initialize lindblad calculator:
 	LindbladLinear lbl(dmu, T,
-		pumpOmega, pumpA0, pumpTau, pumpPol, (pumpMode=="Evolve"),
+		pumpOmega, pumpA0, pumpTau, pumpPol,
 		(pumpMode=="Bfield"), pumpB,
 		omegaMin, omegaMax, domega, tau, pol, dE,
 		ePhEnabled, verbose, checkpointFile);
-	lbl.initialize(inFile);
+	CHECKERR(lbl.initialize(inFile));
 	logPrintf("Initialization completed successfully at t[s]: %9.2lf\n\n", clock_sec());
 	logFlush();
 	
@@ -761,9 +816,9 @@ int main(int argc, char** argv)
 	
 	if(not ePhEnabled)
 	{	//Simple probe-pump-probe with no relaxation:
-		lbl.report(-dt, lbl.rho);
+		lbl.report(-dt, lbl.drho);
 		lbl.applyPump(); //takes care of optical pump or B-field excitation
-		lbl.report(0., lbl.rho);
+		lbl.report(0., lbl.drho);
 	}
 	else
 	{	double tStart = 0.;
@@ -788,21 +843,21 @@ int main(int argc, char** argv)
 			mpiWorld->bcast(tStart);
 			//Read density matrix from check point file:
 			mpiWorld->fseek(fp, offset, SEEK_SET);
-			mpiWorld->fread(lbl.rho.data(), sizeof(double), lbl.rho.size(), fp);
+			mpiWorld->fread(lbl.drho.data(), sizeof(double), lbl.drho.size(), fp);
 			mpiWorld->fclose(fp);
 			logPrintf("done.\n");
 		}
 		else
 		{	//Do an initial report akin to above and apply the pump/B-field:
-			lbl.report(-dt, lbl.rho);
+			lbl.report(-dt, lbl.drho);
 			lbl.applyPump(); //takes care of optical pump or B-field excitation
 			tStart = 0.; //integrate will report at t=0 below, before evolving ePh relaxation
 		}
 		//Evolve:
 		if(tStep) //Fixed-step integrator:
-			lbl.integrateFixed(lbl.rho, tStart, tStop, tStep, dt);
+			lbl.integrateFixed(lbl.drho, tStart, tStop, tStep, dt);
 		else //Adaptive integrator:
-			lbl.integrateAdaptive(lbl.rho, tStart, tStop, tolAdaptive, dt);
+			lbl.integrateAdaptive(lbl.drho, tStart, tStop, tolAdaptive, dt);
 	}
 	
 	//Cleanup:
