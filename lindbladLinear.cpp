@@ -543,24 +543,46 @@ struct LindbladLinear : public Integrator<DM1>
 	
 	//Time evolution operator returning drho/dt
 	DM1 compute(double t, const DM1& drho)
-	{	static StopWatch watchPump("Lindblad::compute::Pump");
-		static StopWatch watchEph("Lindblad::compute::ePh");
-		static StopWatch watchEphInner("Lindblad::compute::ePhInner");
+	{	static StopWatch watchEph("Lindblad::compute::ePh");
 		
 		DM1 drhoDot(drho.size(), 0.);
 		
 		//E-ph relaxation contribution:
 		if(ePhEnabled)
-		{	//Copy rho data to PETSc:
+		{	watchEph.start();
+			//Convert interaction picture rho data to Schrodinger picture version in PETSc format:
 			double* vRhoPtr;  VecGetArray(vRho, &vRhoPtr);
-			eblas_copy(vRhoPtr, drho.data(), drho.size());
+			eblas_zero(drho.size(), vRhoPtr);
+			std::vector<complex> phase(drho.size());
+			complex* phaseData = phase.data();
+			const State* sPtr = state.data();
+			for(size_t ik=ikStart; ik<ikStop; ik++)
+			{	const State& s = *(sPtr++);
+				const double* Einner = s.E.data() + s.innerStart;
+				matrix drhoCur = getRho(drho.data()+rhoOffset[ik], s.nInner);
+				complex* drhoData = drhoCur.data();
+				for(int bCol=0; bCol<s.nInner; bCol++)
+					for(int bRow=0; bRow<s.nInner; bRow++)
+					{	complex phase = 0.5*cis(t*(Einner[bCol]-Einner[bRow])); //factor of 1/2 in order to use accumRhoHC
+						*(drhoData++) *= phase;
+						*(phaseData++) = phase.conj(); //cache the reverse phase for below
+					}
+				accumRhoHC(drhoCur, vRhoPtr+rhoOffset[ik]);
+			}
 			VecRestoreArray(vRho, &vRhoPtr);
 			//Apply sparse operator using PETSc:
 			MatMult(evolveMat, vRho, vRhoDot);
-			//Copy rhoDot data back:
+			//Copy Schrodinger picture rhoDot data in PETSc format back to interaction picture:
 			const double* vRhoDotPtr;  VecGetArrayRead(vRhoDot, &vRhoDotPtr);
-			eblas_copy(drhoDot.data(), vRhoDotPtr, drhoDot.size());
+			sPtr = state.data();
+			for(size_t ik=ikStart; ik<ikStop; ik++)
+			{	const State& s = *(sPtr++);
+				matrix rhoDotCur = getRho(vRhoDotPtr+rhoOffset[ik], s.nInner);
+				eblas_zmul(rhoDotCur.nData(), phase.data()+rhoOffset[ik],1, rhoDotCur.data(),1);
+				accumRhoHC(rhoDotCur, drhoDot.data()+rhoOffset[ik]);
+			}
 			VecRestoreArrayRead(vRhoDot, &vRhoDotPtr);
+			watchEph.stop();
 		}
 		
 		if(verbose)
