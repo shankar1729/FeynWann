@@ -754,6 +754,7 @@ int main(int argc, char** argv)
 	const bool spectrumMode = (mode == "Spectrum");
 	//--- eiegen-decomposition parameters (required and used only in spectrum mode)
 	const int nEigs = int(inputMap.get("nEigs", spectrumMode ? NAN : 0.)); //number of eigenvectors to compute
+	const double eigTol = inputMap.get("eigTol", 1e-7); //convergence threshold on eigenvalues
 	const int innerIter = int(inputMap.get("innerIter", 10)); //number of iterations for inner linear-solve inversion
 	const double innerTol = inputMap.get("innerTol", 1e-3); //convergence threshold for inner linear-solve inversion
 	//--- time evolution parameters (required and used only in real time mode)
@@ -809,6 +810,7 @@ int main(int argc, char** argv)
 	logPrintf("mode = %s\n", mode.c_str());
 	if(spectrumMode)
 	{	logPrintf("nEigs = %d\n", nEigs);
+		logPrintf("eigTol = %lg\n", eigTol);
 		logPrintf("innerIter = %d\n", innerIter);
 		logPrintf("innerTol = %lg\n", innerTol);
 	}
@@ -842,7 +844,7 @@ int main(int argc, char** argv)
 	logPrintf("ePhMode = %s\n", ePhMode.c_str());
 	logPrintf("verbose = %s\n", verboseMode.c_str());
 	logPrintf("inFile = %s\n", inFile.c_str());
-	logPrintf("checkpointFile = %s\n", checkpointFile.c_str());
+	if(not spectrumMode) logPrintf("checkpointFile = %s\n", checkpointFile.c_str());
 	logPrintf("\n");
 	
 	//Create and initialize lindblad calculator:

@@ -701,7 +701,7 @@ int main(int argc, char** argv)
 	if(ePhMode!="Off" and ePhMode!="DiagK")
 		die("\nePhMode must be 'Off' or 'DiagK'\n");
 	const bool ePhEnabled = (ePhMode != "Off");
-	const string verboseMode = inputMap.getString("verbose"); //must be yes or no
+	const string verboseMode = inputMap.has("verbose") ? inputMap.getString("verbose") : "no"; //must be yes or no
 	if(verboseMode!="yes" and verboseMode!="no")
 		die("\nverboseMode must be 'yes' or 'no'\n");
 	const bool verbose = (verboseMode=="yes");
