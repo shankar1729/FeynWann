@@ -86,8 +86,8 @@ struct Lindblad : public Integrator<DM1>
 	std::vector<size_t> nInnerPrev; //!< cumulative nInner for each k, which is the offset into the Eall array for each k
 	double tPrev; //last time at which compute() was called; used internally to update e-ph operator phases
 	
-	Lindblad(double dmu, double T, double pumpOmega, double pumpA0, double pumpTau, vector3<complex> pumpPol, bool pumpEvolve,
-		bool pumpBfield, vector3<> pumpB,
+	Lindblad(double dmu, double T, 
+		double pumpOmega, double pumpA0, double pumpTau, vector3<complex> pumpPol, bool pumpEvolve, bool pumpBfield, vector3<> pumpB,
 		double omegaMin, double omegaMax, double domega, double tau, std::vector<vector3<complex>> pol, double dE,
 		bool ePhEnabled, bool verbose, string checkpointFile)
 	: stepID(0),
@@ -584,7 +584,7 @@ struct Lindblad : public Integrator<DM1>
 		for(Histogram& h: dist) h.reduce(MPIUtil::ReduceSum);
 		if(mpiWorld->isHead())
 		{	//Report step ID and energy:
-			logPrintf("Integrate: Step: %4d   t[fs]: %6.1lf   Etot[eV]: %.6lf   dfMax: %.3lg", stepID, t/fs, Etot/eV, dfMax);
+			logPrintf("Integrate: Step: %4d   t[fs]: %6.1lf   Etot[eV]: %.6lf   dfMax: %.4lf", stepID, t/fs, Etot/eV, dfMax);
 			if(spinorial) logPrintf("   S: [ %.4lg %.4lg %.4lg ]", Stot[0],  Stot[1],  Stot[2]);
 			logPrintf("\n"); logFlush();
 			//Save distribution functions:
@@ -745,8 +745,7 @@ int main(int argc, char** argv)
 	
 	//Create and initialize lindblad calculator:
 	Lindblad lb(dmu, T,
-		pumpOmega, pumpA0, pumpTau, pumpPol, (pumpMode=="Evolve"),
-		(pumpMode=="Bfield"), pumpB,
+		pumpOmega, pumpA0, pumpTau, pumpPol, (pumpMode=="Evolve"), (pumpMode=="Bfield"), pumpB,
 		omegaMin, omegaMax, domega, tau, pol, dE,
 		ePhEnabled, verbose, checkpointFile);
 	lb.initialize(inFile);

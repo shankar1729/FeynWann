@@ -66,6 +66,7 @@ struct LindbladLinear : public Integrator<DM1>
 	int stepID; //current time and reporting step number
 	
 	const double dmu, T, invT; //!< Fermi level position relative to neutral value / VBM, and temperature
+	const bool spectrumMode; //!< if yes (diagonalization), evolveMat includes coherent part and preconditioner is initialized
 	const double pumpOmega, pumpA0, pumpTau; const vector3<complex> pumpPol; //!< pump parameters
 	const bool pumpBfield; const vector3<> pumpB; //pump parameters for Bfield mode
 	const double omegaMin, domega, omegaMax; const int nomega; //!< probe frequency grid
@@ -94,14 +95,13 @@ struct LindbladLinear : public Integrator<DM1>
 	std::vector<int> nInnerAll; //!< nInner for all k-points on all processes
 	double Emin, Emax; //!< energy range of active space across all k (for spin and number density output)
 	
-	LindbladLinear(double dmu, double T, double pumpOmega, double pumpA0, double pumpTau, vector3<complex> pumpPol,
-		bool pumpBfield, vector3<> pumpB,
+	LindbladLinear(double dmu, double T, bool spectrumMode,
+		double pumpOmega, double pumpA0, double pumpTau, vector3<complex> pumpPol, bool pumpBfield, vector3<> pumpB,
 		double omegaMin, double omegaMax, double domega, double tau, std::vector<vector3<complex>> pol, double dE,
 		bool ePhEnabled, bool verbose, string checkpointFile)
 	: stepID(0),
-		dmu(dmu), T(T), invT(1./T),
-		pumpOmega(pumpOmega), pumpA0(pumpA0), pumpTau(pumpTau), pumpPol(pumpPol),
-		pumpBfield(pumpBfield), pumpB(pumpB),
+		dmu(dmu), T(T), invT(1./T), spectrumMode(spectrumMode),
+		pumpOmega(pumpOmega), pumpA0(pumpA0), pumpTau(pumpTau), pumpPol(pumpPol), pumpBfield(pumpBfield), pumpB(pumpB),
 		omegaMin(omegaMin), domega(domega), omegaMax(omegaMax), nomega(1+int(round((omegaMax-omegaMin)/domega))),
 		tau(tau), pol(pol), dE(dE), ePhEnabled(ePhEnabled), verbose(verbose), checkpointFile(checkpointFile),
 		Emin(+DBL_MAX), Emax(-DBL_MAX)
@@ -110,7 +110,9 @@ struct LindbladLinear : public Integrator<DM1>
 	
 	//---- Flat density matrix storage and access functions ----
 	DM1 drho; //!< flat array of density matrix changes of all k stored on this process
-	std::vector<size_t> rhoOffset; //!< array of offsets into process's rho for each k
+	std::vector<size_t> nInnerPrev; //cumulative nInner for each k, which is the offset into the Eall array for each k
+	std::vector<size_t> nRhoPrev; //cumulative nInner^2 for each k, which is the offset into the global rho structure for each k
+	std::vector<size_t> rhoOffset; //!< array of offsets into process's rho for each k (essentially nRhoPrev - nRhoPrev[ikStart])
 	std::vector<size_t> rhoSize; //!< total size of rho on each process
 	size_t rhoOffsetGlobal; //!< offset of current process rho data in the overall data
 	size_t rhoSizeTot; //!< total size of rho
@@ -159,6 +161,7 @@ struct LindbladLinear : public Integrator<DM1>
 	
 	struct Triplet { int i, j; double val; bool local; }; //entry in triplet format matrix (along with tage for process locality)for initial construction
 	Mat evolveMat; //Time evolution operator
+	//Mat precondMat; //Preconditioning matrix
 	Vec vRho, vRhoDot; //!< temporary copies of drho and rdhoDot data in Petsc format
 	
 	//Clean up Petsc quantities
@@ -166,6 +169,8 @@ struct LindbladLinear : public Integrator<DM1>
 	{	CHECKERR(MatDestroy(&evolveMat));
 		CHECKERR(VecDestroy(&vRho));
 		CHECKERR(VecDestroy(&vRhoDot));
+		//if(spectrumMode) CHECKERR(MatDestroy(&precondMat));
+		return 0;
 	}
 	
 	//Initialize a distributed square matrix M from (distributed) triplet format in entries:
@@ -189,6 +194,52 @@ struct LindbladLinear : public Integrator<DM1>
 			CHECKERR(MatSetValue(M, entry.i, entry.j, entry.val, ADD_VALUES));
 		CHECKERR(MatAssemblyBegin(M, MAT_FINAL_ASSEMBLY));
 		CHECKERR(MatAssemblyEnd(M, MAT_FINAL_ASSEMBLY));
+		return 0;
+	}
+	
+	//Initialize a block-diagonal-inverse preconditioner:
+	PetscErrorCode blockDiagonalInvert(const Mat& M, Mat& K)
+	{	//Determine non-zero sizes and allocate matrix:
+		int N = rhoSizeTot;
+		int Nmine = rhoSize[mpiWorld->iProcess()];
+		std::vector<int> nnzD(Nmine, 0), nnzO(Nmine, 0);
+		for(size_t ik=ikStart; ik<ikStop; ik++)
+		{	size_t nRhoCur = nRhoPrev[ik+1]-nRhoPrev[ik];
+			for(size_t iRho=nRhoPrev[ik]; iRho<nRhoPrev[ik+1]; iRho++)
+				nnzD[iRho-rhoOffsetGlobal] = nRhoCur; //all diagonal; nnzO = 0
+		}
+		CHECKERR(MatCreateAIJ(PETSC_COMM_WORLD, Nmine, Nmine, N, N, 0, nnzD.data(), 0, nnzO.data(), &K));
+		//Create index sets to extract diagonal blocks:
+		std::vector<IS> isArr(nkMine);
+		for(size_t ik=ikStart; ik<ikStop; ik++)
+			CHECKERR(ISCreateStride(PETSC_COMM_SELF, nRhoPrev[ik+1]-nRhoPrev[ik], nRhoPrev[ik], 1, &isArr[ik-ikStart]));
+		//Get diagonal blocks:
+		Mat* blocks;
+		CHECKERR(MatCreateSubMatrices(M, nkMine, isArr.data(), isArr.data(), MAT_INITIAL_MATRIX, &blocks));
+		for(IS& is: isArr) CHECKERR(ISDestroy(&is));
+		//Invert each diagonal block:
+		for(size_t ik=ikStart; ik<ikStop; ik++)
+		{	Mat& block = blocks[ik-ikStart];
+			size_t nRhoCur = nRhoPrev[ik+1]-nRhoPrev[ik];
+			//Get data as a dense block:
+			matrix blockInv = zeroes(nRhoCur, nRhoCur);
+			CHECKERR(MatConvert(block, MATDENSE, MAT_INPLACE_MATRIX, &block));
+			const double* pBlock; CHECKERR(MatDenseGetArrayRead(block, &pBlock));
+			eblas_daxpy(blockInv.nData(), 1., pBlock,1, (double*)blockInv.data(),2); //copy to real parts in complex matrix
+			CHECKERR(MatDenseRestoreArrayRead(block, &pBlock));
+			//Invert block and set it in K:
+			blockInv = inv(blockInv);
+			std::vector<double> blockInvRe(nRhoCur*nRhoCur, 0.); //real part of the inverse
+			eblas_daxpy(blockInv.nData(), 1., (const double*)blockInv.data(),2, blockInvRe.data(),1); //extract real part
+			std::vector<int> indices(nRhoCur);
+			for(size_t iRhoCur=0; iRhoCur<nRhoCur; iRhoCur++)
+				indices[iRhoCur] = nRhoPrev[ik] + iRhoCur; //global index for each row/column
+			CHECKERR(MatSetValues(K, nRhoCur,indices.data(), nRhoCur,indices.data(), blockInvRe.data(), INSERT_VALUES));
+		}
+		CHECKERR(MatDestroySubMatrices(nkMine, &blocks));
+		//Assemble matrix:
+		CHECKERR(MatAssemblyBegin(K, MAT_FINAL_ASSEMBLY));
+		CHECKERR(MatAssemblyEnd(K, MAT_FINAL_ASSEMBLY));
 		return 0;
 	}
 	
@@ -295,8 +346,8 @@ struct LindbladLinear : public Integrator<DM1>
 		//Initialize sparse matrix corresponding to net time evolution (if required):
 		if(ePhEnabled)
 		{	//Make inner-window energies available for all processes:
-			std::vector<size_t> nInnerPrev(nk+1); //cumulative nInner for each k, which is the offset into the Eall array for each k
-			std::vector<size_t> nRhoPrev(nk+1); //cumulative nInner^2 for each k, which is the offset into the global rho structure for each k
+			nInnerPrev.assign(nk+1, 0); //cumulative nInner for each k (offset into the Eall array)
+			nRhoPrev.assign(nk+1, 0); //cumulative nInner^2 for each k (offset into global rho)
 			for(size_t ik=0; ik<nk; ik++)
 			{	nInnerPrev[ik+1] = nInnerPrev[ik] + nInnerAll[ik];
 				nRhoPrev[ik+1] = nRhoPrev[ik] +  nInnerAll[ik]*nInnerAll[ik];
@@ -318,10 +369,6 @@ struct LindbladLinear : public Integrator<DM1>
 			logPrintf("Initialing time evolution operator ... "); logFlush();
 			for(size_t ik1=ikStart; ik1<ikStop; ik1++)
 			{	State& s = *(sPtr++);
-				//Coherent evolution (only in spectrum mode):
-				//TODO
-				//Electron-phonon part:
-				const double prefacEph = 2*M_PI/nkTot; //factor of 2 from the +h.c. contribution
 				const double* E1 = &(s.E[s.innerStart]);
 				const int& nInner1 = nInnerAll[ik1];
 				const int N1 = nInner1*nInner1; //number of density matrix entries
@@ -329,6 +376,17 @@ struct LindbladLinear : public Integrator<DM1>
 				const int whose1 = mpiWorld->iProcess();
 				const diagMatrix& f1 = s.rho0;
 				const diagMatrix f1bar = bar(f1);
+				//Coherent evolution (only in spectrum mode):
+				if(spectrumMode)
+				{	for(int a=0; a<nInner1; a++)
+						for(int b=0; b<nInner1; b++)
+							if(a != b)
+							{	evolveEntries.push_back(Triplet{nRhoPrev1+a+b*nInner1, nRhoPrev1+b+a*nInner1, E1[b]-E1[a]});
+								//diagVals[i*n+j] = complex(0, eps(i)-eps(j));
+							}
+				}
+				//Electron-phonon part:
+				const double prefacEph = 2*M_PI/nkTot; //factor of 2 from the +h.c. contribution
 				std::vector<LindbladFile::GePhEntry>::iterator g = s.GePh.begin();
 				while(g != s.GePh.end())
 				{	const size_t& ik2 = g->jk;
@@ -422,6 +480,16 @@ struct LindbladLinear : public Integrator<DM1>
 				info.nz_used, rhoSizeTot, rhoSizeTot, info.nz_used*100./(rhoSizeTot*rhoSizeTot));
 			logFlush();
 			CHECKERR(MatCreateVecs(evolveMat, &vRho, &vRhoDot));
+			if(spectrumMode)
+			{	/*
+				logPrintf("Initializing block-diagonal-inverse preconditioner ... "); logFlush();
+				CHECKERR(blockDiagonalInvert(evolveMat, precondMat));
+				CHECKERR(MatGetInfo(precondMat, MAT_GLOBAL_SUM, &info));
+				logPrintf("done. Net sparsity: %.0lf non-zero in %lu x %lu matrix (%.1lf%% fill)\n",
+					info.nz_used, rhoSizeTot, rhoSizeTot, info.nz_used*100./(rhoSizeTot*rhoSizeTot));
+				logFlush();
+				*/
+			}
 		}
 		logPrintf("\n"); logFlush();
 		return 0;
@@ -614,8 +682,8 @@ struct LindbladLinear : public Integrator<DM1>
 		return drhoDot;
 	}
 	
-	//Print / dump quantities at each checkpointed step
-	void report(double t, const DM1& drho) const
+	//Print / dump quantities at each checkpointed step / eigenmode
+	void report(double t, const DM1& drho, complex eig, double eigErr) const
 	{	static StopWatch watch("Lindblad::report"); watch.start();
 		ostringstream ossID; ossID << stepID;
 		//Compute total energy and distributions:
@@ -668,8 +736,15 @@ struct LindbladLinear : public Integrator<DM1>
 		for(Histogram& h: dist) h.reduce(MPIUtil::ReduceSum);
 		if(mpiWorld->isHead())
 		{	//Report step ID and energy:
-			logPrintf("Integrate: Step: %4d   t[fs]: %6.1lf   Etot[eV]: %.6lf   dfMax: %.3lg", stepID, t/fs, Etot/eV, dfMax);
-			if(spinorial) logPrintf("   S: [ %.4lg %.4lg %.4lg ]", Stot[0],  Stot[1],  Stot[2]);
+			if(spectrumMode)
+			{	double decayTime = -1./eig.real();
+				double period = (2*M_PI)/fabs(eig.imag());
+				logPrintf("Mode: %2d  DecayTime[fs]: %11.5lg  Period[fs]: %11.5lg  RelErr: %11.5lg",
+					stepID, decayTime/fs, period/fs, eigErr);
+			}
+			else logPrintf("Integrate: Step: %4d   t[fs]: %6.1lf   Etot[eV]: %.6lf", stepID, t/fs, Etot/eV);
+			logPrintf("   dfMax: %6.4lf", dfMax);
+			if(spinorial) logPrintf("   S: [ %11.4lg %11.4lg %11.4lg ]", Stot[0],  Stot[1],  Stot[2]);
 			logPrintf("\n"); logFlush();
 			//Save distribution functions:
 			ofstream ofs("dist."+ossID.str());
@@ -730,6 +805,7 @@ struct LindbladLinear : public Integrator<DM1>
 		//Increment stepID:
 		((LindbladLinear*)this)->stepID++;
 	}
+	void report(double t, const DM1& drho) const { report(t, drho, complex(), 0.); }
 };
 
 inline void print(FILE* fp, const vector3<complex>& v, const char* format="%lg ")
@@ -802,7 +878,7 @@ int main(int argc, char** argv)
 		die("\nverboseMode must be 'yes' or 'no'\n");
 	const bool verbose = (verboseMode=="yes");
 	const string inFile = inputMap.has("inFile") ? inputMap.getString("inFile") : "ldbd.dat"; //input file name
-	const string checkpointFile = inputMap.has("checkpointFile") ? inputMap.getString("checkpointFile") : ""; //checkpoint file name
+	const string checkpointFile = (inputMap.has("checkpointFile") and (not spectrumMode)) ? inputMap.getString("checkpointFile") : ""; //checkpoint file name
 	
 	logPrintf("\nInputs after conversion to atomic units:\n");
 	logPrintf("dmu = %lg\n", dmu);
@@ -848,9 +924,8 @@ int main(int argc, char** argv)
 	logPrintf("\n");
 	
 	//Create and initialize lindblad calculator:
-	LindbladLinear lbl(dmu, T,
-		pumpOmega, pumpA0, pumpTau, pumpPol,
-		(pumpMode=="Bfield"), pumpB,
+	LindbladLinear lbl(dmu, T, spectrumMode,
+		pumpOmega, pumpA0, pumpTau, pumpPol, (pumpMode=="Bfield"), pumpB,
 		omegaMin, omegaMax, domega, tau, pol, dE,
 		ePhEnabled, verbose, checkpointFile);
 	CHECKERR(lbl.initialize(inFile));
@@ -866,7 +941,75 @@ int main(int argc, char** argv)
 	}
 	logPrintf("\n");
 	
-	if(not ePhEnabled)
+	if(spectrumMode)
+	{
+		//Create the eigensolver and set various options:
+		EPS eps; CHECKERR(EPSCreate(PETSC_COMM_WORLD, &eps));
+		CHECKERR(EPSSetDimensions(eps, nEigs, PETSC_DEFAULT, PETSC_DEFAULT));
+		CHECKERR(EPSSetTolerances(eps, eigTol, PETSC_DEFAULT));
+		CHECKERR(EPSSetOperators(eps, lbl.evolveMat, NULL));
+		CHECKERR(EPSSetProblemType(eps, EPS_NHEP)); //Non-Hermitian
+		CHECKERR(EPSSetType(eps, EPSJD)); //Jacobi-Davidson algorithm
+		CHECKERR(EPSSetTarget(eps, 0)); //Target eigenvalues closes to 0. using spectral transformation below
+		CHECKERR(EPSSetWhichEigenpairs(eps, EPS_TARGET_REAL));
+		CHECKERR(EPSSetExtraction(eps, EPS_HARMONIC));
+		typedef PetscErrorCode (*SlepcMonitor)(EPS,PetscInt,PetscInt,PetscScalar*,PetscScalar*,PetscReal*,PetscInt,void*);
+		typedef PetscErrorCode (*SlepcContextDestroy)(void**);
+		PetscViewerAndFormat* vf; CHECKERR(PetscViewerAndFormatCreate(PETSC_VIEWER_STDOUT_WORLD, PETSC_VIEWER_DEFAULT, &vf));
+		CHECKERR(EPSMonitorSet(eps, (SlepcMonitor)EPSMonitorFirst, (void*)vf, (SlepcContextDestroy)PetscViewerAndFormatDestroy));
+		
+		//--- Spectral transformation to get to smallest eigenvalues:
+		ST st; CHECKERR(EPSGetST(eps, &st));
+		CHECKERR(STSetType(st, STPRECOND));
+		KSP ksp; CHECKERR(STGetKSP(st, &ksp)); //Krylov method that acts as preconditioner for JD
+		CHECKERR(KSPSetType(ksp, KSPGMRES)); //Select Krylov method eg. BCGSL, GMRES etc.
+		CHECKERR(KSPSetTolerances(ksp, innerTol, PETSC_DEFAULT, PETSC_DEFAULT, innerIter));
+		//--- Set custom preconditioner for inner solve:
+		PC pc; CHECKERR(KSPGetPC(ksp, &pc));
+		CHECKERR(PCSetType(pc, PCSOR)); //eg. SOR, GAMG (Multigrid)
+		/* //Custom block-diagonal preconditioner (does not seem to be working well)
+		CHECKERR(PCSetType(pc, PCMAT));
+		CHECKERR(PCSetOperators(pc, lbl.precondMat, NULL));
+		CHECKERR(STPrecondSetMatForPC(st, lbl.precondMat));
+		*/
+
+		//Set deflation space (trace of density matrix conserved):
+		Vec nullVec; CHECKERR(MatCreateVecs(lbl.evolveMat, &nullVec, NULL));
+		double* nullVecPtr;  CHECKERR(VecGetArray(nullVec, &nullVecPtr));
+		{	for(const LindbladLinear::State& s: lbl.state)
+				for(int col=0; col<s.nInner; col++)
+					for(int row=0; row<s.nInner; row++)
+						*(nullVecPtr++) = (row==col ? 1. : 0.);
+		}
+		CHECKERR(VecRestoreArray(nullVec, &nullVecPtr));
+		CHECKERR(EPSSetDeflationSpace(eps, 1, &nullVec));
+		CHECKERR(VecDestroy(&nullVec));
+		
+		//Solve the eigensystem:
+		CHECKERR(EPSSolve(eps));
+		
+		//Display solution:
+		logPrintf("\n"); logFlush();
+		int nConverged; CHECKERR(EPSGetConverged(eps, &nConverged));
+		for(int iEig=0; iEig<nConverged; iEig++)
+		{	complex eig; CHECKERR(EPSGetEigenpair(eps, iEig, &eig.real(), &eig.imag(), lbl.vRho, lbl.vRhoDot));
+			double err; CHECKERR(EPSGetErrorEstimate(eps, iEig, &err));
+			//Convert eigenvector:
+			DM1& evec =  lbl.drho;
+			const Vec& vEvec = eig.imag()>=0 ? lbl.vRho : lbl.vRhoDot;
+			const double* vEvecData; CHECKERR(VecGetArrayRead(vEvec, &vEvecData));
+			eblas_copy(evec.data(), vEvecData, evec.size());
+			CHECKERR(VecRestoreArrayRead(vEvec, &vEvecData));
+			//Report:
+			lbl.stepID = iEig;
+			lbl.report(0., evec, eig, err);
+		}
+		logPrintf("\n"); logFlush();
+		
+		//Clean up:
+		CHECKERR(EPSDestroy(&eps));
+	}
+	else if(not ePhEnabled)
 	{	//Simple probe-pump-probe with no relaxation:
 		lbl.report(-dt, lbl.drho);
 		lbl.applyPump(); //takes care of optical pump or B-field excitation
@@ -913,6 +1056,7 @@ int main(int argc, char** argv)
 	}
 	
 	//Cleanup:
+	CHECKERR(lbl.cleanup());
 	CHECKERR(SlepcFinalize());
 	FeynWann::finalize();
 	return 0;
