@@ -423,6 +423,7 @@ struct LindbladLinear : public Integrator<DM1>
 			logFlush();
 			CHECKERR(MatCreateVecs(evolveMat, &vRho, &vRhoDot));
 		}
+		logPrintf("\n"); logFlush();
 		return 0;
 	}
 	
@@ -739,7 +740,7 @@ inline vector3<complex> normalize(const vector3<complex>& v) { return v * (1./sq
 
 int main(int argc, char** argv)
 {	
-	InitParams ip = FeynWann::initialize(argc, argv, "Lindblad dynamics in an ab initio Wannier basis");
+	InitParams ip = FeynWann::initialize(argc, argv, "Lindblad linearized dynamics or spectrum in an ab initio Wannier basis");
 	int argcSlepc=1; CHECKERR(SlepcInitialize(&argcSlepc, &argv, (char*)0, "")); //don't let slepc see the actual command line (too many conflicts)
 	
 	//Get the system parameters:
@@ -747,23 +748,32 @@ int main(int argc, char** argv)
 	//--- doping / temperature
 	const double dmu = inputMap.get("dmu", 0.) * eV; //optional: shift in fermi level from neutral value / VBM in eV (default: 0)
 	const double T = inputMap.get("T") * Kelvin; //temperature in Kelvin (ambient phonon T = initial electron T)
-	//--- pump
-	const string pumpMode = inputMap.getString("pumpMode"); //must be Perturb or Bfield (Evolve not allowed)
+	const string mode = inputMap.getString("mode"); //RealTime or Spectrum
+	if(mode!="RealTime" and mode!="Spectrum")
+		die("\nmode must be 'RealTime' or 'Spectrum''\n");
+	const bool spectrumMode = (mode == "Spectrum");
+	//--- eiegen-decomposition parameters (required and used only in spectrum mode)
+	const int nEigs = int(inputMap.get("nEigs", spectrumMode ? NAN : 0.)); //number of eigenvectors to compute
+	const int innerIter = int(inputMap.get("innerIter", 10)); //number of iterations for inner linear-solve inversion
+	const double innerTol = inputMap.get("innerTol", 1e-3); //convergence threshold for inner linear-solve inversion
+	//--- time evolution parameters (required and used only in real time mode)
+	const double dt = inputMap.get("dt", spectrumMode ? 0. : NAN) * fs; //time interval between reports
+	const double tStop = inputMap.get("tStop", spectrumMode ? 0. : NAN) * fs; //stopping time for simulation
+	const double tStep = inputMap.get("tStep", 0.) * fs; //if non-zero, time step for fixed-step (non-adaptive) integrator
+	const double tolAdaptive = inputMap.get("tolAdaptive", 1e-3); //relative tolerance for adaptive integrator
+	//--- pump / Bfield (required and used only in real time mode)
+	const string pumpMode = spectrumMode ? "Bfield" : inputMap.getString("pumpMode"); //must be Perturb or Bfield (Evolve not allowed)
 	if(pumpMode!="Perturb" and pumpMode!="Bfield")
 		die("\npumpMode must be 'Perturb' or 'Bfield' (Evolve not supported by lindbladLinear)'\n");
 	const double Tesla = Joule/(Ampere*meter*meter);
 	const vector3<> pumpB = inputMap.getVector("pumpB", vector3<>()) * Tesla; //perturbing initial magnetic field in Tesla (used only in Bfield mode)
-	const double pumpOmega = inputMap.get("pumpOmega") * eV; //pump frequency in eV (used only in Evolve or Perturb modes)
-	const double pumpA0 = inputMap.get("pumpA0"); //pump pulse amplitude / intensity (Units TBD)
-	const double pumpTau = inputMap.get("pumpTau")*fs; //Gaussian pump pulse width (sigma of amplitude) in fs
+	const double pumpOmega = inputMap.get("pumpOmega", (spectrumMode or pumpMode=="Bfield") ? 0. : NAN) * eV; //pump frequency in eV (used only in Evolve or Perturb modes)
+	const double pumpA0 = inputMap.get("pumpA0", (spectrumMode or pumpMode=="Bfield") ? 0. : NAN); //pump pulse amplitude / intensity (Units TBD)
+	const double pumpTau = inputMap.get("pumpTau", (spectrumMode or pumpMode=="Bfield") ? 0. : NAN)*fs; //Gaussian pump pulse width (sigma of amplitude) in fs
 	const vector3<complex> pumpPol = normalize(
 		complex(1,0)*inputMap.getVector("pumpPolRe", vector3<>(1.,0.,0.)) +  //Real part of polarization
 		complex(0,1)*inputMap.getVector("pumpPolIm", vector3<>(0.,0.,0.)) ); //Imag part of polarization
-	//--- probes
-	const double omegaMin = inputMap.get("omegaMin") * eV; //start of frequency grid for probe response
-	const double omegaMax = inputMap.get("omegaMax") * eV; //end of frequency grid for probe response
-	const double domega = inputMap.get("domega") * eV; //frequency resolution for probe calculation
-	const double tau = inputMap.get("tau") * fs; //Gaussian probe pulse width (sigma of amplitude) in fs
+	//--- probes (used in both modes; parameters required only if one or more polarizations specified)
 	std::vector<vector3<complex>> pol;
 	while(true)
 	{	int iPol = int(pol.size())+1;
@@ -774,17 +784,19 @@ int main(int argc, char** argv)
 		if(polRe.length_squared() + polIm.length_squared() == 0.) break; //End of probe polarizations
 		pol.push_back(normalize(complex(1,0)*polRe + complex(0,1)*polIm));
 	}
+	const double omegaMin = inputMap.get("omegaMin", pol.size() ? NAN : 0.) * eV; //start of frequency grid for probe response
+	const double omegaMax = inputMap.get("omegaMax", pol.size() ? NAN : 0.) * eV; //end of frequency grid for probe response
+	const double domega = inputMap.get("domega", pol.size() ? NAN : 0.) * eV; //frequency resolution for probe calculation
+	const double tau = inputMap.get("tau", pol.size() ? NAN :  0.) * fs; //Gaussian probe pulse width (sigma of amplitude) in fs
+	//--- general options
 	const double dE = inputMap.get("dE") * eV; //energy resolution for distribution functions
-	const double dt = inputMap.get("dt") * fs; //time interval between reports
-	const double tStop = inputMap.get("tStop") * fs; //stopping time for simulation
-	const double tStep = inputMap.get("tStep", 0.) * fs; //if non-zero, time step for fixed-step (non-adaptive) integrator
-	const double tolAdaptive = inputMap.get("tolAdaptive", 1e-3); //relative tolerance for adaptive integrator
-	
 	const string ePhMode = inputMap.getString("ePhMode"); //must be Off or DiagK (add FullK in future)
 	if(ePhMode!="Off" and ePhMode!="DiagK")
 		die("\nePhMode must be 'Off' or 'DiagK'\n");
 	const bool ePhEnabled = (ePhMode != "Off");
-	const string verboseMode = inputMap.getString("verbose"); //must be yes or no
+	if(spectrumMode and not ePhEnabled)
+		die("\nePhMode must be 'DiagK' in Spectrum mode\n");
+	const string verboseMode = inputMap.has("verbose") ? inputMap.getString("verbose") : "no"; //must be yes or no
 	if(verboseMode!="yes" and verboseMode!="no")
 		die("\nverboseMode must be 'yes' or 'no'\n");
 	const bool verbose = (verboseMode=="yes");
@@ -794,28 +806,44 @@ int main(int argc, char** argv)
 	logPrintf("\nInputs after conversion to atomic units:\n");
 	logPrintf("dmu = %lg\n", dmu);
 	logPrintf("T = %lg\n", T);
-	logPrintf("pumpMode = %s\n", pumpMode.c_str());
-	logPrintf("pumpB = "); pumpB.print(globalLog, " %lg ");
-	logPrintf("pumpOmega = %lg\n", pumpOmega);
-	logPrintf("pumpA0 = %lg\n", pumpA0);
-	logPrintf("pumpTau = %lg\n", pumpTau);
-	logPrintf("pumpPol = "); print(globalLog, pumpPol);
-	logPrintf("omegaMin = %lg\n", omegaMin);
-	logPrintf("omegaMax = %lg\n", omegaMax);
-	logPrintf("domega = %lg\n", domega);
-	logPrintf("tau = %lg\n", tau);
-	for(int iPol=0; iPol<int(pol.size()); iPol++)
-	{	logPrintf("pol%d = ", iPol+1);
-		print(globalLog, pol[iPol]);
+	logPrintf("mode = %s\n", mode.c_str());
+	if(spectrumMode)
+	{	logPrintf("nEigs = %d\n", nEigs);
+		logPrintf("innerIter = %d\n", innerIter);
+		logPrintf("innerTol = %lg\n", innerTol);
+	}
+	else
+	{	logPrintf("dt = %lg\n", dt);
+		logPrintf("tStop = %lg\n", tStop);
+		logPrintf("tStep = %lg\n", tStep);
+		logPrintf("tolAdaptive = %lg\n", tolAdaptive);
+		logPrintf("pumpMode = %s\n", pumpMode.c_str());
+		if(pumpMode == "Bfield")
+		{	logPrintf("pumpB = "); pumpB.print(globalLog, " %lg ");
+		}
+		else
+		{	logPrintf("pumpOmega = %lg\n", pumpOmega);
+			logPrintf("pumpA0 = %lg\n", pumpA0);
+			logPrintf("pumpTau = %lg\n", pumpTau);
+			logPrintf("pumpPol = "); print(globalLog, pumpPol);
+		}
+	}
+	if(pol.size())
+	{	for(int iPol=0; iPol<int(pol.size()); iPol++)
+		{	logPrintf("pol%d = ", iPol+1);
+			print(globalLog, pol[iPol]);
+		}
+		logPrintf("omegaMin = %lg\n", omegaMin);
+		logPrintf("omegaMax = %lg\n", omegaMax);
+		logPrintf("domega = %lg\n", domega);
+		logPrintf("tau = %lg\n", tau);
 	}
 	logPrintf("dE = %lg\n", dE);
-	logPrintf("dt = %lg\n", dt);
-	logPrintf("tStop = %lg\n", tStop);
-	logPrintf("tStep = %lg\n", tStep);
-	logPrintf("tolAdaptive = %lg\n", tolAdaptive);
 	logPrintf("ePhMode = %s\n", ePhMode.c_str());
 	logPrintf("verbose = %s\n", verboseMode.c_str());
 	logPrintf("inFile = %s\n", inFile.c_str());
+	logPrintf("checkpointFile = %s\n", checkpointFile.c_str());
+	logPrintf("\n");
 	
 	//Create and initialize lindblad calculator:
 	LindbladLinear lbl(dmu, T,

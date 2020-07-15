@@ -275,6 +275,7 @@ struct Lindblad : public Integrator<DM1>
 				}
 			}
 		}
+		logPrintf("\n"); logFlush();
 	}
 	
 	//Calculate probe response at current rho (update this->imEps)
@@ -662,23 +663,24 @@ int main(int argc, char** argv)
 	//--- doping / temperature
 	const double dmu = inputMap.get("dmu", 0.) * eV; //optional: shift in fermi level from neutral value / VBM in eV (default: 0)
 	const double T = inputMap.get("T") * Kelvin; //temperature in Kelvin (ambient phonon T = initial electron T)
+	//--- time evolution parameters
+	const double dt = inputMap.get("dt") * fs; //time interval between reports
+	const double tStop = inputMap.get("tStop") * fs; //stopping time for simulation
+	const double tStep = inputMap.get("tStep", 0.) * fs; //if non-zero, time step for fixed-step (non-adaptive) integrator
+	const double tolAdaptive = inputMap.get("tolAdaptive", 1e-3); //relative tolerance for adaptive integrator
 	//--- pump
 	const string pumpMode = inputMap.getString("pumpMode"); //must be Evolve, Perturb or Bfield
 	if(pumpMode!="Evolve" and pumpMode!="Perturb" and pumpMode!="Bfield")
 		die("\npumpMode must be 'Evolve' or 'Perturb' pr 'Bfield'\n");
 	const double Tesla = Joule/(Ampere*meter*meter);
 	const vector3<> pumpB = inputMap.getVector("pumpB", vector3<>()) * Tesla; //perturbing initial magnetic field in Tesla (used only in Bfield mode)
-	const double pumpOmega = inputMap.get("pumpOmega") * eV; //pump frequency in eV (used only in Evolve or Perturb modes)
-	const double pumpA0 = inputMap.get("pumpA0"); //pump pulse amplitude / intensity (Units TBD)
-	const double pumpTau = inputMap.get("pumpTau")*fs; //Gaussian pump pulse width (sigma of amplitude) in fs
+	const double pumpOmega = inputMap.get("pumpOmega", pumpMode=="Bfield" ? 0. : NAN) * eV; //pump frequency in eV (used only in Evolve or Perturb modes)
+	const double pumpA0 = inputMap.get("pumpA0", pumpMode=="Bfield" ? 0. : NAN); //pump pulse amplitude / intensity (Units TBD)
+	const double pumpTau = inputMap.get("pumpTau", pumpMode=="Bfield" ? 0. : NAN)*fs; //Gaussian pump pulse width (sigma of amplitude) in fs
 	const vector3<complex> pumpPol = normalize(
 		complex(1,0)*inputMap.getVector("pumpPolRe", vector3<>(1.,0.,0.)) +  //Real part of polarization
 		complex(0,1)*inputMap.getVector("pumpPolIm", vector3<>(0.,0.,0.)) ); //Imag part of polarization
 	//--- probes
-	const double omegaMin = inputMap.get("omegaMin") * eV; //start of frequency grid for probe response
-	const double omegaMax = inputMap.get("omegaMax") * eV; //end of frequency grid for probe response
-	const double domega = inputMap.get("domega") * eV; //frequency resolution for probe calculation
-	const double tau = inputMap.get("tau") * fs; //Gaussian probe pulse width (sigma of amplitude) in fs
 	std::vector<vector3<complex>> pol;
 	while(true)
 	{	int iPol = int(pol.size())+1;
@@ -689,12 +691,12 @@ int main(int argc, char** argv)
 		if(polRe.length_squared() + polIm.length_squared() == 0.) break; //End of probe polarizations
 		pol.push_back(normalize(complex(1,0)*polRe + complex(0,1)*polIm));
 	}
+	const double omegaMin = inputMap.get("omegaMin", pol.size() ? NAN : 0.) * eV; //start of frequency grid for probe response
+	const double omegaMax = inputMap.get("omegaMax", pol.size() ? NAN : 0.) * eV; //end of frequency grid for probe response
+	const double domega = inputMap.get("domega", pol.size() ? NAN : 0.) * eV; //frequency resolution for probe calculation
+	const double tau = inputMap.get("tau", pol.size() ? NAN : 0.) * fs; //Gaussian probe pulse width (sigma of amplitude) in fs
+	//--- general options
 	const double dE = inputMap.get("dE") * eV; //energy resolution for distribution functions
-	const double dt = inputMap.get("dt") * fs; //time interval between reports
-	const double tStop = inputMap.get("tStop") * fs; //stopping time for simulation
-	const double tStep = inputMap.get("tStep", 0.) * fs; //if non-zero, time step for fixed-step (non-adaptive) integrator
-	const double tolAdaptive = inputMap.get("tolAdaptive", 1e-3); //relative tolerance for adaptive integrator
-	
 	const string ePhMode = inputMap.getString("ePhMode"); //must be Off or DiagK (add FullK in future)
 	if(ePhMode!="Off" and ePhMode!="DiagK")
 		die("\nePhMode must be 'Off' or 'DiagK'\n");
@@ -709,28 +711,37 @@ int main(int argc, char** argv)
 	logPrintf("\nInputs after conversion to atomic units:\n");
 	logPrintf("dmu = %lg\n", dmu);
 	logPrintf("T = %lg\n", T);
-	logPrintf("pumpMode = %s\n", pumpMode.c_str());
-	logPrintf("pumpB = "); pumpB.print(globalLog, " %lg ");
-	logPrintf("pumpOmega = %lg\n", pumpOmega);
-	logPrintf("pumpA0 = %lg\n", pumpA0);
-	logPrintf("pumpTau = %lg\n", pumpTau);
-	logPrintf("pumpPol = "); print(globalLog, pumpPol);
-	logPrintf("omegaMin = %lg\n", omegaMin);
-	logPrintf("omegaMax = %lg\n", omegaMax);
-	logPrintf("domega = %lg\n", domega);
-	logPrintf("tau = %lg\n", tau);
-	for(int iPol=0; iPol<int(pol.size()); iPol++)
-	{	logPrintf("pol%d = ", iPol+1);
-		print(globalLog, pol[iPol]);
-	}
-	logPrintf("dE = %lg\n", dE);
 	logPrintf("dt = %lg\n", dt);
 	logPrintf("tStop = %lg\n", tStop);
 	logPrintf("tStep = %lg\n", tStep);
 	logPrintf("tolAdaptive = %lg\n", tolAdaptive);
+	
+	logPrintf("pumpMode = %s\n", pumpMode.c_str());
+	if(pumpMode == "Bfield")
+	{	logPrintf("pumpB = "); pumpB.print(globalLog, " %lg ");
+	}
+	else
+	{	logPrintf("pumpOmega = %lg\n", pumpOmega);
+		logPrintf("pumpA0 = %lg\n", pumpA0);
+		logPrintf("pumpTau = %lg\n", pumpTau);
+		logPrintf("pumpPol = "); print(globalLog, pumpPol);
+	}
+	if(pol.size())
+	{	for(int iPol=0; iPol<int(pol.size()); iPol++)
+		{	logPrintf("pol%d = ", iPol+1);
+			print(globalLog, pol[iPol]);
+		}
+		logPrintf("omegaMin = %lg\n", omegaMin);
+		logPrintf("omegaMax = %lg\n", omegaMax);
+		logPrintf("domega = %lg\n", domega);
+		logPrintf("tau = %lg\n", tau);
+	}
+	logPrintf("dE = %lg\n", dE);
 	logPrintf("ePhMode = %s\n", ePhMode.c_str());
 	logPrintf("verbose = %s\n", verboseMode.c_str());
 	logPrintf("inFile = %s\n", inFile.c_str());
+	logPrintf("checkpointFile = %s\n", checkpointFile.c_str());
+	logPrintf("\n");
 	
 	//Create and initialize lindblad calculator:
 	Lindblad lb(dmu, T,
