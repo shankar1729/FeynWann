@@ -267,11 +267,9 @@ struct Lindblad : public Integrator<DM1>
 			}
 			//Initialize A+ and A- for all matrix elements:
 			for(State& s: state)
-			{	const double* Ei = &(s.E[s.innerStart]);
-				for(LindbladFile::GePhEntry& g: s.GePh)
-				{	const double* Ej = &(Eall[nInnerPrev[g.jk]]);
-					g.G.init(s.nInner, nInnerAll[g.jk]);
-					g.initA(Ei, Ej, T);
+			{	for(LindbladFile::GePhEntry& g: s.GePh)
+				{	g.G.init(s.nInner, nInnerAll[g.jk]);
+					g.initA(T);
 				}
 			}
 		}

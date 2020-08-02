@@ -406,7 +406,7 @@ struct LindbladLinear : public Integrator<DM1>
 					//Loop over all connections to the same ik2:
 					while((g != s.GePh.end()) and (g->jk == ik2))
 					{	g->G.init(nInner1, nInner2);
-						g->initA(E1, E2, T);
+						g->initA(T);
 						//Loop over A- and A+
 						for(int pm=0; pm<2; pm++) 
 						{	const SparseMatrix& Acur = pm ? g->Ap : g->Am;
@@ -966,7 +966,7 @@ int main(int argc, char** argv)
 		CHECKERR(KSPSetTolerances(ksp, innerTol, PETSC_DEFAULT, PETSC_DEFAULT, innerIter));
 		//--- Set custom preconditioner for inner solve:
 		PC pc; CHECKERR(KSPGetPC(ksp, &pc));
-		CHECKERR(PCSetType(pc, PCSOR)); //eg. SOR, GAMG (Multigrid)
+		CHECKERR(PCSetType(pc, PCGAMG)); //eg. SOR, GAMG (Multigrid)
 		/* //Custom block-diagonal preconditioner (does not seem to be working well)
 		CHECKERR(PCSetType(pc, PCMAT));
 		CHECKERR(PCSetOperators(pc, lbl.precondMat, NULL));

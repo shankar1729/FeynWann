@@ -149,15 +149,13 @@ namespace LindbladFile
 		{	return jk < jk2;
 		}
 		
-		//Initialize Am and Ap given energy arrays and T:
-		void initA(const double* Ei, const double* Ej, double T)
+		//Initialize Am and Ap given T:
+		void initA(double T)
 		{	Am.clear(); Am.init(G.nRows(), G.nCols(), G.size());
 			Ap.clear(); Ap.init(G.nRows(), G.nCols(), G.size());
+			double nPh = (T>0 and omegaPh>1e-3*T) ? bose(omegaPh/T) : 0.; 
 			for(const SparseEntry& se: G)
-			{	double omegaEff = Ei[se.i] - Ej[se.j]; //phonon frequency with exact energy conservation
-				if(omegaEff < 1e-3*T) continue;
-				double nPh = T>0 ? bose(omegaEff/T) : 0.; 
-				SparseEntry sm = se; sm.val *= sqrt(nPh);   Am.push_back(sm);
+			{	SparseEntry sm = se; sm.val *= sqrt(nPh);   Am.push_back(sm);
 				SparseEntry sp = se; sp.val *= sqrt(nPh+1); Ap.push_back(sp);
 			}
 		}
