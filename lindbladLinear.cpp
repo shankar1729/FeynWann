@@ -66,7 +66,8 @@ struct LindbladLinear : public Integrator<DM1>
 	int stepID; //current time and reporting step number
 	
 	const double dmu, T, invT; //!< Fermi level position relative to neutral value / VBM, and temperature
-	const bool spectrumMode; //!< if yes (diagonalization), evolveMat includes coherent part and preconditioner is initialized
+	const bool spectrumMode; //!< if yes (diagonalization), evolveMat includes coherent part
+	const bool sparseDiag; //!< if yes (sparse diagonalization), use SLEPc (preconditioner is also initialized), else use ScaLAPACK
 	const double pumpOmega, pumpA0, pumpTau; const vector3<complex> pumpPol; //!< pump parameters
 	const bool pumpBfield; const vector3<> pumpB; //pump parameters for Bfield mode
 	const double omegaMin, domega, omegaMax; const int nomega; //!< probe frequency grid
@@ -95,12 +96,12 @@ struct LindbladLinear : public Integrator<DM1>
 	std::vector<int> nInnerAll; //!< nInner for all k-points on all processes
 	double Emin, Emax; //!< energy range of active space across all k (for spin and number density output)
 	
-	LindbladLinear(double dmu, double T, bool spectrumMode,
+	LindbladLinear(double dmu, double T, bool spectrumMode, bool sparseDiag,
 		double pumpOmega, double pumpA0, double pumpTau, vector3<complex> pumpPol, bool pumpBfield, vector3<> pumpB,
 		double omegaMin, double omegaMax, double domega, double tau, std::vector<vector3<complex>> pol, double dE,
 		bool ePhEnabled, bool verbose, string checkpointFile)
 	: stepID(0),
-		dmu(dmu), T(T), invT(1./T), spectrumMode(spectrumMode),
+		dmu(dmu), T(T), invT(1./T), spectrumMode(spectrumMode), sparseDiag(sparseDiag),
 		pumpOmega(pumpOmega), pumpA0(pumpA0), pumpTau(pumpTau), pumpPol(pumpPol), pumpBfield(pumpBfield), pumpB(pumpB),
 		omegaMin(omegaMin), domega(domega), omegaMax(omegaMax), nomega(1+int(round((omegaMax-omegaMin)/domega))),
 		tau(tau), pol(pol), dE(dE), ePhEnabled(ePhEnabled), verbose(verbose), checkpointFile(checkpointFile),
@@ -166,10 +167,15 @@ struct LindbladLinear : public Integrator<DM1>
 	
 	//Clean up Petsc quantities
 	PetscErrorCode cleanup()
-	{	CHECKERR(MatDestroy(&evolveMat));
-		CHECKERR(VecDestroy(&vRho));
-		CHECKERR(VecDestroy(&vRhoDot));
-		//if(spectrumMode) CHECKERR(MatDestroy(&precondMat));
+	{	if(spectrumMode and (not sparseDiag))
+		{	//TODO: dense cleanup
+		}
+		else
+		{	CHECKERR(MatDestroy(&evolveMat));
+			CHECKERR(VecDestroy(&vRho));
+			CHECKERR(VecDestroy(&vRhoDot));
+			//if(spectrumMode) CHECKERR(MatDestroy(&precondMat));
+		}
 		return 0;
 	}
 	
@@ -472,23 +478,37 @@ struct LindbladLinear : public Integrator<DM1>
 				}
 			}
 			logPrintf("done.\n");
-			//Convert to Petsc matrix:
-			logPrintf("Converting to PETSc sparse matrix ... "); logFlush();
-			matInit(evolveMat, evolveEntries);
-			MatInfo info; CHECKERR(MatGetInfo(evolveMat, MAT_GLOBAL_SUM, &info));
-			logPrintf("done. Net sparsity: %.0lf non-zero in %lu x %lu matrix (%.1lf%% fill)\n",
-				info.nz_used, rhoSizeTot, rhoSizeTot, info.nz_used*100./(rhoSizeTot*rhoSizeTot));
-			logFlush();
-			CHECKERR(MatCreateVecs(evolveMat, &vRho, &vRhoDot));
-			if(spectrumMode)
-			{	/*
-				logPrintf("Initializing block-diagonal-inverse preconditioner ... "); logFlush();
-				CHECKERR(blockDiagonalInvert(evolveMat, precondMat));
-				CHECKERR(MatGetInfo(precondMat, MAT_GLOBAL_SUM, &info));
+			//Convert from triplet to appropriate format:
+			if(spectrumMode and (not sparseDiag))
+			{	//Convert to dense matrix for ScaLAPACK:
+				#ifdef SCALAPACK_ENABLED
+				//TODO
+				
+				//############ HACK ########################
+				
+				
+				//############ HACK ########################
+				#endif
+			}
+			else
+			{	//Convert to Petsc matrix:
+				logPrintf("Converting to PETSc sparse matrix ... "); logFlush();
+				matInit(evolveMat, evolveEntries);
+				MatInfo info; CHECKERR(MatGetInfo(evolveMat, MAT_GLOBAL_SUM, &info));
 				logPrintf("done. Net sparsity: %.0lf non-zero in %lu x %lu matrix (%.1lf%% fill)\n",
 					info.nz_used, rhoSizeTot, rhoSizeTot, info.nz_used*100./(rhoSizeTot*rhoSizeTot));
 				logFlush();
-				*/
+				CHECKERR(MatCreateVecs(evolveMat, &vRho, &vRhoDot));
+				if(spectrumMode)
+				{	/*
+					logPrintf("Initializing block-diagonal-inverse preconditioner ... "); logFlush();
+					CHECKERR(blockDiagonalInvert(evolveMat, precondMat));
+					CHECKERR(MatGetInfo(precondMat, MAT_GLOBAL_SUM, &info));
+					logPrintf("done. Net sparsity: %.0lf non-zero in %lu x %lu matrix (%.1lf%% fill)\n",
+						info.nz_used, rhoSizeTot, rhoSizeTot, info.nz_used*100./(rhoSizeTot*rhoSizeTot));
+					logFlush();
+					*/
+				}
 			}
 		}
 		logPrintf("\n"); logFlush();
@@ -824,10 +844,15 @@ int main(int argc, char** argv)
 	//--- doping / temperature
 	const double dmu = inputMap.get("dmu", 0.) * eV; //optional: shift in fermi level from neutral value / VBM in eV (default: 0)
 	const double T = inputMap.get("T") * Kelvin; //temperature in Kelvin (ambient phonon T = initial electron T)
-	const string mode = inputMap.getString("mode"); //RealTime or Spectrum
-	if(mode!="RealTime" and mode!="Spectrum")
-		die("\nmode must be 'RealTime' or 'Spectrum''\n");
-	const bool spectrumMode = (mode == "Spectrum");
+	const string mode = inputMap.getString("mode"); //RealTime or Spectrum or SpectrumSparse
+	if(mode!="RealTime" and mode!="Spectrum" and mode!="SpectrumSparse")
+		die("\nmode must be 'RealTime', 'Spectrum' or 'SpectrumSparse'\n");
+	const bool spectrumMode = (mode == "Spectrum" or mode == "SpectrumSparse");
+	const bool sparseDiag = (mode == "SpectrumSparse");
+	#ifndef SCALAPACK_ENABLED
+	if(spectrumMode and (not sparseDiag))
+		die("\nSpectrum (dense diagonalization) mode requires linking with ScaLAPACK.\n");
+	#endif
 	//--- eiegen-decomposition parameters (required and used only in spectrum mode)
 	const int nEigs = int(inputMap.get("nEigs", spectrumMode ? NAN : 0.)); //number of eigenvectors to compute
 	const double eigTol = inputMap.get("eigTol", 1e-7); //convergence threshold on eigenvalues
@@ -924,7 +949,7 @@ int main(int argc, char** argv)
 	logPrintf("\n");
 	
 	//Create and initialize lindblad calculator:
-	LindbladLinear lbl(dmu, T, spectrumMode,
+	LindbladLinear lbl(dmu, T, spectrumMode, sparseDiag,
 		pumpOmega, pumpA0, pumpTau, pumpPol, (pumpMode=="Bfield"), pumpB,
 		omegaMin, omegaMax, domega, tau, pol, dE,
 		ePhEnabled, verbose, checkpointFile);
@@ -941,8 +966,10 @@ int main(int argc, char** argv)
 	}
 	logPrintf("\n");
 	
-	if(spectrumMode)
+	if(spectrumMode and sparseDiag)
 	{
+		//----------- Sparse diagonalization using SLEPc ---------------
+		
 		//Create the eigensolver and set various options:
 		EPS eps; CHECKERR(EPSCreate(PETSC_COMM_WORLD, &eps));
 		CHECKERR(EPSSetDimensions(eps, nEigs, PETSC_DEFAULT, PETSC_DEFAULT));
@@ -1008,6 +1035,11 @@ int main(int argc, char** argv)
 		
 		//Clean up:
 		CHECKERR(EPSDestroy(&eps));
+	}
+	else if(spectrumMode and (not sparseDiag))
+	{
+		//----------- Dense diagonalization using ScaLAPACK ---------------
+		
 	}
 	else if(not ePhEnabled)
 	{	//Simple probe-pump-probe with no relaxation:

@@ -127,6 +127,12 @@ add_FeynWann_executable(debugEph)
 
 target_link_libraries(lindblad ${GSL_BLAS_LIBRARY})
 
+#Optional ScaLAPACK provided through MKL:
+option(EnableScaLAPACK "Enable ScaLAPACK support (currently used only by the dense diagonalization in lindbladLinear)")
+if(EnableScaLAPACK)
+	find_package(MKL REQUIRED) #This sets SCALAPACK_ENABLED and adds scalapack librarties to MKL_LIBRARIES
+endif()
+
 #Optional lindbladian linear dynamics and spectrum that requires SLEPc
 option(EnableSLEPc "Enable lindbladian linear dynamics and spectrum using SLEPc" OFF)
 if(EnableSLEPc)
@@ -135,6 +141,6 @@ if(EnableSLEPc)
 	include_directories("${PETSC_INCLUDE_DIR}")
 	include_directories("${SLEPC_INCLUDE_DIR}")
 	add_FeynWann_executable(lindbladLinear)
-	target_link_libraries(lindbladLinear ${GSL_BLAS_LIBRARY} ${PETSC_LIBRARY} ${SLEPC_LIBRARY})
+	target_link_libraries(lindbladLinear ${GSL_BLAS_LIBRARY} ${PETSC_LIBRARY} ${SLEPC_LIBRARY} ${MKL_LIBRARIES})
 endif()
 
