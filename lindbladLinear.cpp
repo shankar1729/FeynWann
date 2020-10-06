@@ -58,7 +58,38 @@ inline diagMatrix bar(const diagMatrix& X)
 	return Xbar;
 }
 
-static const double degeneracyThreshold = 1e-5; //!< currently used only for spin-density calculation in report()
+#if SCALAPACK_ENABLED
+extern "C"
+{
+	void blacs_pinfo_(int* mypnum, int* nprocs);
+	void blacs_get_(const int* icontxt, const int* what, int* val);
+	void blacs_gridinit_(const int* icontxt, const char* layout, const int* nprow, const int* npcol);
+	void blacs_gridinfo_(const int* icontxt, int* nprow, int* npcol, int* myprow, int* mypcol);
+	void blacs_gridexit_(const int* icontxt);
+	void blacs_exit_(const int* cont);
+	
+	void descinit_(int* desc, const int* m, const int* n, const int* mb, const int* nb,
+		const int* irsrc, const int* icsrc, const int* ictxt, const int* lld, int* info);
+	int numroc_(const int* n, const int* nb, const int* iproc, const int* srcproc, const int* nprocs);
+	
+	void pdgebal_(const char* job, const int* n, double* a, const int* desca, int* ilo, int* ihi, double* scale, int* info);
+	
+	void pdgehrd_(const int* n, const int* ilo, const int* ihi,
+		double* a, const int* ia, const int* ja, const int* desca,
+		double* tau, double* work, const int* lwork, int* info);
+	
+	 void pdhseqr_(const char* job, const char* compz, const int* n, const int* iLo, const int* iHi,
+		double* h, const int* desch, double* wr, double* wi, double* z, const int* descz,
+		double* work, const int* lwork, int* iwork, const int* liwork, int* info);
+}
+
+//Helper class to "argsort" an array i.e. determine the indices that sort it
+template<typename ArrayType> struct IndexCompare
+{	const ArrayType& array;
+	IndexCompare(const ArrayType& array) : array(array) {}
+	template<typename Integer> bool operator()(Integer i1, Integer i2) const { return array[i1] < array[i2]; }
+};
+#endif
 
 //Lindblad initialization, time evolution and measurement operators using FeynWann callback
 struct LindbladLinear : public Integrator<DM1>
@@ -68,6 +99,7 @@ struct LindbladLinear : public Integrator<DM1>
 	const double dmu, T, invT; //!< Fermi level position relative to neutral value / VBM, and temperature
 	const bool spectrumMode; //!< if yes (diagonalization), evolveMat includes coherent part
 	const bool sparseDiag; //!< if yes (sparse diagonalization), use SLEPc (preconditioner is also initialized), else use ScaLAPACK
+	const int blockSize; //!< block size in ScaLAPACK matrix distribution
 	const double pumpOmega, pumpA0, pumpTau; const vector3<complex> pumpPol; //!< pump parameters
 	const bool pumpBfield; const vector3<> pumpB; //pump parameters for Bfield mode
 	const double omegaMin, domega, omegaMax; const int nomega; //!< probe frequency grid
@@ -96,12 +128,12 @@ struct LindbladLinear : public Integrator<DM1>
 	std::vector<int> nInnerAll; //!< nInner for all k-points on all processes
 	double Emin, Emax; //!< energy range of active space across all k (for spin and number density output)
 	
-	LindbladLinear(double dmu, double T, bool spectrumMode, bool sparseDiag,
+	LindbladLinear(double dmu, double T, bool spectrumMode, bool sparseDiag, int blockSize,
 		double pumpOmega, double pumpA0, double pumpTau, vector3<complex> pumpPol, bool pumpBfield, vector3<> pumpB,
 		double omegaMin, double omegaMax, double domega, double tau, std::vector<vector3<complex>> pol, double dE,
 		bool ePhEnabled, bool verbose, string checkpointFile)
 	: stepID(0),
-		dmu(dmu), T(T), invT(1./T), spectrumMode(spectrumMode), sparseDiag(sparseDiag),
+		dmu(dmu), T(T), invT(1./T), spectrumMode(spectrumMode), sparseDiag(sparseDiag), blockSize(blockSize),
 		pumpOmega(pumpOmega), pumpA0(pumpA0), pumpTau(pumpTau), pumpPol(pumpPol), pumpBfield(pumpBfield), pumpB(pumpB),
 		omegaMin(omegaMin), domega(domega), omegaMax(omegaMax), nomega(1+int(round((omegaMax-omegaMin)/domega))),
 		tau(tau), pol(pol), dE(dE), ePhEnabled(ePhEnabled), verbose(verbose), checkpointFile(checkpointFile),
@@ -249,9 +281,54 @@ struct LindbladLinear : public Integrator<DM1>
 		return 0;
 	}
 	
+	//--------- Blacs / ScaLAPACK data for dense diagonalization -----------
+	#ifdef SCALAPACK_ENABLED
+	int nProcsRow, nProcsCol; //BLACS process grid dimensions
+	int iProcRow, iProcCol; //Current process index in BLACS process grid
+	int nRows; //matrix dimension
+	int nRowsMine, nColsMine; //Number of rows and columns on current process
+	std::vector<int> iRowsMine, iColsMine; //Indices of rows and columns that belng to current process
+	
+	//Return list of indices in a given dimension (row or column) that belong to me in block-cyclic distribution
+	std::vector<int> distributedIndices(int nTotal, int blockSize, int iProcDim, int nProcsDim)
+	{	int zero = 0;
+		int nMine = numroc_(&nTotal, &blockSize, &iProcDim, &zero, &nProcsDim);
+		std::vector<int> myIndices; myIndices.reserve(nMine);
+		int blockStride = blockSize * nProcsDim;
+		int nBlocksMineMax = (nTotal + blockStride - 1) / blockStride;
+		for(int iBlock=0; iBlock<nBlocksMineMax; iBlock++)
+		{	int iStart = iProcDim*blockSize + iBlock*blockStride;
+			int iStop = std::min(iStart+blockSize, nTotal);
+			for(int i=iStart; i<iStop; i++)
+				myIndices.push_back(i);
+		}
+		assert(int(myIndices.size()) == nMine);
+		return myIndices;
+	}
+	
+	//Get index into local storage given global indices and dimensions
+	//Returns -1 if corresponding value does not belong to current process
+	inline int localIndex(int iRow, int iCol)
+	{	//Identify row and column indices:
+		#define InitIndices(dim) \
+			int iBlock##dim##Global = i##dim / blockSize; \
+			if(iBlock##dim##Global % nProcs##dim != iProc##dim) return -1; \
+			int iBlock##dim = iBlock##dim##Global / nProcs##dim; /*local block index*/ \
+			int iElem##dim = i##dim % blockSize; /*index within block*/ \
+			int i##dim##Mine = iBlock##dim * blockSize + iElem##dim;
+		InitIndices(Row)
+		InitIndices(Col)
+		#undef InitIndices
+		//Compute flattened local index:
+		return iColMine*nRowsMine + iRowMine;
+	}
+	
+	#endif
+	
 	//--------- Initialize -------------
 	PetscErrorCode initialize(string inFile)
-	{
+	{	static StopWatch watchHess("Hessenberg reduction"), watchSchur("Schur decomposition");
+		
 		//Read header and check parameters:
 		MPIUtil::File fp;
 		mpiWorld->fopenRead(fp, inFile.c_str());
@@ -481,11 +558,118 @@ struct LindbladLinear : public Integrator<DM1>
 			//Convert from triplet to appropriate format:
 			if(spectrumMode and (not sparseDiag))
 			{	//Convert to dense matrix for ScaLAPACK:
+				
 				#ifdef SCALAPACK_ENABLED
-				//TODO
 				
+				//Calculate squarest possible process grid:
+				int nProcesses = mpiWorld->nProcesses();
+				nProcsRow = int(round(sqrt(nProcesses)));
+				while(nProcesses % nProcsRow) nProcsRow--;
+				nProcsCol = nProcesses / nProcsRow;
+
+				//Initialize BLACS process grid:
+				int blacsContext;
+				{	int unused=-1, what=0;
+					blacs_get_(&unused, &what, &blacsContext);
+					blacs_gridinit_(&blacsContext, "Row-major", &nProcsRow, &nProcsCol);
+					blacs_gridinfo_(&blacsContext, &nProcsRow, &nProcsCol, &iProcRow, &iProcCol);
+					assert(mpiWorld->iProcess() == iProcRow * nProcsCol + iProcCol); //this mapping is assumed below, so check
+				}
+				logPrintf("Initialized %d x %d process BLACS grid.\n", nProcsRow, nProcsCol);
+				
+				//Initialize matrix distribution:
+				nRows = 12; //HACK rhoSizeTot; //matrix dimension
+				logPrintf("Setting up ScaLAPACK matrix with dimension %d\n", nRows); logFlush();
+				if(nRows <= blockSize * (std::max(nProcsRow, nProcsCol) - 1))
+					die("No data on some processes: reduce blockSize or # processes.\n");
+				iRowsMine = distributedIndices(nRows, blockSize, iProcRow, nProcsRow); //indices of rows on current process
+				iColsMine = distributedIndices(nRows, blockSize, iProcCol, nProcsCol); //indices of cols on current process
+				nRowsMine = iRowsMine.size();
+				nColsMine = iColsMine.size();
+				int desc[9];
+				{	int zero=0, info;
+					descinit_(desc, &nRows, &nRows, &blockSize, &blockSize, &zero, &zero, &blacsContext, &nRowsMine, &info); assert(info==0);
+				}
+		
 				//############ HACK ########################
+				//Create test matrix:
+				double* H = new double[nRowsMine*nColsMine];
+				for(int iRow: iRowsMine)
+					for(int iCol: iColsMine)
+						H[localIndex(iRow, iCol)] = positiveRemainder(iRow + 1 - iCol, nRows);
 				
+				//Balance matrix:
+				char job = 'B';
+				int iLo = 1, iHi = nRows, info = 0;
+				diagMatrix scale(nRows, 1.);
+				/*
+				logPrintf("Balancing matrix ... "); logFlush();
+				pdgebal_(&job, &nRows, H, desc, &iLo, &iHi, scale.data(), &info);
+				if(info < 0) die("Error in argument# %d to pdlahqr.\n", -info);
+				logPrintf("done.\n");
+				*/
+				logPrintf("Scale factors:"); scale.print(globalLog, " %lg");
+				logPrintf("iLo: %d  iHi: %d\n", iLo, iHi);
+				
+				//Call ScaLAPACK to do Hessenberg reduction:
+				int lwork = -1, one = 1;
+				std::vector<double> work(1), scaleFactors(nColsMine);
+				logPrintf("Hessenberg reduction ... "); logFlush();
+				watchHess.start();
+				for(int pass=0; pass<2; pass++) //first pass is workspace query, next pass is actual calculation
+				{	pdgehrd_(&nRows, &iLo, &iHi, H, &one, &one, desc, scaleFactors.data(), work.data(), &lwork, &info);
+					if(info < 0)
+					{	int errCode = -info;
+						if(errCode < 100) die("Error in argument# %d to pdgehrd.\n", errCode)
+						else die("Error in entry %d of argument# %d to pdgehrd.\n", errCode%100, errCode/100)
+					}
+					if(pass) break; //done
+					//After first-pass, use results of work-space query to allocate:
+					lwork = int(work.data()[0]);
+					work.resize(lwork);
+				}
+				logPrintf("done.\n");
+				watchHess.stop();
+				
+				//Call ScaLAPACK to compute Schur decomposition and eigenvalues:
+				job = 'E'; //Eigenvalues only
+				char compz = 'N'; //No Schur vectors
+				std::vector<double> wr(nRows), wi(nRows); //real and imaginary parts of eigenvalues
+				double* z = NULL;
+				work[0] = 0; lwork = -1; //for workspace query
+				std::vector<int> iwork(1); int liwork = -1; //for workspace query
+				logPrintf("Schur decomposition ... "); logFlush();
+				watchSchur.start();
+				for(int pass=0; pass<2; pass++) //first pass is workspace query, next pass is actual calculation
+				{	pdhseqr_(&job, &compz, &nRows, &iLo, &iHi, H, desc, wr.data(), wi.data(), z, desc,
+						work.data(), &lwork, iwork.data(), &liwork, &info);
+					if(info < 0)
+					{	int errCode = -info;
+						if(errCode < 100) die("Error in argument# %d to pdhseqr.\n", errCode)
+						else die("Error in entry %d of argument# %d to pdhseqr.\n", errCode%100, errCode/100)
+					}
+					if(info > 0) die("Up to %d eigenvalues failed to converge.\n", info);
+					if(pass) break; //done
+					//After first-pass, use results of work-space query to allocate:
+					lwork = int(work.data()[0]); work.resize(lwork);
+					liwork = int(iwork.data()[0]); iwork.resize(liwork);
+				}
+				logPrintf("done.\n");
+				watchSchur.stop();
+				
+				//Sorting order for eigenvalues:
+				std::vector<size_t> sortIndex(nRows);
+				for(int i=0; i<nRows; i++) sortIndex[i] = i;
+				std::sort(sortIndex.begin(), sortIndex.end(), IndexCompare<std::vector<double>>(wr));
+				
+				//Print eigenvalues in ascending real part order:
+				FILE* fp = mpiWorld->isHead() ? fopen("tmpEigs-cpp.dat", "w") : 0;
+				logPrintf("\n");
+				for(size_t i: sortIndex)
+				{	logPrintf("EIG: %15.8le%+15.8lej\n", wr[i], wi[i]);
+					if(fp) fprintf(fp, "%15.8le%+15.8lej\n", wr[i], wi[i]);
+				}
+				if(fp) fclose(fp);
 				
 				//############ HACK ########################
 				#endif
@@ -853,6 +1037,7 @@ int main(int argc, char** argv)
 	if(spectrumMode and (not sparseDiag))
 		die("\nSpectrum (dense diagonalization) mode requires linking with ScaLAPACK.\n");
 	#endif
+	const int blockSize = int(inputMap.get("blockSize", 64));
 	//--- eiegen-decomposition parameters (required and used only in spectrum mode)
 	const int nEigs = int(inputMap.get("nEigs", spectrumMode ? NAN : 0.)); //number of eigenvectors to compute
 	const double eigTol = inputMap.get("eigTol", 1e-7); //convergence threshold on eigenvalues
@@ -949,7 +1134,7 @@ int main(int argc, char** argv)
 	logPrintf("\n");
 	
 	//Create and initialize lindblad calculator:
-	LindbladLinear lbl(dmu, T, spectrumMode, sparseDiag,
+	LindbladLinear lbl(dmu, T, spectrumMode, sparseDiag, blockSize,
 		pumpOmega, pumpA0, pumpTau, pumpPol, (pumpMode=="Bfield"), pumpB,
 		omegaMin, omegaMax, domega, tau, pol, dE,
 		ePhEnabled, verbose, checkpointFile);

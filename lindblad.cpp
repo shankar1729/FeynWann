@@ -46,8 +46,6 @@ inline matrix bar(const matrix& X)
 	return Xbar;
 }
 
-static const double degeneracyThreshold = 1e-5; //!< currently used only for spin-density calculation in report()
-
 //Lindblad initialization, time evolution and measurement operators using FeynWann callback
 struct Lindblad : public Integrator<DM1>
 {	
