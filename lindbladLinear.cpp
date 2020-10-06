@@ -33,6 +33,7 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 
 #if SCALAPACK_ENABLED
 #include <mkl_blacs.h>
+#include <mkl_pblas.h>
 #include <mkl_scalapack.h>
 #endif
 
@@ -306,8 +307,8 @@ struct LindbladLinear : public Integrator<DM1>
 	void printMatrix(std::vector<double>& mat, const char* name="")
 	{	ostringstream oss; 
 		oss << "\nOn process " << mpiWorld->iProcess() << ":\n";
-		for(int iCol=0; iCol<nRows; iCol++)
-		{	for(int iRow=0; iRow<nRows; iRow++)
+		for(int iRow=0; iRow<nRows; iRow++)
+		{	for(int iCol=0; iCol<nRows; iCol++)
 			{	int index = localIndex(iRow, iCol);
 				oss.width(7);
 				oss.precision(3);
@@ -645,7 +646,7 @@ struct LindbladLinear : public Integrator<DM1>
 				logPrintf("Extracting rotations ... "); logFlush();
 				watchHess.start();
 				for(int pass=0; pass<2; pass++) //first pass is workspace query, next pass is actual calculation
-				{	char side = 'L'; //irrelevant since we are multip,lying by identity
+				{	char side = 'L'; //irrelevant since we are multiplying by identity
 					char trans = 'N'; //construct Q
 					pdormhr_(&side, &trans, &nRows, &nRows, &iLo, &iHi, H.data(), &one, &one, desc,
 						scaleFactors.data(), Q.data(), &one, &one, desc, work.data(), &lwork, &info);
@@ -660,10 +661,14 @@ struct LindbladLinear : public Integrator<DM1>
 					work.resize(lwork);
 				}
 				logPrintf("done.\n");
+				//--- set H to strict upper Hessenberg form:
+				double* Hdata = H.data();
+				for(int iCol: iColsMine)
+					for(int iRow: iRowsMine)
+					{	if(iRow > iCol+1) *Hdata = 0.;
+						Hdata++;
+					}
 				watchHess.stop();
-				
-				printMatrix(H, "H");
-				printMatrix(Q, "Q");
 				
 				//Schur decomposition and eigenvalues:
 				job = 'T'; //Eigenvalues and Schur form
@@ -690,8 +695,22 @@ struct LindbladLinear : public Integrator<DM1>
 				logPrintf("done.\n");
 				watchSchur.stop();
 				
-				printMatrix(H, "H");
-				printMatrix(Q, "Q");
+				//Check decomposition by multiplying:
+				{	std::vector<double> tmp(H.size(), 0.), A(H.size(), 0);
+					char trans = 'T', noTrans = 'N';
+					double alpha = 1., beta = 0.;
+					//tmp = Q * H
+					pdgemm_(&noTrans, &noTrans, &nRows, &nRows, &nRows, &alpha,
+						Q.data(), &one, &one, desc,
+						H.data(), &one, &one, desc, &beta,
+						tmp.data(), &one, &one, desc);
+					//A = tmp * Q^T
+					pdgemm_(&noTrans, &trans, &nRows, &nRows, &nRows, &alpha,
+						tmp.data(), &one, &one, desc,
+						Q.data(), &one, &one, desc, &beta,
+						A.data(), &one, &one, desc);
+					printMatrix(A, "A");
+				}
 				
 				//Sorting order for eigenvalues:
 				std::vector<size_t> sortIndex(nRows);
