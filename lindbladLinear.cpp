@@ -31,6 +31,11 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 #include <core/Units.h>
 #include <slepceps.h>
 
+#if SCALAPACK_ENABLED
+#include <mkl_blacs.h>
+#include <mkl_scalapack.h>
+#endif
+
 //Slightly more graceful wrapper to CHKERRQ() macro from Petsc:
 PetscInt iErr = 0;
 #define CHECKERR(codeLine) \
@@ -58,38 +63,12 @@ inline diagMatrix bar(const diagMatrix& X)
 	return Xbar;
 }
 
-#if SCALAPACK_ENABLED
-extern "C"
-{
-	void blacs_pinfo_(int* mypnum, int* nprocs);
-	void blacs_get_(const int* icontxt, const int* what, int* val);
-	void blacs_gridinit_(const int* icontxt, const char* layout, const int* nprow, const int* npcol);
-	void blacs_gridinfo_(const int* icontxt, int* nprow, int* npcol, int* myprow, int* mypcol);
-	void blacs_gridexit_(const int* icontxt);
-	void blacs_exit_(const int* cont);
-	
-	void descinit_(int* desc, const int* m, const int* n, const int* mb, const int* nb,
-		const int* irsrc, const int* icsrc, const int* ictxt, const int* lld, int* info);
-	int numroc_(const int* n, const int* nb, const int* iproc, const int* srcproc, const int* nprocs);
-	
-	void pdgebal_(const char* job, const int* n, double* a, const int* desca, int* ilo, int* ihi, double* scale, int* info);
-	
-	void pdgehrd_(const int* n, const int* ilo, const int* ihi,
-		double* a, const int* ia, const int* ja, const int* desca,
-		double* tau, double* work, const int* lwork, int* info);
-	
-	 void pdhseqr_(const char* job, const char* compz, const int* n, const int* iLo, const int* iHi,
-		double* h, const int* desch, double* wr, double* wi, double* z, const int* descz,
-		double* work, const int* lwork, int* iwork, const int* liwork, int* info);
-}
-
 //Helper class to "argsort" an array i.e. determine the indices that sort it
 template<typename ArrayType> struct IndexCompare
 {	const ArrayType& array;
 	IndexCompare(const ArrayType& array) : array(array) {}
 	template<typename Integer> bool operator()(Integer i1, Integer i2) const { return array[i1] < array[i2]; }
 };
-#endif
 
 //Lindblad initialization, time evolution and measurement operators using FeynWann callback
 struct LindbladLinear : public Integrator<DM1>
@@ -593,7 +572,7 @@ struct LindbladLinear : public Integrator<DM1>
 		
 				//############ HACK ########################
 				//Create test matrix:
-				double* H = new double[nRowsMine*nColsMine];
+				std::vector<double> H(nRowsMine*nColsMine);
 				for(int iRow: iRowsMine)
 					for(int iCol: iColsMine)
 						H[localIndex(iRow, iCol)] = positiveRemainder(iRow + 1 - iCol, nRows);
@@ -617,7 +596,7 @@ struct LindbladLinear : public Integrator<DM1>
 				logPrintf("Hessenberg reduction ... "); logFlush();
 				watchHess.start();
 				for(int pass=0; pass<2; pass++) //first pass is workspace query, next pass is actual calculation
-				{	pdgehrd_(&nRows, &iLo, &iHi, H, &one, &one, desc, scaleFactors.data(), work.data(), &lwork, &info);
+				{	pdgehrd_(&nRows, &iLo, &iHi, H.data(), &one, &one, desc, scaleFactors.data(), work.data(), &lwork, &info);
 					if(info < 0)
 					{	int errCode = -info;
 						if(errCode < 100) die("Error in argument# %d to pdgehrd.\n", errCode)
@@ -641,7 +620,7 @@ struct LindbladLinear : public Integrator<DM1>
 				logPrintf("Schur decomposition ... "); logFlush();
 				watchSchur.start();
 				for(int pass=0; pass<2; pass++) //first pass is workspace query, next pass is actual calculation
-				{	pdhseqr_(&job, &compz, &nRows, &iLo, &iHi, H, desc, wr.data(), wi.data(), z, desc,
+				{	pdhseqr_(&job, &compz, &nRows, &iLo, &iHi, H.data(), desc, wr.data(), wi.data(), z, desc,
 						work.data(), &lwork, iwork.data(), &liwork, &info);
 					if(info < 0)
 					{	int errCode = -info;

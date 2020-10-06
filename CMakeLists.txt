@@ -131,6 +131,7 @@ target_link_libraries(lindblad ${GSL_BLAS_LIBRARY})
 option(EnableScaLAPACK "Enable ScaLAPACK support (currently used only by the dense diagonalization in lindbladLinear)")
 if(EnableScaLAPACK)
 	find_package(MKL REQUIRED) #This sets SCALAPACK_ENABLED and adds scalapack librarties to MKL_LIBRARIES
+	include_directories("${MKL_INCLUDE_DIR}")
 endif()
 
 #Optional lindbladian linear dynamics and spectrum that requires SLEPc
