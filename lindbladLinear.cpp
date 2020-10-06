@@ -302,6 +302,31 @@ struct LindbladLinear : public Integrator<DM1>
 		return iColMine*nRowsMine + iRowMine;
 	}
 	
+	//Print all pieces of distributed block cyclic matrix:
+	void printMatrix(std::vector<double>& mat, const char* name="")
+	{	ostringstream oss; 
+		oss << "\nOn process " << mpiWorld->iProcess() << ":\n";
+		for(int iCol=0; iCol<nRows; iCol++)
+		{	for(int iRow=0; iRow<nRows; iRow++)
+			{	int index = localIndex(iRow, iCol);
+				oss.width(7);
+				oss.precision(3);
+				if(index<0) oss << "######"; else oss << std::fixed << mat[index];
+			}
+			oss << '\n';
+		}
+		string buf = oss.str();
+		if(mpiWorld->isHead())
+		{	if(strlen(name)>0)
+				logPrintf("\n----------- Matrix %s -----------\n", name);
+			for(int iProc=0; iProc<mpiWorld->nProcesses(); iProc++)
+			{	if(iProc) mpiWorld->recv(buf, iProc, 0);
+				logPrintf("%s", buf.c_str());
+			}
+			logFlush();
+		}
+		else mpiWorld->send(buf, 0, 0);
+	}
 	#endif
 	
 	//--------- Initialize -------------
@@ -569,7 +594,7 @@ struct LindbladLinear : public Integrator<DM1>
 				{	int zero=0, info;
 					descinit_(desc, &nRows, &nRows, &blockSize, &blockSize, &zero, &zero, &blacsContext, &nRowsMine, &info); assert(info==0);
 				}
-		
+				
 				//############ HACK ########################
 				//Create test matrix:
 				std::vector<double> H(nRowsMine*nColsMine);
@@ -590,7 +615,7 @@ struct LindbladLinear : public Integrator<DM1>
 				logPrintf("Scale factors:"); scale.print(globalLog, " %lg");
 				logPrintf("iLo: %d  iHi: %d\n", iLo, iHi);
 				
-				//Call ScaLAPACK to do Hessenberg reduction:
+				//Hessenberg reduction:
 				int lwork = -1, one = 1;
 				std::vector<double> work(1), scaleFactors(nColsMine);
 				logPrintf("Hessenberg reduction ... "); logFlush();
@@ -608,20 +633,49 @@ struct LindbladLinear : public Integrator<DM1>
 					work.resize(lwork);
 				}
 				logPrintf("done.\n");
+				
+				//Get orthogonal matrix correspnding to Householder transformations:
+				std::vector<double> Q(H.size());
+				//--- initialize to identity:
+				double* Qptr = Q.data();
+				for(int iCol: iColsMine)
+					for(int iRow: iRowsMine)
+						*(Qptr++) = (iRow==iCol ? 1. : 0.);
+				work[0] = 0; lwork = -1; //for workspace query
+				logPrintf("Extracting rotations ... "); logFlush();
+				watchHess.start();
+				for(int pass=0; pass<2; pass++) //first pass is workspace query, next pass is actual calculation
+				{	char side = 'L'; //irrelevant since we are multip,lying by identity
+					char trans = 'N'; //construct Q
+					pdormhr_(&side, &trans, &nRows, &nRows, &iLo, &iHi, H.data(), &one, &one, desc,
+						scaleFactors.data(), Q.data(), &one, &one, desc, work.data(), &lwork, &info);
+					if(info < 0)
+					{	int errCode = -info;
+						if(errCode < 100) die("Error in argument# %d to pdormhr.\n", errCode)
+						else die("Error in entry %d of argument# %d to pdormhr.\n", errCode%100, errCode/100)
+					}
+					if(pass) break; //done
+					//After first-pass, use results of work-space query to allocate:
+					lwork = int(work.data()[0]);
+					work.resize(lwork);
+				}
+				logPrintf("done.\n");
 				watchHess.stop();
 				
-				//Call ScaLAPACK to compute Schur decomposition and eigenvalues:
-				job = 'E'; //Eigenvalues only
-				char compz = 'N'; //No Schur vectors
+				printMatrix(H, "H");
+				printMatrix(Q, "Q");
+				
+				//Schur decomposition and eigenvalues:
+				job = 'T'; //Eigenvalues and Schur form
+				char compz = 'V'; //Schur vectors transformed using Q calculated above
 				std::vector<double> wr(nRows), wi(nRows); //real and imaginary parts of eigenvalues
-				double* z = NULL;
 				work[0] = 0; lwork = -1; //for workspace query
 				std::vector<int> iwork(1); int liwork = -1; //for workspace query
 				logPrintf("Schur decomposition ... "); logFlush();
 				watchSchur.start();
 				for(int pass=0; pass<2; pass++) //first pass is workspace query, next pass is actual calculation
-				{	pdhseqr_(&job, &compz, &nRows, &iLo, &iHi, H.data(), desc, wr.data(), wi.data(), z, desc,
-						work.data(), &lwork, iwork.data(), &liwork, &info);
+				{	pdhseqr_(&job, &compz, &nRows, &iLo, &iHi, H.data(), desc, wr.data(), wi.data(),
+						Q.data(), desc, work.data(), &lwork, iwork.data(), &liwork, &info);
 					if(info < 0)
 					{	int errCode = -info;
 						if(errCode < 100) die("Error in argument# %d to pdhseqr.\n", errCode)
@@ -635,6 +689,9 @@ struct LindbladLinear : public Integrator<DM1>
 				}
 				logPrintf("done.\n");
 				watchSchur.stop();
+				
+				printMatrix(H, "H");
+				printMatrix(Q, "Q");
 				
 				//Sorting order for eigenvalues:
 				std::vector<size_t> sortIndex(nRows);
