@@ -35,6 +35,7 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 #include <mkl_blacs.h>
 #include <mkl_pblas.h>
 #include <mkl_scalapack.h>
+#include <mkl_lapack.h>
 #endif
 
 //Slightly more graceful wrapper to CHKERRQ() macro from Petsc:
@@ -695,27 +696,84 @@ struct LindbladLinear : public Integrator<DM1>
 				logPrintf("done.\n");
 				watchSchur.stop();
 				
+				//Compute eigenvectors:
+				char side = 'B', howmny = 'B';
+				int nEigsIn = nRows, nEigsOut = nRows;
+				Q.resize(nRowsMine * nRows); //will eventually contain left eigenvectors
+				std::vector<double> QR(Q); //will eventually contain right eigenvectors
+				work.resize(3*nRows);
+				//pdtrevc_(&side, &howmny, NULL, &nRows, H.data(), desc, Q.data(), desc, QR.data(), desc, &nEigsIn, &nEigsOut, work.data(), &info);
+				dtrevc_(&side, &howmny, NULL, &nRows, H.data(), &nRows, Q.data(), &nRows, QR.data(), &nRows, &nEigsIn, &nEigsOut, work.data(), &info);
+				if(info < 0)
+				{	int errCode = -info;
+					if(errCode < 100) die("Error in argument# %d to pdtrevc.\n", errCode)
+					else die("Error in entry %d of argument# %d to pdtrevc.\n", errCode%100, errCode/100)
+				}
+				
+				//Fix normalization of eigenvectors:
+				std::vector<double*> QdataArr(2);
+				QdataArr[0] = Q.data();
+				QdataArr[1] = QR.data();
+				for(double* Qdata: QdataArr)
+				{	for(int iCol=0; iCol<nRows; iCol++)
+					{	double* Qcur = Qdata + iCol*nRows;
+						if(wi[iCol]) //complex eigenvector pair
+						{	double* Qnext = Qcur + nRows;
+							//Determine max entry:
+							int iMaxAbs = -1; double maxAbs = 0.;
+							for(int iRow=0; iRow<nRows; iRow++)
+							{	double absCur = complex(Qcur[iRow], Qnext[iRow]).abs();
+								if(absCur > maxAbs)
+								{	maxAbs = absCur;
+									iMaxAbs = iRow;
+								}
+							}
+							//Make max abs entry = 1:
+							complex scaleFac = complex(1.,0)/complex(Qcur[iMaxAbs], Qnext[iMaxAbs]);
+							for(int iRow=0; iRow<nRows; iRow++)
+							{	complex scaled = scaleFac * complex(Qcur[iRow], Qnext[iRow]);
+								Qcur[iRow] = scaled.real();
+								Qnext[iRow] = scaled.imag();
+							}
+							iCol++; //extra column handled
+						}
+						else
+						{	//Determine max entry:
+							int iMaxAbs = -1; double maxAbs = 0.;
+							for(int iRow=0; iRow<nRows; iRow++)
+							{	double absCur = fabs(Qcur[iRow]);
+								if(absCur > maxAbs)
+								{	maxAbs = absCur;
+									iMaxAbs = iRow;
+								}
+							}
+							//Make max abs entry = 1:
+							double scaleFac = 1./Qcur[iMaxAbs];
+							for(int iRow=0; iRow<nRows; iRow++)
+								Qcur[iRow] *= scaleFac;
+						}
+					}
+				}
+				
 				//Check decomposition by multiplying:
-				{	std::vector<double> tmp(H.size(), 0.), A(H.size(), 0);
+				{	std::vector<double> QLTQR(H.size(), 0.);
 					char trans = 'T', noTrans = 'N';
 					double alpha = 1., beta = 0.;
-					//tmp = Q * H
-					pdgemm_(&noTrans, &noTrans, &nRows, &nRows, &nRows, &alpha,
+					//QLTQR = QL^T * QR
+					pdgemm_(&trans, &noTrans, &nRows, &nRows, &nRows, &alpha,
 						Q.data(), &one, &one, desc,
-						H.data(), &one, &one, desc, &beta,
-						tmp.data(), &one, &one, desc);
-					//A = tmp * Q^T
-					pdgemm_(&noTrans, &trans, &nRows, &nRows, &nRows, &alpha,
-						tmp.data(), &one, &one, desc,
-						Q.data(), &one, &one, desc, &beta,
-						A.data(), &one, &one, desc);
-					printMatrix(A, "A");
+						QR.data(), &one, &one, desc, &beta,
+						QLTQR.data(), &one, &one, desc);
+					printMatrix(QLTQR, "QL^T * QR");
 				}
+				
+				printMatrix(Q, "QL");
+				printMatrix(QR, "QR");
 				
 				//Sorting order for eigenvalues:
 				std::vector<size_t> sortIndex(nRows);
 				for(int i=0; i<nRows; i++) sortIndex[i] = i;
-				std::sort(sortIndex.begin(), sortIndex.end(), IndexCompare<std::vector<double>>(wr));
+				//std::sort(sortIndex.begin(), sortIndex.end(), IndexCompare<std::vector<double>>(wr));
 				
 				//Print eigenvalues in ascending real part order:
 				FILE* fp = mpiWorld->isHead() ? fopen("tmpEigs-cpp.dat", "w") : 0;
