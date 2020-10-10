@@ -352,7 +352,7 @@ struct LindbladLinear : public Integrator<DM1>
 		int notTrans=0, one=1, two=2, info=0;
 		double zeroD = 0., oneD = 1.;
 		double x[4], xNorm, scale; //1x1 or 2x2 matrix used in dlanl2; its norm and scale factor
-		
+		std::vector<double> rhs(2*nRows);
 		//Right eigenvector calculation:
 		for(int ki=nRows-1; ki>=0; ki--)
 		{	bool complexPair = (ki>0) and (T[ki+(ki-1)*nRows]!=0.);
@@ -365,9 +365,58 @@ struct LindbladLinear : public Integrator<DM1>
 			//Compute eigenvector:
 			if(complexPair)
 			{	//Pair of complex eigenvectors:
-				//TODO
-				
-				ki--; //Two eigenvectors dealt with above
+				int kiStart = ki-1;
+				//--- construct RHS:
+				const double &tU = T[kiStart+ki*nRows], &tL = T[ki+kiStart*nRows];
+				if(fabs(tU) > fabs(tL))
+				{	rhs[kiStart] = 1.;
+					rhs[ki+nRows] = wi/tU;
+				}
+				else
+				{	rhs[kiStart] = -wi/tL;
+					rhs[ki+nRows] = 1.;
+				}
+				rhs[ki] = 0.;
+				rhs[kiStart+nRows] = 0.;
+				for(int k=0; k<kiStart; k++)
+					for(int b=0; b<2; b++)
+						rhs[k+b*nRows] = -rhs[kiStart+b+b*nRows] * T[k+(kiStart+b)*nRows];
+				//--- solve upper quasi-triangular system (T[:KI-1,:KI-1] - (wr+i*wi))*x = scale*(rhs1+i*rhs2)
+				for(int j=ki-2; j>=0.; j--)
+				{	int bCur = ((j>0) and (T[j+(j-1)*nRows]!=0.)) ? 2 : 1; //current block size
+					int jStart = j+1-bCur; //start of block (j-1 or j for 2x2 and 1x1 respectively)
+					dlaln2_(&notTrans, &bCur, &two, &sMin, &oneD,
+						&T[jStart+jStart*nRows], &nRows, &oneD, &oneD,
+						&rhs[jStart], &nRows, &wr, &wi, x, &two,
+						&scale, &xNorm, &info);
+					//Scale relevant x to avoid overflow in rhs update:
+					if((xNorm>1.) and (std::max(tNorm[jStart],tNorm[j])>bNum/xNorm))
+					{	double xNormInv = 1./xNorm;
+						for(int b=0; b<2*bCur; b++) x[b] *= xNormInv;
+						scale *= xNormInv;
+					}
+					if(scale != 1.) for(int b=0; b<2; b++) cblas_dscal(ki+1, scale, rhs.data()+b*nRows,1); //scale when needed
+					//Update the right hand side
+					for(int bj=0; bj<bCur; bj++)
+						for(int bk=0; bk<2; bk++)
+						{	rhs[jStart+bj + bk*nRows] = x[bj+2*bk];
+							cblas_daxpy(jStart, -x[bj+2*bk], &T[(jStart+bj)*nRows],1, &rhs[bk*nRows],1);
+						}
+					j = jStart;
+				}
+				//Update eigenvectors:
+				double* QRkiStart = &QR[kiStart*nRows];
+				if(ki >= 2)
+				{	for(int bk=0; bk<2; bk++)
+						cblas_dgemv(CblasColMajor, CblasNoTrans, nRows, kiStart, 1., QR,nRows, &rhs[bk*nRows],1, rhs[kiStart+bk+bk*nRows], &QRkiStart[bk*nRows],1);
+				}
+				else
+				{	for(int bk=0; bk<2; bk++)
+						cblas_dscal(nRows, rhs[kiStart+bk+bk*nRows], &QRkiStart[bk*nRows],1);
+				}
+				//Scale max entry to 1:
+				cblas_dscal(2*nRows, 1./fabs(QRkiStart[cblas_idamax(2*nRows, QRkiStart,1)]), QRkiStart,1); //scale max entry to 1
+				ki = kiStart;
 			}
 			else
 			{	//Real eigenvector:
@@ -377,273 +426,33 @@ struct LindbladLinear : public Integrator<DM1>
 				rhs[ki] = 1.;
 				//--- solve upper quasi-triangular system (T[:ki,:ki]-wr)*x = scale*rhs
 				for(int j=ki-1; j>=0.; j--)
-				{	if((j>0) and T[j+(j-1)*nRows])
-					{ 	//2x2 block:
-						dlaln2_(&notTrans, &two, &one, &sMin, &oneD,
-							&T[(j-1)+(j-1)*nRows], &nRows, &oneD, &oneD,
-							&rhs[j-1], &nRows, &wr, &zeroD, x, &two,
+				{	int bCur = ((j>0) and (T[j+(j-1)*nRows]!=0.)) ? 2 : 1; //current block size
+					int jStart = j+1-bCur; //start of block (j-1 or j for 2x2 and 1x1 respectively)
+					dlaln2_(&notTrans, &bCur, &one, &sMin, &oneD,
+							&T[jStart+jStart*nRows], &nRows, &oneD, &oneD,
+							&rhs[jStart], &nRows, &wr, &zeroD, x, &two,
 							&scale, &xNorm, &info);
-						//Scale x[0,0] and x[1,0] to avoid overflow in rhs update:
-						if((xNorm>1.) and (std::max(tNorm[j-1],tNorm[j])>bNum/xNorm))
-						{	x[0] /= xNorm;
-							x[1] /= xNorm;
-							scale /= xNorm;
-						}
-						if(scale != 1.) cblas_dscal(ki+1, scale, rhs.data(),1); //scale when needed
-						rhs[j-1] = x[0];
-						rhs[j] = x[1];
-						//Update right-hand side:
-						cblas_daxpy(j-1, -x[0], &T[(j-1)*nRows],1, rhs.data(),1);
-						cblas_daxpy(j-1, -x[1], &T[j*nRows],1, rhs.data(),1);
-						//Skip next entry already handled in 2x2 block:
-						j--;
+					//Scale relevant x to avoid overflow in rhs update:
+					if((xNorm>1.) and (std::max(tNorm[jStart],tNorm[j])>bNum/xNorm))
+					{	double xNormInv = 1./xNorm;
+						for(int b=0; b<bCur; b++) x[b] *= xNormInv;
+						scale *= xNormInv;
 					}
-					else
-					{	//1x1 block:
-						dlaln2_(&notTrans, &one, &one, &sMin, &oneD,
-							&T[j+j*nRows], &nRows, &oneD, &oneD,
-							&rhs[j], &nRows, &wr, &zeroD, x, &two,
-							&scale, &xNorm, &info);
-						//Scale x[0,0] to avoid overflow in rhs update:
-						if((xNorm>1) and (tNorm[j]>bNum/xNorm))
-						{	x[0] /= xNorm;
-							scale /= xNorm;
-						}
-						if(scale != 1.) cblas_dscal(ki+1, scale, rhs.data(),1); //scale when needed
-						rhs[j] = x[0];
-						//Update right-hand side:
-						cblas_daxpy(j, -x[0], &T[j*nRows],1, rhs.data(),1);
+					if(scale != 1.) cblas_dscal(ki+1, scale, rhs.data(),1); //scale when needed
+					//Update right-hand side:
+					for(int b=0; b<bCur; b++)
+					{	rhs[jStart+b] = x[b];
+						cblas_daxpy(jStart, -x[b], &T[(jStart+b)*nRows],1, rhs.data(),1);
 					}
+					j = jStart;
 				}
-				//Update eigenvector:
+				//--- update eigenvector:
 				double* QRki = &QR[ki*nRows];
 				if(ki) cblas_dgemv(CblasColMajor, CblasNoTrans, nRows, ki, 1., QR, nRows, rhs.data(),1, rhs[ki], QRki,1);
 				cblas_dscal(nRows, 1./fabs(QRki[cblas_idamax(nRows, QRki,1)]), QRki,1); //scale max entry to 1
 			}
 		}
 /*
-                  
-#------------ Accounted till here
-*
-*              Copy the vector x or Q*x to VR and normalize.
-*
-               IF( .NOT.OVER ) THEN
-                  CALL DCOPY( KI, WORK( 1+N ), 1, VR( 1, IS ), 1 )
-*
-                  II = IDAMAX( KI, VR( 1, IS ), 1 )
-                  REMAX = ONE / ABS( VR( II, IS ) )
-                  CALL DSCAL( KI, REMAX, VR( 1, IS ), 1 )
-*
-                  DO 70 K = KI + 1, N
-                     VR( K, IS ) = ZERO
-   70             CONTINUE
-               ELSE
-                  IF( KI.GT.1 )
-     $               CALL DGEMV( 'N', N, KI-1, ONE, VR, LDVR,
-     $                           WORK( 1+N ), 1, WORK( KI+N ),
-     $                           VR( 1, KI ), 1 )
-*
-                  II = IDAMAX( N, VR( 1, KI ), 1 )
-                  REMAX = ONE / ABS( VR( II, KI ) )
-                  CALL DSCAL( N, REMAX, VR( 1, KI ), 1 )
-               END IF
-*
-            ELSE
-*
-*              Complex right eigenvector.
-*
-*              Initial solve
-*                [ (T(KI-1,KI-1) T(KI-1,KI) ) - (WR + I* WI)]*X = 0.
-*                [ (T(KI,KI-1)   T(KI,KI)   )               ]
-*
-               IF( ABS( T( KI-1, KI ) ).GE.ABS( T( KI, KI-1 ) ) ) THEN
-                  WORK( KI-1+N ) = ONE
-                  WORK( KI+N2 ) = WI / T( KI-1, KI )
-               ELSE
-                  WORK( KI-1+N ) = -WI / T( KI, KI-1 )
-                  WORK( KI+N2 ) = ONE
-               END IF
-               WORK( KI+N ) = ZERO
-               WORK( KI-1+N2 ) = ZERO
-*
-*              Form right-hand side
-*
-               DO 80 K = 1, KI - 2
-                  WORK( K+N ) = -WORK( KI-1+N )*T( K, KI-1 )
-                  WORK( K+N2 ) = -WORK( KI+N2 )*T( K, KI )
-   80          CONTINUE
-*
-*              Solve upper quasi-triangular system:
-*              (T(1:KI-2,1:KI-2) - (WR+i*WI))*X = SCALE*(WORK+i*WORK2)
-*
-               JNXT = KI - 2
-               DO 90 J = KI - 2, 1, -1
-                  IF( J.GT.JNXT )
-     $               GO TO 90
-                  J1 = J
-                  J2 = J
-                  JNXT = J - 1
-                  IF( J.GT.1 ) THEN
-                     IF( T( J, J-1 ).NE.ZERO ) THEN
-                        J1 = J - 1
-                        JNXT = J - 2
-                     END IF
-                  END IF
-*
-                  IF( J1.EQ.J2 ) THEN
-*
-*                    1-by-1 diagonal block
-*
-                     CALL DLALN2( .FALSE., 1, 2, SMIN, ONE, T( J, J ),
-     $                            LDT, ONE, ONE, WORK( J+N ), N, WR, WI,
-     $                            X, 2, SCALE, XNORM, IERR )
-*
-*                    Scale X(1,1) and X(1,2) to avoid overflow when
-*                    updating the right-hand side.
-*
-                     IF( XNORM.GT.ONE ) THEN
-                        IF( WORK( J ).GT.BIGNUM / XNORM ) THEN
-                           X( 1, 1 ) = X( 1, 1 ) / XNORM
-                           X( 1, 2 ) = X( 1, 2 ) / XNORM
-                           SCALE = SCALE / XNORM
-                        END IF
-                     END IF
-*
-*                    Scale if necessary
-*
-                     IF( SCALE.NE.ONE ) THEN
-                        CALL DSCAL( KI, SCALE, WORK( 1+N ), 1 )
-                        CALL DSCAL( KI, SCALE, WORK( 1+N2 ), 1 )
-                     END IF
-                     WORK( J+N ) = X( 1, 1 )
-                     WORK( J+N2 ) = X( 1, 2 )
-*
-*                    Update the right-hand side
-*
-                     CALL DAXPY( J-1, -X( 1, 1 ), T( 1, J ), 1,
-     $                           WORK( 1+N ), 1 )
-                     CALL DAXPY( J-1, -X( 1, 2 ), T( 1, J ), 1,
-     $                           WORK( 1+N2 ), 1 )
-*
-                  ELSE
-*
-*                    2-by-2 diagonal block
-*
-                     CALL DLALN2( .FALSE., 2, 2, SMIN, ONE,
-     $                            T( J-1, J-1 ), LDT, ONE, ONE,
-     $                            WORK( J-1+N ), N, WR, WI, X, 2, SCALE,
-     $                            XNORM, IERR )
-*
-*                    Scale X to avoid overflow when updating
-*                    the right-hand side.
-*
-                     IF( XNORM.GT.ONE ) THEN
-                        BETA = MAX( WORK( J-1 ), WORK( J ) )
-                        IF( BETA.GT.BIGNUM / XNORM ) THEN
-                           REC = ONE / XNORM
-                           X( 1, 1 ) = X( 1, 1 )*REC
-                           X( 1, 2 ) = X( 1, 2 )*REC
-                           X( 2, 1 ) = X( 2, 1 )*REC
-                           X( 2, 2 ) = X( 2, 2 )*REC
-                           SCALE = SCALE*REC
-                        END IF
-                     END IF
-*
-*                    Scale if necessary
-*
-                     IF( SCALE.NE.ONE ) THEN
-                        CALL DSCAL( KI, SCALE, WORK( 1+N ), 1 )
-                        CALL DSCAL( KI, SCALE, WORK( 1+N2 ), 1 )
-                     END IF
-                     WORK( J-1+N ) = X( 1, 1 )
-                     WORK( J+N ) = X( 2, 1 )
-                     WORK( J-1+N2 ) = X( 1, 2 )
-                     WORK( J+N2 ) = X( 2, 2 )
-*
-*                    Update the right-hand side
-*
-                     CALL DAXPY( J-2, -X( 1, 1 ), T( 1, J-1 ), 1,
-     $                           WORK( 1+N ), 1 )
-                     CALL DAXPY( J-2, -X( 2, 1 ), T( 1, J ), 1,
-     $                           WORK( 1+N ), 1 )
-                     CALL DAXPY( J-2, -X( 1, 2 ), T( 1, J-1 ), 1,
-     $                           WORK( 1+N2 ), 1 )
-                     CALL DAXPY( J-2, -X( 2, 2 ), T( 1, J ), 1,
-     $                           WORK( 1+N2 ), 1 )
-                  END IF
-   90          CONTINUE
-*
-*              Copy the vector x or Q*x to VR and normalize.
-*
-               IF( .NOT.OVER ) THEN
-                  CALL DCOPY( KI, WORK( 1+N ), 1, VR( 1, IS-1 ), 1 )
-                  CALL DCOPY( KI, WORK( 1+N2 ), 1, VR( 1, IS ), 1 )
-*
-                  EMAX = ZERO
-                  DO 100 K = 1, KI
-                     EMAX = MAX( EMAX, ABS( VR( K, IS-1 ) )+
-     $                      ABS( VR( K, IS ) ) )
-  100             CONTINUE
-*
-                  REMAX = ONE / EMAX
-                  CALL DSCAL( KI, REMAX, VR( 1, IS-1 ), 1 )
-                  CALL DSCAL( KI, REMAX, VR( 1, IS ), 1 )
-*
-                  DO 110 K = KI + 1, N
-                     VR( K, IS-1 ) = ZERO
-                     VR( K, IS ) = ZERO
-  110             CONTINUE
-*
-               ELSE
-*
-                  IF( KI.GT.2 ) THEN
-                     CALL DGEMV( 'N', N, KI-2, ONE, VR, LDVR,
-     $                           WORK( 1+N ), 1, WORK( KI-1+N ),
-     $                           VR( 1, KI-1 ), 1 )
-                     CALL DGEMV( 'N', N, KI-2, ONE, VR, LDVR,
-     $                           WORK( 1+N2 ), 1, WORK( KI+N2 ),
-     $                           VR( 1, KI ), 1 )
-                  ELSE
-                     CALL DSCAL( N, WORK( KI-1+N ), VR( 1, KI-1 ), 1 )
-                     CALL DSCAL( N, WORK( KI+N2 ), VR( 1, KI ), 1 )
-                  END IF
-*
-                  EMAX = ZERO
-                  DO 120 K = 1, N
-                     EMAX = MAX( EMAX, ABS( VR( K, KI-1 ) )+
-     $                      ABS( VR( K, KI ) ) )
-  120             CONTINUE
-                  REMAX = ONE / EMAX
-                  CALL DSCAL( N, REMAX, VR( 1, KI-1 ), 1 )
-                  CALL DSCAL( N, REMAX, VR( 1, KI ), 1 )
-               END IF
-            END IF
-*
-            IS = IS - 1
-            IF( IP.NE.0 )
-     $         IS = IS - 1
-  130       CONTINUE
-
-#------------ Accounted beyond here
-  
-            IF( IP.EQ.1 )
-     $         IP = 0
-            IF( IP.EQ.-1 )
-     $         IP = 1
-  140    CONTINUE
-      END IF
-*
-
-
-
-
-
-
-
-
-
-
-
       IF( LEFTV ) THEN
 *
 *        Compute left eigenvectors.
