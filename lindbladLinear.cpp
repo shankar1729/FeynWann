@@ -331,8 +331,9 @@ struct LindbladLinear : public Integrator<DM1>
 	}
 	
 	//Compute left and right eigenvectors given Shur decomposition of a non-symmetric matrix (equivalent to LAPACK dtrevc)
-	//Orthogonal matrices at input QL and QR are converted to left and right eigenvectors
-	void computeEigenvectors(int nRows, double* T, double* QL, double* QR)
+	//Input: upper quasi-triangular matrix T and orthogonal matrix Q, such that matrix A = Q T Q^T
+	//Output: left and right eigenvectors of A in VL and VR
+	void computeEigenvectors(int nRows, const double* T, const double* Q, double* VL, double* VR)
 	{
 		//Underflow/overflow and precision constants:
 		double uFlow = dlamch_("Safe minimum");
@@ -352,12 +353,14 @@ struct LindbladLinear : public Integrator<DM1>
 		int notTrans=0, two=2, info=0;
 		double oneD = 1.;
 		double x[4], xNorm, scale; //1x1 or 2x2 matrix used in dlanl2; its norm and scale factor
-		std::vector<double> rhs(2*nRows);
+		std::vector<double> Z(nRows*nRows); //eigenvectors of T (multiplied by Q at the end)
+		
 		//Right eigenvector calculation:
 		for(int ki=nRows-1; ki>=0; ki--)
 		{	bool complexPair = (ki>0) and (T[ki+(ki-1)*nRows]!=0.);
 			int kiBlockSize = complexPair ? 2  : 1; //current block size in ki
 			int kiStart = ki + 1 - kiBlockSize; //start of current block in ki
+			double* rhs = &Z[kiStart*nRows]; //initialized to zero above
 			//Get the eigenvalue:
 			double wr = T[ki+ki*nRows];
 			double wi = 0., tU = 0., tL = 0.;
@@ -377,8 +380,6 @@ struct LindbladLinear : public Integrator<DM1>
 				{	rhs[kiStart] = -wi/tL;
 					rhs[ki+nRows] = 1.;
 				}
-				rhs[ki] = 0.;
-				rhs[kiStart+nRows] = 0.;
 			}
 			else rhs[ki] = 1.;
 			for(int k=0; k<kiStart; k++)
@@ -389,8 +390,8 @@ struct LindbladLinear : public Integrator<DM1>
 			{	int jBlockSize = ((j>0) and (T[j+(j-1)*nRows]!=0.)) ? 2 : 1; //current block size in j
 				int jStart = j+1-jBlockSize; //start of current block in j
 				dlaln2_(&notTrans, &jBlockSize, &kiBlockSize, &sMin, &oneD,
-					&T[jStart+jStart*nRows], &nRows, &oneD, &oneD,
-					&rhs[jStart], &nRows, &wr, &wi, x, &two,
+					T+jStart+jStart*nRows, &nRows, &oneD, &oneD,
+					rhs+jStart, &nRows, &wr, &wi, x, &two,
 					&scale, &xNorm, &info);
 				//Scale relevant x to avoid overflow in rhs update:
 				if((xNorm>1.) and (std::max(tNorm[jStart],tNorm[j])>bNum/xNorm))
@@ -402,30 +403,26 @@ struct LindbladLinear : public Integrator<DM1>
 				}
 				if(scale != 1.)
 					for(int bk=0; bk<kiBlockSize; bk++)
-						cblas_dscal(ki+1, scale, rhs.data()+bk*nRows,1); //scale when needed
+						cblas_dscal(ki+1, scale, rhs+bk*nRows,1); //scale when needed
 				//Update the right hand side
 				for(int bj=0; bj<jBlockSize; bj++)
 					for(int bk=0; bk<kiBlockSize; bk++)
 					{	rhs[jStart+bj + bk*nRows] = x[bj+2*bk];
-						cblas_daxpy(jStart, -x[bj+2*bk], &T[(jStart+bj)*nRows],1, &rhs[bk*nRows],1);
+						cblas_daxpy(jStart, -x[bj+2*bk], T+(jStart+bj)*nRows,1, rhs+bk*nRows,1);
 					}
 				j = jStart;
 			}
-			//Update eigenvectors:
-			double* QRkiStart = &QR[kiStart*nRows];
-			if(kiStart)
-			{	for(int bk=0; bk<kiBlockSize; bk++)
-					cblas_dgemv(CblasColMajor, CblasNoTrans, nRows, kiStart, 1., QR,nRows, &rhs[bk*nRows],1, rhs[kiStart+bk+bk*nRows], &QRkiStart[bk*nRows],1);
-			}
-			else
-			{	for(int bk=0; bk<kiBlockSize; bk++)
-					cblas_dscal(nRows, rhs[kiStart+bk+bk*nRows], &QRkiStart[bk*nRows],1);
-			}
 			//Scale max entry to 1:
-			cblas_dscal(kiBlockSize*nRows, 1./fabs(QRkiStart[cblas_idamax(kiBlockSize*nRows, QRkiStart,1)]), QRkiStart,1); //scale max entry to 1
+			double rhsMax = rhs[cblas_idamax(kiBlockSize*nRows, rhs,1)];
+			cblas_dscal(kiBlockSize*nRows, 1./fabs(rhsMax), rhs,1);
 			ki = kiStart;
 		}
-/*
+		cblas_dgemm(CblasColMajor, CblasNoTrans, CblasNoTrans, nRows, nRows, nRows,
+			1., Q,nRows, Z.data(),nRows, 0., VR,nRows);
+		
+		//Left eigenvector calculation:
+		
+/* ------- Left eigenvector untranslated code ---------
       IF( LEFTV ) THEN
 *
 *        Compute left eigenvectors.
@@ -795,6 +792,7 @@ struct LindbladLinear : public Integrator<DM1>
 *
       RETURN
 */
+	
 	}
 	#endif
 	
@@ -1166,9 +1164,10 @@ struct LindbladLinear : public Integrator<DM1>
 				watchSchur.stop();
 				
 				//Compute eigenvectors:
-				Q.resize(nRowsMine * nRows); //will eventually contain left eigenvectors
-				std::vector<double> QR(Q); //will eventually contain right eigenvectors
 				/*
+				Q.resize(nRowsMine * nRows); //will eventually contain left eigenvectors
+				const std::vector<double>& QL = Q;
+				std::vector<double> QR(Q); //will eventually contain right eigenvectors
 				char side = 'B', howmny = 'B';
 				int nEigsIn = nRows, nEigsOut = nRows;
 				work.resize(3*nRows);
@@ -1180,11 +1179,12 @@ struct LindbladLinear : public Integrator<DM1>
 					else die("Error in entry %d of argument# %d to pdtrevc.\n", errCode%100, errCode/100)
 				}
 				*/
-				computeEigenvectors(nRows, H.data(), Q.data(), QR.data());
+				std::vector<double> QL(nRows*nRows), QR(nRows*nRows);
+				computeEigenvectors(nRows, H.data(), Q.data(), QL.data(), QR.data());
 				
 				//Fix normalization of eigenvectors:
 				std::vector<double*> QdataArr(2);
-				QdataArr[0] = Q.data();
+				QdataArr[0] = QL.data();
 				QdataArr[1] = QR.data();
 				for(double* Qdata: QdataArr)
 				{	for(int iCol=0; iCol<nRows; iCol++)
@@ -1234,13 +1234,13 @@ struct LindbladLinear : public Integrator<DM1>
 					double alpha = 1., beta = 0.;
 					//QLTQR = QL^T * QR
 					pdgemm_(&trans, &noTrans, &nRows, &nRows, &nRows, &alpha,
-						Q.data(), &one, &one, desc,
+						QL.data(), &one, &one, desc,
 						QR.data(), &one, &one, desc, &beta,
 						QLTQR.data(), &one, &one, desc);
 					printMatrix(QLTQR, "QL^T * QR");
 				}
 				
-				printMatrix(Q, "QL");
+				printMatrix(QL, "QL");
 				printMatrix(QR, "QR");
 				
 				//Sorting order for eigenvalues:
