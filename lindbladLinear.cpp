@@ -349,26 +349,27 @@ struct LindbladLinear : public Integrator<DM1>
 				tNorm[j] += fabs(T[i+j*nRows]);
 		
 		//Temporaries for blas calls:
-		int notTrans=0, one=1, two=2, info=0;
-		double zeroD = 0., oneD = 1.;
+		int notTrans=0, two=2, info=0;
+		double oneD = 1.;
 		double x[4], xNorm, scale; //1x1 or 2x2 matrix used in dlanl2; its norm and scale factor
 		std::vector<double> rhs(2*nRows);
 		//Right eigenvector calculation:
 		for(int ki=nRows-1; ki>=0; ki--)
 		{	bool complexPair = (ki>0) and (T[ki+(ki-1)*nRows]!=0.);
+			int kiBlockSize = complexPair ? 2  : 1; //current block size in ki
+			int kiStart = ki + 1 - kiBlockSize; //start of current block in ki
 			//Get the eigenvalue:
 			double wr = T[ki+ki*nRows];
-			double wi = complexPair
-				? sqrt(fabs(T[ki+(ki-1)*nRows])) * sqrt(fabs(T[(ki-1)+ki*nRows])) //written like this to avoid over/under-flow
-				: 0.;
-			double sMin = std::max(prec*(fabs(wr)+fabs(wi)), sNum); //small number threshold for this eigenvector
-			//Compute eigenvector:
+			double wi = 0., tU = 0., tL = 0.;
 			if(complexPair)
-			{	//Pair of complex eigenvectors:
-				int kiStart = ki-1;
-				//--- construct RHS:
-				const double &tU = T[kiStart+ki*nRows], &tL = T[ki+kiStart*nRows];
-				if(fabs(tU) > fabs(tL))
+			{	tU = T[kiStart+ki*nRows];
+				tL = T[ki+kiStart*nRows];
+				wi = sqrt(fabs(tU)) * sqrt(fabs(tL)); //written like this to avoid over/under-flow
+			}
+			double sMin = std::max(prec*(fabs(wr)+fabs(wi)), sNum); //small number threshold for this eigenvector (pair)
+			//Construct RHS:
+			if(complexPair)
+			{	if(fabs(tU) > fabs(tL))
 				{	rhs[kiStart] = 1.;
 					rhs[ki+nRows] = wi/tU;
 				}
@@ -378,79 +379,51 @@ struct LindbladLinear : public Integrator<DM1>
 				}
 				rhs[ki] = 0.;
 				rhs[kiStart+nRows] = 0.;
-				for(int k=0; k<kiStart; k++)
-					for(int b=0; b<2; b++)
-						rhs[k+b*nRows] = -rhs[kiStart+b+b*nRows] * T[k+(kiStart+b)*nRows];
-				//--- solve upper quasi-triangular system (T[:KI-1,:KI-1] - (wr+i*wi))*x = scale*(rhs1+i*rhs2)
-				for(int j=ki-2; j>=0.; j--)
-				{	int bCur = ((j>0) and (T[j+(j-1)*nRows]!=0.)) ? 2 : 1; //current block size
-					int jStart = j+1-bCur; //start of block (j-1 or j for 2x2 and 1x1 respectively)
-					dlaln2_(&notTrans, &bCur, &two, &sMin, &oneD,
-						&T[jStart+jStart*nRows], &nRows, &oneD, &oneD,
-						&rhs[jStart], &nRows, &wr, &wi, x, &two,
-						&scale, &xNorm, &info);
-					//Scale relevant x to avoid overflow in rhs update:
-					if((xNorm>1.) and (std::max(tNorm[jStart],tNorm[j])>bNum/xNorm))
-					{	double xNormInv = 1./xNorm;
-						for(int b=0; b<2*bCur; b++) x[b] *= xNormInv;
-						scale *= xNormInv;
+			}
+			else rhs[ki] = 1.;
+			for(int k=0; k<kiStart; k++)
+				for(int bk=0; bk<kiBlockSize; bk++)
+					rhs[k+bk*nRows] = -rhs[kiStart+bk+bk*nRows] * T[k+(kiStart+bk)*nRows];
+			//Solve upper quasi-triangular system (T[:kiStart,:kiStart] - (wr+i*wi))*x = scale*rhs
+			for(int j=kiStart-1; j>=0.; j--)
+			{	int jBlockSize = ((j>0) and (T[j+(j-1)*nRows]!=0.)) ? 2 : 1; //current block size in j
+				int jStart = j+1-jBlockSize; //start of current block in j
+				dlaln2_(&notTrans, &jBlockSize, &kiBlockSize, &sMin, &oneD,
+					&T[jStart+jStart*nRows], &nRows, &oneD, &oneD,
+					&rhs[jStart], &nRows, &wr, &wi, x, &two,
+					&scale, &xNorm, &info);
+				//Scale relevant x to avoid overflow in rhs update:
+				if((xNorm>1.) and (std::max(tNorm[jStart],tNorm[j])>bNum/xNorm))
+				{	double xNormInv = 1./xNorm;
+					for(int bk=0; bk<kiBlockSize; bk++)
+						for(int bj=0; bj<jBlockSize; bj++)
+							x[bj+2*bk] *= xNormInv;
+					scale *= xNormInv;
+				}
+				if(scale != 1.)
+					for(int bk=0; bk<kiBlockSize; bk++)
+						cblas_dscal(ki+1, scale, rhs.data()+bk*nRows,1); //scale when needed
+				//Update the right hand side
+				for(int bj=0; bj<jBlockSize; bj++)
+					for(int bk=0; bk<kiBlockSize; bk++)
+					{	rhs[jStart+bj + bk*nRows] = x[bj+2*bk];
+						cblas_daxpy(jStart, -x[bj+2*bk], &T[(jStart+bj)*nRows],1, &rhs[bk*nRows],1);
 					}
-					if(scale != 1.) for(int b=0; b<2; b++) cblas_dscal(ki+1, scale, rhs.data()+b*nRows,1); //scale when needed
-					//Update the right hand side
-					for(int bj=0; bj<bCur; bj++)
-						for(int bk=0; bk<2; bk++)
-						{	rhs[jStart+bj + bk*nRows] = x[bj+2*bk];
-							cblas_daxpy(jStart, -x[bj+2*bk], &T[(jStart+bj)*nRows],1, &rhs[bk*nRows],1);
-						}
-					j = jStart;
-				}
-				//Update eigenvectors:
-				double* QRkiStart = &QR[kiStart*nRows];
-				if(ki >= 2)
-				{	for(int bk=0; bk<2; bk++)
-						cblas_dgemv(CblasColMajor, CblasNoTrans, nRows, kiStart, 1., QR,nRows, &rhs[bk*nRows],1, rhs[kiStart+bk+bk*nRows], &QRkiStart[bk*nRows],1);
-				}
-				else
-				{	for(int bk=0; bk<2; bk++)
-						cblas_dscal(nRows, rhs[kiStart+bk+bk*nRows], &QRkiStart[bk*nRows],1);
-				}
-				//Scale max entry to 1:
-				cblas_dscal(2*nRows, 1./fabs(QRkiStart[cblas_idamax(2*nRows, QRkiStart,1)]), QRkiStart,1); //scale max entry to 1
-				ki = kiStart;
+				j = jStart;
+			}
+			//Update eigenvectors:
+			double* QRkiStart = &QR[kiStart*nRows];
+			if(kiStart)
+			{	for(int bk=0; bk<kiBlockSize; bk++)
+					cblas_dgemv(CblasColMajor, CblasNoTrans, nRows, kiStart, 1., QR,nRows, &rhs[bk*nRows],1, rhs[kiStart+bk+bk*nRows], &QRkiStart[bk*nRows],1);
 			}
 			else
-			{	//Real eigenvector:
-				//--- construct RHS:
-				std::vector<double> rhs(ki+1);
-				for(int k=0; k<ki; k++) rhs[k] = -T[k+ki*nRows];
-				rhs[ki] = 1.;
-				//--- solve upper quasi-triangular system (T[:ki,:ki]-wr)*x = scale*rhs
-				for(int j=ki-1; j>=0.; j--)
-				{	int bCur = ((j>0) and (T[j+(j-1)*nRows]!=0.)) ? 2 : 1; //current block size
-					int jStart = j+1-bCur; //start of block (j-1 or j for 2x2 and 1x1 respectively)
-					dlaln2_(&notTrans, &bCur, &one, &sMin, &oneD,
-							&T[jStart+jStart*nRows], &nRows, &oneD, &oneD,
-							&rhs[jStart], &nRows, &wr, &zeroD, x, &two,
-							&scale, &xNorm, &info);
-					//Scale relevant x to avoid overflow in rhs update:
-					if((xNorm>1.) and (std::max(tNorm[jStart],tNorm[j])>bNum/xNorm))
-					{	double xNormInv = 1./xNorm;
-						for(int b=0; b<bCur; b++) x[b] *= xNormInv;
-						scale *= xNormInv;
-					}
-					if(scale != 1.) cblas_dscal(ki+1, scale, rhs.data(),1); //scale when needed
-					//Update right-hand side:
-					for(int b=0; b<bCur; b++)
-					{	rhs[jStart+b] = x[b];
-						cblas_daxpy(jStart, -x[b], &T[(jStart+b)*nRows],1, rhs.data(),1);
-					}
-					j = jStart;
-				}
-				//--- update eigenvector:
-				double* QRki = &QR[ki*nRows];
-				if(ki) cblas_dgemv(CblasColMajor, CblasNoTrans, nRows, ki, 1., QR, nRows, rhs.data(),1, rhs[ki], QRki,1);
-				cblas_dscal(nRows, 1./fabs(QRki[cblas_idamax(nRows, QRki,1)]), QRki,1); //scale max entry to 1
+			{	for(int bk=0; bk<kiBlockSize; bk++)
+					cblas_dscal(nRows, rhs[kiStart+bk+bk*nRows], &QRkiStart[bk*nRows],1);
 			}
+			//Scale max entry to 1:
+			cblas_dscal(kiBlockSize*nRows, 1./fabs(QRkiStart[cblas_idamax(kiBlockSize*nRows, QRkiStart,1)]), QRkiStart,1); //scale max entry to 1
+			ki = kiStart;
 		}
 /*
       IF( LEFTV ) THEN
