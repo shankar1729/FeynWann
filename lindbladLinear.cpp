@@ -304,6 +304,26 @@ struct LindbladLinear : public Integrator<DM1>
 		return iColMine*nRowsMine + iRowMine;
 	}
 	
+	//Read dense matrix from file into a distributed block cyclic matrix (for testing only):
+	std::vector<double> readMatrix(string fname)
+	{	matrix mat = zeroes(nRows, nRows);
+		mat.read_real(fname.c_str());
+		std::vector<double> out(nRowsMine*nColsMine);
+		for(int iRow: iRowsMine)
+			for(int iCol: iColsMine)
+				out[localIndex(iRow, iCol)] = mat(iCol,iRow).real(); //switch row-major to col-major
+		return out;
+	}
+	
+	//Error between distirbuted matrices:
+	double matrixErr(std::vector<double>& A, std::vector<double>& B)
+	{	double errSq = 0.;
+		for(int i=0; i<nRowsMine*nColsMine; i++)
+			errSq += std::pow(A[i]-B[i], 2);
+		mpiWorld->allReduce(errSq, MPIUtil::ReduceSum);
+		return sqrt(errSq);
+	}
+	
 	//Print all pieces of distributed block cyclic matrix:
 	void printMatrix(std::vector<double>& mat, const char* name="")
 	{	ostringstream oss; 
@@ -350,7 +370,7 @@ struct LindbladLinear : public Integrator<DM1>
 				tNorm[j] += fabs(T[i+j*nRows]);
 		
 		//Temporaries for blas calls:
-		int notTrans=0, two=2, info=0;
+		int notTrans=0, isTrans=1, two=2, info=0;
 		double oneD = 1.;
 		double x[4], xNorm, scale; //1x1 or 2x2 matrix used in dlanl2; its norm and scale factor
 		std::vector<double> Z(nRows*nRows); //eigenvectors of T (multiplied by Q at the end)
@@ -421,378 +441,89 @@ struct LindbladLinear : public Integrator<DM1>
 			1., Q,nRows, Z.data(),nRows, 0., VR,nRows);
 		
 		//Left eigenvector calculation:
+		std::vector<double> ZR(Z);
+		Z.assign(nRows*nRows, 0.);
+		for(int ki=0; ki<nRows; ki++)
+		{	bool complexPair = (ki+1<nRows) and (T[(ki+1)+ki*nRows]!=0.);
+			int kiBlockSize = complexPair ? 2  : 1; //current block size in ki
+			int kiStop = ki + kiBlockSize-1; //end of current block in ki
+			double* rhs = &Z[ki*nRows]; //initialized to zero above
+			//Get the eigenvalue:
+			double wr = T[ki+ki*nRows];
+			double mwi = 0., tU = 0., tL = 0.;
+			if(complexPair)
+			{	tU = T[ki+kiStop*nRows];
+				tL = T[kiStop+ki*nRows];
+				mwi = -sqrt(fabs(tU)) * sqrt(fabs(tL)); //written like this to avoid over/under-flow
+			}
+			double sMin = std::max(prec*(fabs(wr)+fabs(mwi)), sNum); //small number threshold for this eigenvector (pair)
+			//Construct RHS:
+			if(complexPair)
+			{	if(fabs(tU) > fabs(tL))
+				{	rhs[ki] = -mwi/tU;
+					rhs[kiStop+nRows] = 1.;
+				}
+				else
+				{	rhs[ki] = 1.;
+					rhs[kiStop+nRows] = mwi/tL;
+				}
+			}
+			else rhs[ki] = 1.;
+			for(int k=kiStop+1; k<nRows; k++)
+				for(int bk=0; bk<kiBlockSize; bk++)
+					rhs[k+bk*nRows] = -rhs[ki+bk+bk*nRows] * T[(ki+bk)+k*nRows];
+			//Solve quasi-triangular system (T(kiStop+1:,kiStop+1:) - (wr-i*wi))*x = rhs
+			double vCrit = bNum, vMax = 1.; //for scaling
+			for(int j=kiStop+1; j<nRows; j++)
+			{	int jBlockSize = ((j+1<nRows) and (T[(j+1)+j*nRows]!=0.)) ? 2 : 1; //current block size in j
+				int jStop = j+jBlockSize-1; //end of current block in j
+				//Scale to avoid overflow when forming RHS elements if needed:
+				if(std::max(tNorm[j],tNorm[jStop]) > vCrit)
+				{	double scaleFac = 1./vMax;
+					for(int bk=0; bk<kiBlockSize; bk++)
+						cblas_dscal(nRows-ki, scaleFac, rhs+ki+bk*nRows,1);
+					vMax = 1.;
+					vCrit = bNum;
+				}
+				//Form RHS elements:
+				for(int bk=0; bk<kiBlockSize; bk++)
+					for(int bj=0; bj<jBlockSize; bj++)
+						rhs[j+bj+bk*nRows] -= cblas_ddot(j-kiStop-1, T+(kiStop+1)+(j+bj)*nRows,1, rhs+(kiStop+1)+bk*nRows,1);
+				//Solve kiBlockSize x jBlockSize complex equation to get x:
+				dlaln2_((jBlockSize==2 ? &isTrans : &notTrans),
+					&jBlockSize, &kiBlockSize, &sMin, &oneD,
+					T+j+j*nRows, &nRows, &oneD, &oneD, 
+					rhs+j, &nRows, &wr, &mwi, x, &two,
+					&scale, &xNorm, &info);
+				//Scale if necessary:
+				if(scale != 1.)
+				{	for(int bk=0; bk<kiBlockSize; bk++)
+						cblas_dscal(nRows-ki, scale, rhs+ki+bk*nRows,1);
+				}
+				//Update solution:
+				for(int bk=0; bk<kiBlockSize; bk++)
+					for(int bj=0; bj<jBlockSize; bj++)
+					{	rhs[(j+bj)+bk*nRows] = x[bj+2*bk];
+						vMax = std::max(vMax, x[bj+2*bk]);
+					}
+				vCrit = bNum / vMax;
+				j = jStop;
+			}
+			//Scale max entry to 1:
+			double rhsMax = rhs[cblas_idamax(kiBlockSize*nRows, rhs,1)];
+			cblas_dscal(kiBlockSize*nRows, 1./fabs(rhsMax), rhs,1);
+			ki = kiStop;
+		}
+		cblas_dgemm(CblasColMajor, CblasNoTrans, CblasNoTrans, nRows, nRows, nRows,
+			1., Q,nRows, Z.data(),nRows, 0., VL,nRows);
 		
-/* ------- Left eigenvector untranslated code ---------
-      IF( LEFTV ) THEN
-*
-*        Compute left eigenvectors.
-*
-         IP = 0
-         IS = 1
-         DO 260 KI = 1, N
-*
-            IF( IP.EQ.-1 )
-     $         GO TO 250
-            IF( KI.EQ.N )
-     $         GO TO 150
-            IF( T( KI+1, KI ).EQ.ZERO )
-     $         GO TO 150
-            IP = 1
-*
-  150       CONTINUE
-            IF( SOMEV ) THEN
-               IF( .NOT.SELECT( KI ) )
-     $            GO TO 250
-            END IF
-*
-*           Compute the KI-th eigenvalue (WR,WI).
-*
-            WR = T( KI, KI )
-            WI = ZERO
-            IF( IP.NE.0 )
-     $         WI = SQRT( ABS( T( KI, KI+1 ) ) )*
-     $              SQRT( ABS( T( KI+1, KI ) ) )
-            SMIN = MAX( ULP*( ABS( WR )+ABS( WI ) ), SMLNUM )
-*
-            IF( IP.EQ.0 ) THEN
-*
-*              Real left eigenvector.
-*
-               WORK( KI+N ) = ONE
-*
-*              Form right-hand side
-*
-               DO 160 K = KI + 1, N
-                  WORK( K+N ) = -T( KI, K )
-  160          CONTINUE
-*
-*              Solve the quasi-triangular system:
-*                 (T(KI+1:N,KI+1:N) - WR)'*X = SCALE*WORK
-*
-               VMAX = ONE
-               VCRIT = BIGNUM
-*
-               JNXT = KI + 1
-               DO 170 J = KI + 1, N
-                  IF( J.LT.JNXT )
-     $               GO TO 170
-                  J1 = J
-                  J2 = J
-                  JNXT = J + 1
-                  IF( J.LT.N ) THEN
-                     IF( T( J+1, J ).NE.ZERO ) THEN
-                        J2 = J + 1
-                        JNXT = J + 2
-                     END IF
-                  END IF
-*
-                  IF( J1.EQ.J2 ) THEN
-*
-*                    1-by-1 diagonal block
-*
-*                    Scale if necessary to avoid overflow when forming
-*                    the right-hand side.
-*
-                     IF( WORK( J ).GT.VCRIT ) THEN
-                        REC = ONE / VMAX
-                        CALL DSCAL( N-KI+1, REC, WORK( KI+N ), 1 )
-                        VMAX = ONE
-                        VCRIT = BIGNUM
-                     END IF
-*
-                     WORK( J+N ) = WORK( J+N ) -
-     $                             DDOT( J-KI-1, T( KI+1, J ), 1,
-     $                             WORK( KI+1+N ), 1 )
-*
-*                    Solve (T(J,J)-WR)'*X = WORK
-*
-                     CALL DLALN2( .FALSE., 1, 1, SMIN, ONE, T( J, J ),
-     $                            LDT, ONE, ONE, WORK( J+N ), N, WR,
-     $                            ZERO, X, 2, SCALE, XNORM, IERR )
-*
-*                    Scale if necessary
-*
-                     IF( SCALE.NE.ONE )
-     $                  CALL DSCAL( N-KI+1, SCALE, WORK( KI+N ), 1 )
-                     WORK( J+N ) = X( 1, 1 )
-                     VMAX = MAX( ABS( WORK( J+N ) ), VMAX )
-                     VCRIT = BIGNUM / VMAX
-*
-                  ELSE
-*
-*                    2-by-2 diagonal block
-*
-*                    Scale if necessary to avoid overflow when forming
-*                    the right-hand side.
-*
-                     BETA = MAX( WORK( J ), WORK( J+1 ) )
-                     IF( BETA.GT.VCRIT ) THEN
-                        REC = ONE / VMAX
-                        CALL DSCAL( N-KI+1, REC, WORK( KI+N ), 1 )
-                        VMAX = ONE
-                        VCRIT = BIGNUM
-                     END IF
-*
-                     WORK( J+N ) = WORK( J+N ) -
-     $                             DDOT( J-KI-1, T( KI+1, J ), 1,
-     $                             WORK( KI+1+N ), 1 )
-*
-                     WORK( J+1+N ) = WORK( J+1+N ) -
-     $                               DDOT( J-KI-1, T( KI+1, J+1 ), 1,
-     $                               WORK( KI+1+N ), 1 )
-*
-*                    Solve
-*                      [T(J,J)-WR   T(J,J+1)     ]'* X = SCALE*( WORK1 )
-*                      [T(J+1,J)    T(J+1,J+1)-WR]             ( WORK2 )
-*
-                     CALL DLALN2( .TRUE., 2, 1, SMIN, ONE, T( J, J ),
-     $                            LDT, ONE, ONE, WORK( J+N ), N, WR,
-     $                            ZERO, X, 2, SCALE, XNORM, IERR )
-*
-*                    Scale if necessary
-*
-                     IF( SCALE.NE.ONE )
-     $                  CALL DSCAL( N-KI+1, SCALE, WORK( KI+N ), 1 )
-                     WORK( J+N ) = X( 1, 1 )
-                     WORK( J+1+N ) = X( 2, 1 )
-*
-                     VMAX = MAX( ABS( WORK( J+N ) ),
-     $                      ABS( WORK( J+1+N ) ), VMAX )
-                     VCRIT = BIGNUM / VMAX
-*
-                  END IF
-  170          CONTINUE
-*
-*              Copy the vector x or Q*x to VL and normalize.
-*
-               IF( .NOT.OVER ) THEN
-                  CALL DCOPY( N-KI+1, WORK( KI+N ), 1, VL( KI, IS ), 1 )
-*
-                  II = IDAMAX( N-KI+1, VL( KI, IS ), 1 ) + KI - 1
-                  REMAX = ONE / ABS( VL( II, IS ) )
-                  CALL DSCAL( N-KI+1, REMAX, VL( KI, IS ), 1 )
-*
-                  DO 180 K = 1, KI - 1
-                     VL( K, IS ) = ZERO
-  180             CONTINUE
-*
-               ELSE
-*
-                  IF( KI.LT.N )
-     $               CALL DGEMV( 'N', N, N-KI, ONE, VL( 1, KI+1 ), LDVL,
-     $                           WORK( KI+1+N ), 1, WORK( KI+N ),
-     $                           VL( 1, KI ), 1 )
-*
-                  II = IDAMAX( N, VL( 1, KI ), 1 )
-                  REMAX = ONE / ABS( VL( II, KI ) )
-                  CALL DSCAL( N, REMAX, VL( 1, KI ), 1 )
-*
-               END IF
-*
-            ELSE
-*
-*              Complex left eigenvector.
-*
-*               Initial solve:
-*                 ((T(KI,KI)    T(KI,KI+1) )' - (WR - I* WI))*X = 0.
-*                 ((T(KI+1,KI) T(KI+1,KI+1))                )
-*
-               IF( ABS( T( KI, KI+1 ) ).GE.ABS( T( KI+1, KI ) ) ) THEN
-                  WORK( KI+N ) = WI / T( KI, KI+1 )
-                  WORK( KI+1+N2 ) = ONE
-               ELSE
-                  WORK( KI+N ) = ONE
-                  WORK( KI+1+N2 ) = -WI / T( KI+1, KI )
-               END IF
-               WORK( KI+1+N ) = ZERO
-               WORK( KI+N2 ) = ZERO
-*
-*              Form right-hand side
-*
-               DO 190 K = KI + 2, N
-                  WORK( K+N ) = -WORK( KI+N )*T( KI, K )
-                  WORK( K+N2 ) = -WORK( KI+1+N2 )*T( KI+1, K )
-  190          CONTINUE
-*
-*              Solve complex quasi-triangular system:
-*              ( T(KI+2,N:KI+2,N) - (WR-i*WI) )*X = WORK1+i*WORK2
-*
-               VMAX = ONE
-               VCRIT = BIGNUM
-*
-               JNXT = KI + 2
-               DO 200 J = KI + 2, N
-                  IF( J.LT.JNXT )
-     $               GO TO 200
-                  J1 = J
-                  J2 = J
-                  JNXT = J + 1
-                  IF( J.LT.N ) THEN
-                     IF( T( J+1, J ).NE.ZERO ) THEN
-                        J2 = J + 1
-                        JNXT = J + 2
-                     END IF
-                  END IF
-*
-                  IF( J1.EQ.J2 ) THEN
-*
-*                    1-by-1 diagonal block
-*
-*                    Scale if necessary to avoid overflow when
-*                    forming the right-hand side elements.
-*
-                     IF( WORK( J ).GT.VCRIT ) THEN
-                        REC = ONE / VMAX
-                        CALL DSCAL( N-KI+1, REC, WORK( KI+N ), 1 )
-                        CALL DSCAL( N-KI+1, REC, WORK( KI+N2 ), 1 )
-                        VMAX = ONE
-                        VCRIT = BIGNUM
-                     END IF
-*
-                     WORK( J+N ) = WORK( J+N ) -
-     $                             DDOT( J-KI-2, T( KI+2, J ), 1,
-     $                             WORK( KI+2+N ), 1 )
-                     WORK( J+N2 ) = WORK( J+N2 ) -
-     $                              DDOT( J-KI-2, T( KI+2, J ), 1,
-     $                              WORK( KI+2+N2 ), 1 )
-*
-*                    Solve (T(J,J)-(WR-i*WI))*(X11+i*X12)= WK+I*WK2
-*
-                     CALL DLALN2( .FALSE., 1, 2, SMIN, ONE, T( J, J ),
-     $                            LDT, ONE, ONE, WORK( J+N ), N, WR,
-     $                            -WI, X, 2, SCALE, XNORM, IERR )
-*
-*                    Scale if necessary
-*
-                     IF( SCALE.NE.ONE ) THEN
-                        CALL DSCAL( N-KI+1, SCALE, WORK( KI+N ), 1 )
-                        CALL DSCAL( N-KI+1, SCALE, WORK( KI+N2 ), 1 )
-                     END IF
-                     WORK( J+N ) = X( 1, 1 )
-                     WORK( J+N2 ) = X( 1, 2 )
-                     VMAX = MAX( ABS( WORK( J+N ) ),
-     $                      ABS( WORK( J+N2 ) ), VMAX )
-                     VCRIT = BIGNUM / VMAX
-*
-                  ELSE
-*
-*                    2-by-2 diagonal block
-*
-*                    Scale if necessary to avoid overflow when forming
-*                    the right-hand side elements.
-*
-                     BETA = MAX( WORK( J ), WORK( J+1 ) )
-                     IF( BETA.GT.VCRIT ) THEN
-                        REC = ONE / VMAX
-                        CALL DSCAL( N-KI+1, REC, WORK( KI+N ), 1 )
-                        CALL DSCAL( N-KI+1, REC, WORK( KI+N2 ), 1 )
-                        VMAX = ONE
-                        VCRIT = BIGNUM
-                     END IF
-*
-                     WORK( J+N ) = WORK( J+N ) -
-     $                             DDOT( J-KI-2, T( KI+2, J ), 1,
-     $                             WORK( KI+2+N ), 1 )
-*
-                     WORK( J+N2 ) = WORK( J+N2 ) -
-     $                              DDOT( J-KI-2, T( KI+2, J ), 1,
-     $                              WORK( KI+2+N2 ), 1 )
-*
-                     WORK( J+1+N ) = WORK( J+1+N ) -
-     $                               DDOT( J-KI-2, T( KI+2, J+1 ), 1,
-     $                               WORK( KI+2+N ), 1 )
-*
-                     WORK( J+1+N2 ) = WORK( J+1+N2 ) -
-     $                                DDOT( J-KI-2, T( KI+2, J+1 ), 1,
-     $                                WORK( KI+2+N2 ), 1 )
-*
-*                    Solve 2-by-2 complex linear equation
-*                      ([T(j,j)   T(j,j+1)  ]'-(wr-i*wi)*I)*X = SCALE*B
-*                      ([T(j+1,j) T(j+1,j+1)]             )
-*
-                     CALL DLALN2( .TRUE., 2, 2, SMIN, ONE, T( J, J ),
-     $                            LDT, ONE, ONE, WORK( J+N ), N, WR,
-     $                            -WI, X, 2, SCALE, XNORM, IERR )
-*
-*                    Scale if necessary
-*
-                     IF( SCALE.NE.ONE ) THEN
-                        CALL DSCAL( N-KI+1, SCALE, WORK( KI+N ), 1 )
-                        CALL DSCAL( N-KI+1, SCALE, WORK( KI+N2 ), 1 )
-                     END IF
-                     WORK( J+N ) = X( 1, 1 )
-                     WORK( J+N2 ) = X( 1, 2 )
-                     WORK( J+1+N ) = X( 2, 1 )
-                     WORK( J+1+N2 ) = X( 2, 2 )
-                     VMAX = MAX( ABS( X( 1, 1 ) ), ABS( X( 1, 2 ) ),
-     $                      ABS( X( 2, 1 ) ), ABS( X( 2, 2 ) ), VMAX )
-                     VCRIT = BIGNUM / VMAX
-*
-                  END IF
-  200          CONTINUE
-*
-*              Copy the vector x or Q*x to VL and normalize.
-*
-               IF( .NOT.OVER ) THEN
-                  CALL DCOPY( N-KI+1, WORK( KI+N ), 1, VL( KI, IS ), 1 )
-                  CALL DCOPY( N-KI+1, WORK( KI+N2 ), 1, VL( KI, IS+1 ),
-     $                        1 )
-*
-                  EMAX = ZERO
-                  DO 220 K = KI, N
-                     EMAX = MAX( EMAX, ABS( VL( K, IS ) )+
-     $                      ABS( VL( K, IS+1 ) ) )
-  220             CONTINUE
-                  REMAX = ONE / EMAX
-                  CALL DSCAL( N-KI+1, REMAX, VL( KI, IS ), 1 )
-                  CALL DSCAL( N-KI+1, REMAX, VL( KI, IS+1 ), 1 )
-*
-                  DO 230 K = 1, KI - 1
-                     VL( K, IS ) = ZERO
-                     VL( K, IS+1 ) = ZERO
-  230             CONTINUE
-               ELSE
-                  IF( KI.LT.N-1 ) THEN
-                     CALL DGEMV( 'N', N, N-KI-1, ONE, VL( 1, KI+2 ),
-     $                           LDVL, WORK( KI+2+N ), 1, WORK( KI+N ),
-     $                           VL( 1, KI ), 1 )
-                     CALL DGEMV( 'N', N, N-KI-1, ONE, VL( 1, KI+2 ),
-     $                           LDVL, WORK( KI+2+N2 ), 1,
-     $                           WORK( KI+1+N2 ), VL( 1, KI+1 ), 1 )
-                  ELSE
-                     CALL DSCAL( N, WORK( KI+N ), VL( 1, KI ), 1 )
-                     CALL DSCAL( N, WORK( KI+1+N2 ), VL( 1, KI+1 ), 1 )
-                  END IF
-*
-                  EMAX = ZERO
-                  DO 240 K = 1, N
-                     EMAX = MAX( EMAX, ABS( VL( K, KI ) )+
-     $                      ABS( VL( K, KI+1 ) ) )
-  240             CONTINUE
-                  REMAX = ONE / EMAX
-                  CALL DSCAL( N, REMAX, VL( 1, KI ), 1 )
-                  CALL DSCAL( N, REMAX, VL( 1, KI+1 ), 1 )
-*
-               END IF
-*
-            END IF
-*
-            IS = IS + 1
-            IF( IP.NE.0 )
-     $         IS = IS + 1
-  250       CONTINUE
-            IF( IP.EQ.-1 )
-     $         IP = 0
-            IF( IP.EQ.1 )
-     $         IP = -1
-*
-  260    CONTINUE
-*
-      END IF
-*
-      RETURN
-*/
-	
+		printMatrix(ZR, "ZR");
+		printMatrix(Z, "ZL");
+		
+		std::vector<double> Zprod(nRows*nRows);
+		cblas_dgemm(CblasColMajor, CblasTrans, CblasNoTrans, nRows, nRows, nRows,
+			1., Z.data(),nRows, ZR.data(),nRows, 0., Zprod.data(),nRows);
+		printMatrix(Zprod, "ZL^T * ZR");
 	}
 	#endif
 	
@@ -1064,12 +795,9 @@ struct LindbladLinear : public Integrator<DM1>
 				
 				//############ HACK ########################
 				//Read test matrix:
-				matrix testMat = zeroes(nRows, nRows);
-				testMat.read_real("testMatrix.bin");
-				std::vector<double> H(nRowsMine*nColsMine);
-				for(int iRow: iRowsMine)
-					for(int iCol: iColsMine)
-						H[localIndex(iRow, iCol)] = testMat(iCol,iRow).real(); //switch row-major to col-major
+				std::vector<double> H = readMatrix("testMatrix.bin");
+				std::vector<double> ULref = readMatrix("testMatrix.UL.bin");
+				std::vector<double> URref = readMatrix("testMatrix.UR.bin");
 				
 				//Balance matrix:
 				char job = 'B';
@@ -1166,7 +894,7 @@ struct LindbladLinear : public Integrator<DM1>
 				//Compute eigenvectors:
 				/*
 				Q.resize(nRowsMine * nRows); //will eventually contain left eigenvectors
-				const std::vector<double>& QL = Q;
+				std::vector<double>& QL = Q;
 				std::vector<double> QR(Q); //will eventually contain right eigenvectors
 				char side = 'B', howmny = 'B';
 				int nEigsIn = nRows, nEigsOut = nRows;
@@ -1239,7 +967,6 @@ struct LindbladLinear : public Integrator<DM1>
 						QLTQR.data(), &one, &one, desc);
 					printMatrix(QLTQR, "QL^T * QR");
 				}
-				
 				printMatrix(QL, "QL");
 				printMatrix(QR, "QR");
 				
@@ -1253,6 +980,7 @@ struct LindbladLinear : public Integrator<DM1>
 				for(size_t i: sortIndex)
 					logPrintf("\t%11.8lf%+11.8lfj\n", wr[i], wi[i]);
 				
+				logPrintf("Eigenvector errors: %le left, %le right\n", matrixErr(QL,ULref), matrixErr(QR,URref));
 				//############ HACK ########################
 				#endif
 			}
