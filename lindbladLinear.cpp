@@ -441,7 +441,6 @@ struct LindbladLinear : public Integrator<DM1>
 			1., Q,nRows, Z.data(),nRows, 0., VR,nRows);
 		
 		//Left eigenvector calculation:
-		std::vector<double> ZR(Z);
 		Z.assign(nRows*nRows, 0.);
 		for(int ki=0; ki<nRows; ki++)
 		{	bool complexPair = (ki+1<nRows) and (T[(ki+1)+ki*nRows]!=0.);
@@ -516,14 +515,6 @@ struct LindbladLinear : public Integrator<DM1>
 		}
 		cblas_dgemm(CblasColMajor, CblasNoTrans, CblasNoTrans, nRows, nRows, nRows,
 			1., Q,nRows, Z.data(),nRows, 0., VL,nRows);
-		
-		printMatrix(ZR, "ZR");
-		printMatrix(Z, "ZL");
-		
-		std::vector<double> Zprod(nRows*nRows);
-		cblas_dgemm(CblasColMajor, CblasTrans, CblasNoTrans, nRows, nRows, nRows,
-			1., Z.data(),nRows, ZR.data(),nRows, 0., Zprod.data(),nRows);
-		printMatrix(Zprod, "ZL^T * ZR");
 	}
 	#endif
 	
@@ -892,21 +883,6 @@ struct LindbladLinear : public Integrator<DM1>
 				watchSchur.stop();
 				
 				//Compute eigenvectors:
-				/*
-				Q.resize(nRowsMine * nRows); //will eventually contain left eigenvectors
-				std::vector<double>& QL = Q;
-				std::vector<double> QR(Q); //will eventually contain right eigenvectors
-				char side = 'B', howmny = 'B';
-				int nEigsIn = nRows, nEigsOut = nRows;
-				work.resize(3*nRows);
-				//pdtrevc_(&side, &howmny, NULL, &nRows, H.data(), desc, Q.data(), desc, QR.data(), desc, &nEigsIn, &nEigsOut, work.data(), &info);
-				dtrevc_(&side, &howmny, NULL, &nRows, H.data(), &nRows, Q.data(), &nRows, QR.data(), &nRows, &nEigsIn, &nEigsOut, work.data(), &info);
-				if(info < 0)
-				{	int errCode = -info;
-					if(errCode < 100) die("Error in argument# %d to pdtrevc.\n", errCode)
-					else die("Error in entry %d of argument# %d to pdtrevc.\n", errCode%100, errCode/100)
-				}
-				*/
 				std::vector<double> QL(nRows*nRows), QR(nRows*nRows);
 				computeEigenvectors(nRows, H.data(), Q.data(), QL.data(), QR.data());
 				
