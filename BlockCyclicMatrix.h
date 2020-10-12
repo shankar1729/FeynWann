@@ -56,11 +56,15 @@ public:
 	//! where A = Q H Q^T is the original matrix that was converted to Hessenberg form.
 	std::vector<complex> schur(Buffer& H, Buffer& Q) const;
 	
+	//! Sort eigenvalues in ascending order of real part, and return sorting indices
+	std::vector<int> sortEvals(std::vector<complex>& evals) const;
+	
 	//! Compute left and right eigenvectors given Shur decomposition of a non-symmetric matrix (equivalent to LAPACK dtrevc)
 	//! Input: upper quasi-triangular matrix T and orthogonal matrix Q, such that matrix A = Q T Q^T
 	//! Output: left and right eigenvectors of A in VL and VR
 	//! Optionally correct the eigenvectors for scale factors used to balance A is scaleFactors is non-null
-	void getEvecs(const Buffer& T, const Buffer& Q, Buffer& VL, Buffer& VR, Buffer* scaleFactors=0) const;
+	//! If evalSort is provided, sort eigenvectors to match the sorting of eigenvalues
+	void getEvecs(const Buffer& T, const Buffer& Q, Buffer& VL, Buffer& VR, const Buffer* scaleFactors=0, const std::vector<int>* evalSort=0) const;
 	
 	//! C = beta C + alpha op(A) * op(B), where op = identity or transpose depending on transA and transB
 	void matMult(double alpha, const Buffer& A, bool transA, const Buffer& B, bool transB, double beta, Buffer& C) const;

@@ -59,13 +59,6 @@ inline diagMatrix bar(const diagMatrix& X)
 	return Xbar;
 }
 
-//Helper class to "argsort" an array i.e. determine the indices that sort it
-template<typename ArrayType> struct IndexCompare
-{	const ArrayType& array;
-	IndexCompare(const ArrayType& array) : array(array) {}
-	template<typename Integer> bool operator()(Integer i1, Integer i2) const { return array[i1] < array[i2]; }
-};
-
 //Lindblad initialization, time evolution and measurement operators using FeynWann callback
 struct LindbladLinear : public Integrator<DM1>
 {	
@@ -506,7 +499,7 @@ struct LindbladLinear : public Integrator<DM1>
 			if(spectrumMode and (not sparseDiag))
 			{	//Convert to dense matrix for ScaLAPACK:
 				#ifdef SCALAPACK_ENABLED
-				const int nRows = 12; //HACK rhoSizeTot
+				const int nRows = 22; //HACK rhoSizeTot
 				bcm = std::make_shared<BlockCyclicMatrix>(nRows, blockSize, mpiWorld);
 				
 				//############ HACK ########################
@@ -515,11 +508,11 @@ struct LindbladLinear : public Integrator<DM1>
 				BlockCyclicMatrix::Buffer VLref = bcm->readMatrix("testMatrix.VL.bin");
 				BlockCyclicMatrix::Buffer VRref = bcm->readMatrix("testMatrix.VR.bin");
 				
-				
 				BlockCyclicMatrix::Buffer scale = bcm->balance(H); //Balance matrix
 				BlockCyclicMatrix::Buffer Q = bcm->hessenberg(H); //Hessenberg reduction
 				std::vector<complex> evals = bcm->schur(H, Q); //Schur decomposition and eigenvalues
-				BlockCyclicMatrix::Buffer VL, VR; bcm->getEvecs(H, Q, VL, VR, &scale); //Get eigenvectors
+				std::vector<int> evalSort = bcm->sortEvals(evals); //Sort eigenvalues
+				BlockCyclicMatrix::Buffer VL, VR; bcm->getEvecs(H, Q, VL, VR, &scale, &evalSort); //Get eigenvectors
 				
 				//Fix normalization of eigenvectors:
 				std::vector<double*> VdataArr(2);
@@ -577,8 +570,9 @@ struct LindbladLinear : public Integrator<DM1>
 				
 				//Print eigenvalues:
 				logPrintf("\nEigenvalues:\n");
-				for(complex eval: evals)
-					logPrintf("\t%11.8lf%+11.8lfj\n", eval.real(), eval.imag());
+				for(int i=0; i<nRows; i++)
+				{	logPrintf("\t%11.8lf%+11.8lfj (original index: %d)\n", evals[i].real(), evals[i].imag(), evalSort[i]);
+				}
 				
 				logPrintf("Eigenvector errors: %le left, %le right\n", bcm->matrixErr(VL,VLref), bcm->matrixErr(VR,VRref));
 				//############ HACK ########################

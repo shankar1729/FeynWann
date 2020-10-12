@@ -5,6 +5,7 @@
 #include <mkl_pblas.h>
 #include <mkl_scalapack.h>
 #include <mkl_lapack.h>
+#include <algorithm>
 
 //Return list of indices in a given dimension (row or column) that belong to me in block-cyclic distribution
 std::vector<int> distributedIndices(int nTotal, int blockSize, int iProcDim, int nProcsDim)
@@ -221,7 +222,29 @@ std::vector<complex> BlockCyclicMatrix::schur(Buffer& H, Buffer& Q) const
 	return evals;
 }
 
-void BlockCyclicMatrix::getEvecs(const Buffer& T, const Buffer& Q, Buffer& VL, Buffer& VR, Buffer* scaleFactors) const
+
+std::vector<int> BlockCyclicMatrix::sortEvals(std::vector<complex>& evals) const
+{	//Helper class to sort complex array by ascending real part and descending imaginary part
+	struct IndexCompare
+	{	const std::vector<complex>& array;
+		IndexCompare(const std::vector<complex>& array) : array(array) {}
+		bool operator()(int i1, int i2) const 
+		{	complex diff = array[i1] - array[i2];
+			return diff.real() ? (diff.real()<0.) : (diff.imag()>0.);
+		}
+	};
+	//Determine sort indices:
+	std::vector<int> sortIndex(N);
+	for(int i=0; i<N; i++) sortIndex[i] = i;
+	std::sort(sortIndex.begin(), sortIndex.end(), IndexCompare(evals));
+	//Apply sort indices:
+	std::vector<complex> out(N);
+	for(int i=0; i<N; i++) out[i] = evals[sortIndex[i]];
+	std::swap(out, evals);
+	return sortIndex;
+}
+
+void BlockCyclicMatrix::getEvecs(const Buffer& T, const Buffer& Q, Buffer& VL, Buffer& VR, const Buffer* scaleFactors, const std::vector<int>* evalSort) const
 {	static StopWatch watch("BlockCyclicMatrix::eigenvectors"); watch.start();
 	
 	if(mpiUtil->nProcesses() > 1) die("Parallelization not yet implemented.\n");
@@ -243,6 +266,11 @@ void BlockCyclicMatrix::getEvecs(const Buffer& T, const Buffer& Q, Buffer& VL, B
 		for(int i=0; i<j; i++)
 			tNorm[j] += fabs(T[i+j*N]);
 	
+	//Eigenalue inverse sort index:
+	std::vector<int> sortIndexInv(N);
+	if(evalSort) for(int i=0; i<N; i++) sortIndexInv[evalSort->at(i)] = i;
+	else for(int i=0; i<N; i++) sortIndexInv[i] = i;
+	
 	//Temporaries for blas calls:
 	int notTrans=0, isTrans=1, two=2, info=0;
 	double oneD = 1.;
@@ -254,7 +282,7 @@ void BlockCyclicMatrix::getEvecs(const Buffer& T, const Buffer& Q, Buffer& VL, B
 	{	bool complexPair = (ki>0) and (T[ki+(ki-1)*N]!=0.);
 		int kiBlockSize = complexPair ? 2  : 1; //current block size in ki
 		int kiStart = ki + 1 - kiBlockSize; //start of current block in ki
-		double* rhs = &Z[kiStart*N]; //initialized to zero above
+		double* rhs = &Z[sortIndexInv[kiStart]*N]; //initialized to zero above
 		//Get the eigenvalue:
 		double wr = T[ki+ki*N];
 		double wi = 0., tU = 0., tL = 0.;
@@ -336,7 +364,7 @@ void BlockCyclicMatrix::getEvecs(const Buffer& T, const Buffer& Q, Buffer& VL, B
 	{	bool complexPair = (ki+1<N) and (T[(ki+1)+ki*N]!=0.);
 		int kiBlockSize = complexPair ? 2  : 1; //current block size in ki
 		int kiStop = ki + kiBlockSize-1; //end of current block in ki
-		double* rhs = &Z[ki*N]; //initialized to zero above
+		double* rhs = &Z[sortIndexInv[ki]*N]; //initialized to zero above
 		//Get the eigenvalue:
 		double wr = T[ki+ki*N];
 		double mwi = 0., tU = 0., tL = 0.;
