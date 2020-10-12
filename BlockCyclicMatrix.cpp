@@ -245,9 +245,7 @@ std::vector<int> BlockCyclicMatrix::sortEvals(std::vector<complex>& evals) const
 }
 
 void BlockCyclicMatrix::getEvecs(const Buffer& T, const Buffer& Q, Buffer& VL, Buffer& VR, const Buffer* scaleFactors, const std::vector<int>* evalSort) const
-{	static StopWatch watch("BlockCyclicMatrix::eigenvectors"); watch.start();
-	
-	if(mpiUtil->nProcesses() > 1) die("Parallelization not yet implemented.\n");
+{	static StopWatch watch("BlockCyclicMatrix::getEvecs"); watch.start();
 	assert(T.size()==nDataMine);
 	assert(Q.size()==nDataMine);
 	if(scaleFactors) assert(int(scaleFactors->size())==N);
@@ -260,11 +258,23 @@ void BlockCyclicMatrix::getEvecs(const Buffer& T, const Buffer& Q, Buffer& VL, B
 	const double sNum = uFlow*(N/prec);
 	const double bNum = (1.-prec)/sNum;
 	
-	//Column 1-norms of strict upper-triangular part to control overflow below:
-	Buffer tNorm(N, 0.);
-	for(int j=1; j<N; j++)
-		for(int i=0; i<j; i++)
-			tNorm[j] += fabs(T[i+j*N]);
+	//Collect column 1-norms and tri-diagonal portion of matrix on all processes:
+	Buffer tNorm(N, 0.); //column 1-norms used for overflow mitigation below
+	Buffer tDiag(N, 0.), tDiagU(N, 0.), tDiagL(N, 0.); //diagonal, upper and lower diagonal entries
+	{	const double* Tdata = T.data();
+		for(int j: iColsMine)
+			for(int i: iRowsMine)
+			{	const double& t = *(Tdata++);
+				if(t) tNorm[j] += fabs(t);
+				if(i == j) tDiag[i] = t;
+				if(i+1 == j) tDiagU[i] = t;
+				if(j+1 == i) tDiagL[j] = t;
+			}
+	}
+	mpiUtil->allReduceData(tNorm, MPIUtil::ReduceSum);
+	mpiUtil->allReduceData(tDiag, MPIUtil::ReduceSum);
+	mpiUtil->allReduceData(tDiagU, MPIUtil::ReduceSum);
+	mpiUtil->allReduceData(tDiagL, MPIUtil::ReduceSum);
 	
 	//Eigenalue inverse sort index:
 	std::vector<int> sortIndexInv(N);
@@ -275,45 +285,44 @@ void BlockCyclicMatrix::getEvecs(const Buffer& T, const Buffer& Q, Buffer& VL, B
 	int notTrans=0, isTrans=1, two=2, info=0;
 	double oneD = 1.;
 	double x[4], xNorm, scale; //1x1 or 2x2 matrix used in dlanl2; its norm and scale factor
-	Buffer Z(N*N); //eigenvectors of T (multiplied by Q at the end)
-	
+	Buffer Z(nDataMine); //eigenvectors of T (multiplied by Q at the end)
 	//Right eigenvector calculation:
 	for(int ki=N-1; ki>=0; ki--)
-	{	bool complexPair = (ki>0) and (T[ki+(ki-1)*N]!=0.);
+	{	bool complexPair = ((ki>0) and (tDiagL[ki-1]!=0.));
 		int kiBlockSize = complexPair ? 2  : 1; //current block size in ki
 		int kiStart = ki + 1 - kiBlockSize; //start of current block in ki
-		double* rhs = &Z[sortIndexInv[kiStart]*N]; //initialized to zero above
 		//Get the eigenvalue:
-		double wr = T[ki+ki*N];
-		double wi = 0., tU = 0., tL = 0.;
-		if(complexPair)
-		{	tU = T[kiStart+ki*N];
-			tL = T[ki+kiStart*N];
-			wi = sqrt(fabs(tU)) * sqrt(fabs(tL)); //written like this to avoid over/under-flow
-		}
+		double wr = tDiag[ki];
+		double wi = complexPair ? sqrt(fabs(tDiagU[kiStart])) * sqrt(fabs(tDiagL[kiStart])) : 0.; //written like this to avoid over/under-flow
 		double sMin = std::max(prec*(fabs(wr)+fabs(wi)), sNum); //small number threshold for this eigenvector (pair)
 		//Construct RHS:
+		Buffer rhs(kiBlockSize*N);
 		if(complexPair)
-		{	if(fabs(tU) > fabs(tL))
+		{	if(fabs(tDiagU[kiStart]) > fabs(tDiagL[kiStart]))
 			{	rhs[kiStart] = 1.;
-				rhs[ki+N] = wi/tU;
+				rhs[ki+N] = wi/tDiagU[kiStart];
 			}
 			else
-			{	rhs[kiStart] = -wi/tL;
+			{	rhs[kiStart] = -wi/tDiagL[kiStart];
 				rhs[ki+N] = 1.;
 			}
 		}
 		else rhs[ki] = 1.;
-		for(int k=0; k<kiStart; k++)
-			for(int bk=0; bk<kiBlockSize; bk++)
-				rhs[k+bk*N] = -rhs[kiStart+bk+bk*N] * T[k+(kiStart+bk)*N];
+		for(int bk=0; bk<kiBlockSize; bk++)
+		{	for(int k=0; k<kiStart; k++)
+			{	int index = localIndex(k, kiStart+bk);
+				if(index >= 0) rhs[k+bk*N] = -rhs[kiStart+bk+bk*N] * T[index]; //set on exacty one process
+			}
+			mpiUtil->allReduce(&rhs[bk*N], kiStart, MPIUtil::ReduceSum); //make available on all processes
+		}
 		//Solve upper quasi-triangular system (T[:kiStart,:kiStart] - (wr+i*wi))*x = scale*rhs
 		for(int j=kiStart-1; j>=0.; j--)
-		{	int jBlockSize = ((j>0) and (T[j+(j-1)*N]!=0.)) ? 2 : 1; //current block size in j
+		{	int jBlockSize = ((j>0) and (tDiagL[j-1]!=0.)) ? 2 : 1; //current block size in j
 			int jStart = j+1-jBlockSize; //start of current block in j
+			double T22[4] = { tDiag[jStart], tDiagL[jStart], tDiagU[jStart], tDiag[j] }; //2x2 diagonal block of T (only 1x1 valid/needed if jStart==j)
 			dlaln2_(&notTrans, &jBlockSize, &kiBlockSize, &sMin, &oneD,
-				&T[jStart+jStart*N], &N, &oneD, &oneD,
-				rhs+jStart, &N, &wr, &wi, x, &two,
+				T22, &two, &oneD, &oneD,
+				&rhs[jStart], &N, &wr, &wi, x, &two,
 				&scale, &xNorm, &info);
 			//Scale relevant x to avoid overflow in rhs update:
 			if((xNorm>1.) and (std::max(tNorm[jStart],tNorm[j])>bNum/xNorm))
@@ -325,18 +334,36 @@ void BlockCyclicMatrix::getEvecs(const Buffer& T, const Buffer& Q, Buffer& VL, B
 			}
 			if(scale != 1.)
 				for(int bk=0; bk<kiBlockSize; bk++)
-					cblas_dscal(ki+1, scale, rhs+bk*N,1); //scale when needed
+					cblas_dscal(ki+1, scale, &rhs[bk*N],1); //scale when needed
 			//Update the right hand side
-			for(int bj=0; bj<jBlockSize; bj++)
-				for(int bk=0; bk<kiBlockSize; bk++)
-				{	rhs[jStart+bj + bk*N] = x[bj+2*bk];
-					cblas_daxpy(jStart, -x[bj+2*bk], &T[(jStart+bj)*N],1, rhs+bk*N,1);
+			for(int bk=0; bk<kiBlockSize; bk++)
+			{	Buffer rhsUpdate(jStart);
+				for(int bj=0; bj<jBlockSize; bj++)
+				{	double xCur = x[bj+2*bk];
+					rhs[jStart+bj + bk*N] = xCur;
+					for(int i=0; i<jStart; i++)
+					{	int index = localIndex(i, jStart+bj);
+						if(index >= 0) rhsUpdate[i] -= xCur * T[index];
+					}
 				}
+				if(jStart)
+				{	mpiUtil->allReduceData(rhsUpdate, MPIUtil::ReduceSum);
+					cblas_daxpy(jStart, 1., rhsUpdate.data(),1, &rhs[bk*N],1);
+				}
+			}
 			j = jStart;
 		}
 		//Scale max entry to 1:
-		double rhsMax = rhs[cblas_idamax(kiBlockSize*N, rhs,1)];
-		cblas_dscal(kiBlockSize*N, 1./fabs(rhsMax), rhs,1);
+		double rhsMax = rhs[cblas_idamax(kiBlockSize*N, rhs.data(),1)];
+		cblas_dscal(kiBlockSize*N, 1./fabs(rhsMax), rhs.data(),1);
+		//Distribute the eigenvector to Z on relevant processes:
+		for(int bk=0; bk<kiBlockSize; bk++)
+		{	int colDest = sortIndexInv[kiStart+bk];
+			for(int iRow: iRowsMine)
+			{	int index = localIndex(iRow,colDest);
+				if(index >= 0) Z[index] = rhs[iRow+bk*N];
+			}
+		}
 		ki = kiStart;
 	}
 	//--- multiply by Q
@@ -359,6 +386,7 @@ void BlockCyclicMatrix::getEvecs(const Buffer& T, const Buffer& Q, Buffer& VL, B
 	}
 	
 	//Left eigenvector calculation:
+	/* HACK 
 	Z.assign(N*N, 0.);
 	for(int ki=0; ki<N; ki++)
 	{	bool complexPair = (ki+1<N) and (T[(ki+1)+ki*N]!=0.);
@@ -430,7 +458,7 @@ void BlockCyclicMatrix::getEvecs(const Buffer& T, const Buffer& Q, Buffer& VL, B
 		double rhsMax = rhs[cblas_idamax(kiBlockSize*N, rhs,1)];
 		cblas_dscal(kiBlockSize*N, 1./fabs(rhsMax), rhs,1);
 		ki = kiStop;
-	}
+	}*/
 	//--- multiply by Q
 	matMult(1., Q,false, Z,false, 0.,VL);
 	//--- account for scaleFactors if necessary:
