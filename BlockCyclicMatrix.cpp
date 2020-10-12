@@ -5,7 +5,6 @@
 #include <mkl_pblas.h>
 #include <mkl_scalapack.h>
 #include <mkl_lapack.h>
-#include <algorithm>
 
 //Return list of indices in a given dimension (row or column) that belong to me in block-cyclic distribution
 std::vector<int> distributedIndices(int nTotal, int blockSize, int iProcDim, int nProcsDim)
@@ -309,9 +308,12 @@ void BlockCyclicMatrix::getEvecs(const Buffer& T, const Buffer& Q, Buffer& VL, B
 		}
 		else rhs[ki] = 1.;
 		for(int bk=0; bk<kiBlockSize; bk++)
-		{	for(int k=0; k<kiStart; k++)
-			{	int index = localIndex(k, kiStart+bk);
-				if(index >= 0) rhs[k+bk*N] = -rhs[kiStart+bk+bk*N] * T[index]; //set on exacty one process
+		{	int iColMine = localColIndex(kiStart+bk);
+			if(iColMine >= 0)
+			{	int iRowMineStart, iRowMineStop;
+				getRange(iRowsMine, 0, kiStart, iRowMineStart, iRowMineStop);
+				for(int iRowMine=iRowMineStart; iRowMine<iRowMineStop; iRowMine++)
+					rhs[iRowsMine[iRowMine]+bk*N] = -rhs[kiStart+bk+bk*N] * T[iRowMine+iColMine*nRowsMine]; //set on exacty one process
 			}
 			mpiUtil->allReduce(&rhs[bk*N], kiStart, MPIUtil::ReduceSum); //make available on all processes
 		}
@@ -341,9 +343,13 @@ void BlockCyclicMatrix::getEvecs(const Buffer& T, const Buffer& Q, Buffer& VL, B
 				for(int bj=0; bj<jBlockSize; bj++)
 				{	double xCur = x[bj+2*bk];
 					rhs[jStart+bj + bk*N] = xCur;
-					for(int i=0; i<jStart; i++)
-					{	int index = localIndex(i, jStart+bj);
-						if(index >= 0) rhsUpdate[i] -= xCur * T[index];
+					
+					int iColMine = localColIndex(jStart+bj);
+					if(iColMine >= 0)
+					{	int iRowMineStart, iRowMineStop;
+						getRange(iRowsMine, 0, jStart, iRowMineStart, iRowMineStop);
+						for(int iRowMine=iRowMineStart; iRowMine<iRowMineStop; iRowMine++)
+							rhsUpdate[iRowsMine[iRowMine]] -= xCur * T[iRowMine+iColMine*nRowsMine];
 					}
 				}
 				if(jStart)

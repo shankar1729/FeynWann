@@ -526,10 +526,11 @@ struct LindbladLinear : public Integrator<DM1>
 						//Fetch entire eigenvector on all processes:
 						std::vector<double> Qcur(iBlockSize*nRows);
 						for(int j=iCol; j<=iColStop; j++)
-							for(int i: bcm->iRowsMine)
-							{	int index = bcm->localIndex(i,j);
-								if(index >= 0) Qcur[i+(j-iCol)*nRows] = Vdata[index];
-							}
+						{	int iColMine = bcm->localColIndex(j);
+							if(iColMine >= 0)
+								for(int iRowMine=0; iRowMine<bcm->nRowsMine; iRowMine++)
+									Qcur[bcm->iRowsMine[iRowMine]+(j-iCol)*nRows] = Vdata[iRowMine+iColMine*bcm->nRowsMine];
+						}
 						mpiWorld->allReduceData(Qcur, MPIUtil::ReduceSum);
 						//Apply scaling:
 						if(complexPair)
@@ -567,10 +568,11 @@ struct LindbladLinear : public Integrator<DM1>
 						}
 						//Set relevant pieces of eigenvector back:
 						for(int j=iCol; j<=iColStop; j++)
-							for(int i: bcm->iRowsMine)
-							{	int index = bcm->localIndex(i,j);
-								if(index >= 0) Vdata[index] = Qcur[i+(j-iCol)*nRows];
-							}
+						{	int iColMine = bcm->localColIndex(j);
+							if(iColMine >= 0)
+								for(int iRowMine=0; iRowMine<bcm->nRowsMine; iRowMine++)
+									Vdata[iRowMine+iColMine*bcm->nRowsMine] = Qcur[bcm->iRowsMine[iRowMine]+(j-iCol)*nRows];
+						}
 						iCol = iColStop;
 					}
 				}

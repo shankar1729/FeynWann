@@ -22,6 +22,7 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 #ifdef SCALAPACK_ENABLED
 
 #include <core/MPIUtil.h>
+#include <algorithm>
 
 //Wrapper to and extension of ScaLAPACK diagonalization routines
 class BlockCyclicMatrix
@@ -79,11 +80,19 @@ public:
 	//!Get index into local storage given global indices and dimensions
 	//! Returns -1 if corresponding value does not belong to current process
 	inline int localIndex(int iRow, int iCol) const;
-
+	
+	//! Get the range of indices [iMineStart,iMineStop) to sorted array iMine that have values in range [iStart,iStop)
+	inline void getRange(const std::vector<int>& iMine, int iStart, int iStop, int& iMineStart, int& iMineStop) const;
+	
+	//! Return index of i in sorted array iMine, and -1 if not found
+	inline int localIndex1D(const std::vector<int>& iMine, int i) const;
+	inline int localRowIndex(int iRow) const { return localIndex1D(iRowsMine, iRow); } //!< Return local index of row, and -1 if not found
+	inline int localColIndex(int iCol) const { return localIndex1D(iColsMine, iCol); } //!< Return local index of column, and -1 if not found
 };
 
-//Get index into local storage given global indices and dimensions
-//Returns -1 if corresponding value does not belong to current process
+
+//------ Inline function implementations ------
+
 inline int BlockCyclicMatrix::localIndex(int iRow, int iCol) const
 {	//Identify row and column indices:
 	#define InitIndices(dim) \
@@ -99,6 +108,15 @@ inline int BlockCyclicMatrix::localIndex(int iRow, int iCol) const
 	return iColMine*nRowsMine + iRowMine;
 }
 
+inline void BlockCyclicMatrix::getRange(const std::vector<int>& iMine, int iStart, int iStop, int& iMineStart, int& iMineStop) const
+{	iMineStart = std::lower_bound(iMine.begin(), iMine.end(), iStart) - iMine.begin();
+	iMineStop = std::lower_bound(iMine.begin(), iMine.end(), iStop) - iMine.begin();
+}
+
+inline int BlockCyclicMatrix::localIndex1D(const std::vector<int>& iMine, int i) const
+{	auto iter = std::lower_bound(iMine.begin(), iMine.end(), i);
+	return ((iter!=iMine.end()) and (*iter == i)) ? (iter-iMine.begin()) : -1;
+}
 
 #endif //SCALAPACK_ENABLED
 #endif // FEYNWANN_BLOCKCYCLICMATRIX_H
