@@ -28,15 +28,9 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 #include "InputMap.h"
 #include "LindbladFile.h"
 #include "Integrator.h"
+#include "BlockCyclicMatrix.h"
 #include <core/Units.h>
 #include <slepceps.h>
-
-#if SCALAPACK_ENABLED
-#include <mkl_blacs.h>
-#include <mkl_pblas.h>
-#include <mkl_scalapack.h>
-#include <mkl_lapack.h>
-#endif
 
 //Slightly more graceful wrapper to CHKERRQ() macro from Petsc:
 PetscInt iErr = 0;
@@ -262,266 +256,14 @@ struct LindbladLinear : public Integrator<DM1>
 		return 0;
 	}
 	
-	//--------- Blacs / ScaLAPACK data for dense diagonalization -----------
+	//--------- Blacs / ScaLAPACK interface for dense diagonalization -----------
 	#ifdef SCALAPACK_ENABLED
-	int nProcsRow, nProcsCol; //BLACS process grid dimensions
-	int iProcRow, iProcCol; //Current process index in BLACS process grid
-	int nRows; //matrix dimension
-	int nRowsMine, nColsMine; //Number of rows and columns on current process
-	std::vector<int> iRowsMine, iColsMine; //Indices of rows and columns that belng to current process
-	
-	//Return list of indices in a given dimension (row or column) that belong to me in block-cyclic distribution
-	std::vector<int> distributedIndices(int nTotal, int blockSize, int iProcDim, int nProcsDim)
-	{	int zero = 0;
-		int nMine = numroc_(&nTotal, &blockSize, &iProcDim, &zero, &nProcsDim);
-		std::vector<int> myIndices; myIndices.reserve(nMine);
-		int blockStride = blockSize * nProcsDim;
-		int nBlocksMineMax = (nTotal + blockStride - 1) / blockStride;
-		for(int iBlock=0; iBlock<nBlocksMineMax; iBlock++)
-		{	int iStart = iProcDim*blockSize + iBlock*blockStride;
-			int iStop = std::min(iStart+blockSize, nTotal);
-			for(int i=iStart; i<iStop; i++)
-				myIndices.push_back(i);
-		}
-		assert(int(myIndices.size()) == nMine);
-		return myIndices;
-	}
-	
-	//Get index into local storage given global indices and dimensions
-	//Returns -1 if corresponding value does not belong to current process
-	inline int localIndex(int iRow, int iCol)
-	{	//Identify row and column indices:
-		#define InitIndices(dim) \
-			int iBlock##dim##Global = i##dim / blockSize; \
-			if(iBlock##dim##Global % nProcs##dim != iProc##dim) return -1; \
-			int iBlock##dim = iBlock##dim##Global / nProcs##dim; /*local block index*/ \
-			int iElem##dim = i##dim % blockSize; /*index within block*/ \
-			int i##dim##Mine = iBlock##dim * blockSize + iElem##dim;
-		InitIndices(Row)
-		InitIndices(Col)
-		#undef InitIndices
-		//Compute flattened local index:
-		return iColMine*nRowsMine + iRowMine;
-	}
-	
-	//Read dense matrix from file into a distributed block cyclic matrix (for testing only):
-	std::vector<double> readMatrix(string fname)
-	{	matrix mat = zeroes(nRows, nRows);
-		mat.read_real(fname.c_str());
-		std::vector<double> out(nRowsMine*nColsMine);
-		for(int iRow: iRowsMine)
-			for(int iCol: iColsMine)
-				out[localIndex(iRow, iCol)] = mat(iCol,iRow).real(); //switch row-major to col-major
-		return out;
-	}
-	
-	//Error between distirbuted matrices:
-	double matrixErr(std::vector<double>& A, std::vector<double>& B)
-	{	double errSq = 0.;
-		for(int i=0; i<nRowsMine*nColsMine; i++)
-			errSq += std::pow(A[i]-B[i], 2);
-		mpiWorld->allReduce(errSq, MPIUtil::ReduceSum);
-		return sqrt(errSq);
-	}
-	
-	//Print all pieces of distributed block cyclic matrix:
-	void printMatrix(std::vector<double>& mat, const char* name="")
-	{	ostringstream oss; 
-		oss << "\nOn process " << mpiWorld->iProcess() << ":\n";
-		for(int iRow=0; iRow<nRows; iRow++)
-		{	for(int iCol=0; iCol<nRows; iCol++)
-			{	int index = localIndex(iRow, iCol);
-				oss.width(9);
-				oss.precision(5);
-				if(index<0) oss << "########"; else oss << std::fixed << mat[index];
-			}
-			oss << '\n';
-		}
-		string buf = oss.str();
-		if(mpiWorld->isHead())
-		{	if(strlen(name)>0)
-				logPrintf("\n----------- Matrix %s -----------\n", name);
-			for(int iProc=0; iProc<mpiWorld->nProcesses(); iProc++)
-			{	if(iProc) mpiWorld->recv(buf, iProc, 0);
-				logPrintf("%s", buf.c_str());
-			}
-			logFlush();
-		}
-		else mpiWorld->send(buf, 0, 0);
-	}
-	
-	//Compute left and right eigenvectors given Shur decomposition of a non-symmetric matrix (equivalent to LAPACK dtrevc)
-	//Input: upper quasi-triangular matrix T and orthogonal matrix Q, such that matrix A = Q T Q^T
-	//Output: left and right eigenvectors of A in VL and VR
-	void computeEigenvectors(int nRows, const double* T, const double* Q, double* VL, double* VR)
-	{
-		//Underflow/overflow and precision constants:
-		double uFlow = dlamch_("Safe minimum");
-		double oFlow = 1./uFlow;
-		dlabad_(&uFlow, &oFlow);
-		const double prec = dlamch_("Precision");
-		const double sNum = uFlow*(nRows/prec);
-		const double bNum = (1.-prec)/sNum;
-		
-		//Column 1-norms of strict upper-triangular part to control overflow below:
-		std::vector<double> tNorm(nRows, 0.);
-		for(int j=1; j<nRows; j++)
-			for(int i=0; i<j; i++)
-				tNorm[j] += fabs(T[i+j*nRows]);
-		
-		//Temporaries for blas calls:
-		int notTrans=0, isTrans=1, two=2, info=0;
-		double oneD = 1.;
-		double x[4], xNorm, scale; //1x1 or 2x2 matrix used in dlanl2; its norm and scale factor
-		std::vector<double> Z(nRows*nRows); //eigenvectors of T (multiplied by Q at the end)
-		
-		//Right eigenvector calculation:
-		for(int ki=nRows-1; ki>=0; ki--)
-		{	bool complexPair = (ki>0) and (T[ki+(ki-1)*nRows]!=0.);
-			int kiBlockSize = complexPair ? 2  : 1; //current block size in ki
-			int kiStart = ki + 1 - kiBlockSize; //start of current block in ki
-			double* rhs = &Z[kiStart*nRows]; //initialized to zero above
-			//Get the eigenvalue:
-			double wr = T[ki+ki*nRows];
-			double wi = 0., tU = 0., tL = 0.;
-			if(complexPair)
-			{	tU = T[kiStart+ki*nRows];
-				tL = T[ki+kiStart*nRows];
-				wi = sqrt(fabs(tU)) * sqrt(fabs(tL)); //written like this to avoid over/under-flow
-			}
-			double sMin = std::max(prec*(fabs(wr)+fabs(wi)), sNum); //small number threshold for this eigenvector (pair)
-			//Construct RHS:
-			if(complexPair)
-			{	if(fabs(tU) > fabs(tL))
-				{	rhs[kiStart] = 1.;
-					rhs[ki+nRows] = wi/tU;
-				}
-				else
-				{	rhs[kiStart] = -wi/tL;
-					rhs[ki+nRows] = 1.;
-				}
-			}
-			else rhs[ki] = 1.;
-			for(int k=0; k<kiStart; k++)
-				for(int bk=0; bk<kiBlockSize; bk++)
-					rhs[k+bk*nRows] = -rhs[kiStart+bk+bk*nRows] * T[k+(kiStart+bk)*nRows];
-			//Solve upper quasi-triangular system (T[:kiStart,:kiStart] - (wr+i*wi))*x = scale*rhs
-			for(int j=kiStart-1; j>=0.; j--)
-			{	int jBlockSize = ((j>0) and (T[j+(j-1)*nRows]!=0.)) ? 2 : 1; //current block size in j
-				int jStart = j+1-jBlockSize; //start of current block in j
-				dlaln2_(&notTrans, &jBlockSize, &kiBlockSize, &sMin, &oneD,
-					T+jStart+jStart*nRows, &nRows, &oneD, &oneD,
-					rhs+jStart, &nRows, &wr, &wi, x, &two,
-					&scale, &xNorm, &info);
-				//Scale relevant x to avoid overflow in rhs update:
-				if((xNorm>1.) and (std::max(tNorm[jStart],tNorm[j])>bNum/xNorm))
-				{	double xNormInv = 1./xNorm;
-					for(int bk=0; bk<kiBlockSize; bk++)
-						for(int bj=0; bj<jBlockSize; bj++)
-							x[bj+2*bk] *= xNormInv;
-					scale *= xNormInv;
-				}
-				if(scale != 1.)
-					for(int bk=0; bk<kiBlockSize; bk++)
-						cblas_dscal(ki+1, scale, rhs+bk*nRows,1); //scale when needed
-				//Update the right hand side
-				for(int bj=0; bj<jBlockSize; bj++)
-					for(int bk=0; bk<kiBlockSize; bk++)
-					{	rhs[jStart+bj + bk*nRows] = x[bj+2*bk];
-						cblas_daxpy(jStart, -x[bj+2*bk], T+(jStart+bj)*nRows,1, rhs+bk*nRows,1);
-					}
-				j = jStart;
-			}
-			//Scale max entry to 1:
-			double rhsMax = rhs[cblas_idamax(kiBlockSize*nRows, rhs,1)];
-			cblas_dscal(kiBlockSize*nRows, 1./fabs(rhsMax), rhs,1);
-			ki = kiStart;
-		}
-		cblas_dgemm(CblasColMajor, CblasNoTrans, CblasNoTrans, nRows, nRows, nRows,
-			1., Q,nRows, Z.data(),nRows, 0., VR,nRows);
-		
-		//Left eigenvector calculation:
-		Z.assign(nRows*nRows, 0.);
-		for(int ki=0; ki<nRows; ki++)
-		{	bool complexPair = (ki+1<nRows) and (T[(ki+1)+ki*nRows]!=0.);
-			int kiBlockSize = complexPair ? 2  : 1; //current block size in ki
-			int kiStop = ki + kiBlockSize-1; //end of current block in ki
-			double* rhs = &Z[ki*nRows]; //initialized to zero above
-			//Get the eigenvalue:
-			double wr = T[ki+ki*nRows];
-			double mwi = 0., tU = 0., tL = 0.;
-			if(complexPair)
-			{	tU = T[ki+kiStop*nRows];
-				tL = T[kiStop+ki*nRows];
-				mwi = -sqrt(fabs(tU)) * sqrt(fabs(tL)); //written like this to avoid over/under-flow
-			}
-			double sMin = std::max(prec*(fabs(wr)+fabs(mwi)), sNum); //small number threshold for this eigenvector (pair)
-			//Construct RHS:
-			if(complexPair)
-			{	if(fabs(tU) > fabs(tL))
-				{	rhs[ki] = -mwi/tU;
-					rhs[kiStop+nRows] = 1.;
-				}
-				else
-				{	rhs[ki] = 1.;
-					rhs[kiStop+nRows] = mwi/tL;
-				}
-			}
-			else rhs[ki] = 1.;
-			for(int k=kiStop+1; k<nRows; k++)
-				for(int bk=0; bk<kiBlockSize; bk++)
-					rhs[k+bk*nRows] = -rhs[ki+bk+bk*nRows] * T[(ki+bk)+k*nRows];
-			//Solve quasi-triangular system (T(kiStop+1:,kiStop+1:) - (wr-i*wi))*x = rhs
-			double vCrit = bNum, vMax = 1.; //for scaling
-			for(int j=kiStop+1; j<nRows; j++)
-			{	int jBlockSize = ((j+1<nRows) and (T[(j+1)+j*nRows]!=0.)) ? 2 : 1; //current block size in j
-				int jStop = j+jBlockSize-1; //end of current block in j
-				//Scale to avoid overflow when forming RHS elements if needed:
-				if(std::max(tNorm[j],tNorm[jStop]) > vCrit)
-				{	double scaleFac = 1./vMax;
-					for(int bk=0; bk<kiBlockSize; bk++)
-						cblas_dscal(nRows-ki, scaleFac, rhs+ki+bk*nRows,1);
-					vMax = 1.;
-					vCrit = bNum;
-				}
-				//Form RHS elements:
-				for(int bk=0; bk<kiBlockSize; bk++)
-					for(int bj=0; bj<jBlockSize; bj++)
-						rhs[j+bj+bk*nRows] -= cblas_ddot(j-kiStop-1, T+(kiStop+1)+(j+bj)*nRows,1, rhs+(kiStop+1)+bk*nRows,1);
-				//Solve kiBlockSize x jBlockSize complex equation to get x:
-				dlaln2_((jBlockSize==2 ? &isTrans : &notTrans),
-					&jBlockSize, &kiBlockSize, &sMin, &oneD,
-					T+j+j*nRows, &nRows, &oneD, &oneD, 
-					rhs+j, &nRows, &wr, &mwi, x, &two,
-					&scale, &xNorm, &info);
-				//Scale if necessary:
-				if(scale != 1.)
-				{	for(int bk=0; bk<kiBlockSize; bk++)
-						cblas_dscal(nRows-ki, scale, rhs+ki+bk*nRows,1);
-				}
-				//Update solution:
-				for(int bk=0; bk<kiBlockSize; bk++)
-					for(int bj=0; bj<jBlockSize; bj++)
-					{	rhs[(j+bj)+bk*nRows] = x[bj+2*bk];
-						vMax = std::max(vMax, x[bj+2*bk]);
-					}
-				vCrit = bNum / vMax;
-				j = jStop;
-			}
-			//Scale max entry to 1:
-			double rhsMax = rhs[cblas_idamax(kiBlockSize*nRows, rhs,1)];
-			cblas_dscal(kiBlockSize*nRows, 1./fabs(rhsMax), rhs,1);
-			ki = kiStop;
-		}
-		cblas_dgemm(CblasColMajor, CblasNoTrans, CblasNoTrans, nRows, nRows, nRows,
-			1., Q,nRows, Z.data(),nRows, 0., VL,nRows);
-	}
+	std::shared_ptr<BlockCyclicMatrix> bcm;
 	#endif
 	
 	//--------- Initialize -------------
 	PetscErrorCode initialize(string inFile)
-	{	static StopWatch watchHess("Hessenberg reduction"), watchSchur("Schur decomposition");
-		
+	{
 		//Read header and check parameters:
 		MPIUtil::File fp;
 		mpiWorld->fopenRead(fp, inFile.c_str());
@@ -556,6 +298,9 @@ struct LindbladLinear : public Integrator<DM1>
 		nInnerAll.resize(nk);
 		
 		//Read k-point info and initialize states:
+		
+	if((not spectrumMode) or sparseDiag) { //HACK
+		
 		mpiWorld->fseek(fp, byteOffsets[ikStart], SEEK_SET);
 		for(size_t ikMine=0; ikMine<nkMine; ikMine++)
 		{	State& s = state[ikMine];
@@ -587,6 +332,9 @@ struct LindbladLinear : public Integrator<DM1>
 			for(int b=0; b<s.nInner; b++)
 				s.rho0[b] = fermi((s.E[b+s.innerStart]-dmu)*invT);
 		}
+		
+	} //HACK
+		
 		mpiWorld->fclose(fp);
 		
 		//Synchronize energy range:
@@ -641,6 +389,9 @@ struct LindbladLinear : public Integrator<DM1>
 			}
 			//Collect matrix elements in triplet format:
 			std::vector<Triplet> evolveEntries;
+		
+		if((not spectrumMode) or sparseDiag) { //HACK
+		
 			State* sPtr = state.data();
 			logPrintf("Initialing time evolution operator ... "); logFlush();
 			for(size_t ik1=ikStart; ik1<ikStop; ik1++)
@@ -747,153 +498,47 @@ struct LindbladLinear : public Integrator<DM1>
 					#undef EXTRACT_NNZ
 				}
 			}
-			logPrintf("done.\n");
+			logPrintf("done.\n"); 
+			
+		} //HACK
+			
 			//Convert from triplet to appropriate format:
 			if(spectrumMode and (not sparseDiag))
 			{	//Convert to dense matrix for ScaLAPACK:
-				
 				#ifdef SCALAPACK_ENABLED
-				
-				//Calculate squarest possible process grid:
-				int nProcesses = mpiWorld->nProcesses();
-				nProcsRow = int(round(sqrt(nProcesses)));
-				while(nProcesses % nProcsRow) nProcsRow--;
-				nProcsCol = nProcesses / nProcsRow;
-
-				//Initialize BLACS process grid:
-				int blacsContext;
-				{	int unused=-1, what=0;
-					blacs_get_(&unused, &what, &blacsContext);
-					blacs_gridinit_(&blacsContext, "Row-major", &nProcsRow, &nProcsCol);
-					blacs_gridinfo_(&blacsContext, &nProcsRow, &nProcsCol, &iProcRow, &iProcCol);
-					assert(mpiWorld->iProcess() == iProcRow * nProcsCol + iProcCol); //this mapping is assumed below, so check
-				}
-				logPrintf("Initialized %d x %d process BLACS grid.\n", nProcsRow, nProcsCol);
-				
-				//Initialize matrix distribution:
-				nRows = 12; //HACK rhoSizeTot; //matrix dimension
-				logPrintf("Setting up ScaLAPACK matrix with dimension %d\n", nRows); logFlush();
-				if(nRows <= blockSize * (std::max(nProcsRow, nProcsCol) - 1))
-					die("No data on some processes: reduce blockSize or # processes.\n");
-				iRowsMine = distributedIndices(nRows, blockSize, iProcRow, nProcsRow); //indices of rows on current process
-				iColsMine = distributedIndices(nRows, blockSize, iProcCol, nProcsCol); //indices of cols on current process
-				nRowsMine = iRowsMine.size();
-				nColsMine = iColsMine.size();
-				int desc[9];
-				{	int zero=0, info;
-					descinit_(desc, &nRows, &nRows, &blockSize, &blockSize, &zero, &zero, &blacsContext, &nRowsMine, &info); assert(info==0);
-				}
+				const int nRows = 12; //HACK rhoSizeTot
+				bcm = std::make_shared<BlockCyclicMatrix>(nRows, blockSize, mpiWorld);
 				
 				//############ HACK ########################
 				//Read test matrix:
-				std::vector<double> H = readMatrix("testMatrix.bin");
-				std::vector<double> ULref = readMatrix("testMatrix.UL.bin");
-				std::vector<double> URref = readMatrix("testMatrix.UR.bin");
+				BlockCyclicMatrix::Buffer H = bcm->readMatrix("testMatrix.bin");
+				BlockCyclicMatrix::Buffer VLref = bcm->readMatrix("testMatrix.VL.bin");
+				BlockCyclicMatrix::Buffer VRref = bcm->readMatrix("testMatrix.VR.bin");
 				
 				//Balance matrix:
-				char job = 'B';
-				int iLo = 1, iHi = nRows, info = 0;
-				diagMatrix scale(nRows, 1.);
-				/*
-				logPrintf("Balancing matrix ... "); logFlush();
-				pdgebal_(&job, &nRows, H, desc, &iLo, &iHi, scale.data(), &info);
-				if(info < 0) die("Error in argument# %d to pdlahqr.\n", -info);
-				logPrintf("done.\n");
-				*/
-				logPrintf("Scale factors:"); scale.print(globalLog, " %lg");
-				logPrintf("iLo: %d  iHi: %d\n", iLo, iHi);
+				int iLo, iHi; BlockCyclicMatrix::Buffer scale;
+				bcm->balance(H, iLo, iHi, scale, false, false);
 				
 				//Hessenberg reduction:
-				int lwork = -1, one = 1;
-				std::vector<double> work(1), scaleFactors(nColsMine);
-				logPrintf("Hessenberg reduction ... "); logFlush();
-				watchHess.start();
-				for(int pass=0; pass<2; pass++) //first pass is workspace query, next pass is actual calculation
-				{	pdgehrd_(&nRows, &iLo, &iHi, H.data(), &one, &one, desc, scaleFactors.data(), work.data(), &lwork, &info);
-					if(info < 0)
-					{	int errCode = -info;
-						if(errCode < 100) die("Error in argument# %d to pdgehrd.\n", errCode)
-						else die("Error in entry %d of argument# %d to pdgehrd.\n", errCode%100, errCode/100)
-					}
-					if(pass) break; //done
-					//After first-pass, use results of work-space query to allocate:
-					lwork = int(work.data()[0]);
-					work.resize(lwork);
-				}
-				logPrintf("done.\n");
-				
-				//Get orthogonal matrix correspnding to Householder transformations:
-				std::vector<double> Q(H.size());
-				//--- initialize to identity:
-				double* Qptr = Q.data();
-				for(int iCol: iColsMine)
-					for(int iRow: iRowsMine)
-						*(Qptr++) = (iRow==iCol ? 1. : 0.);
-				work[0] = 0; lwork = -1; //for workspace query
-				logPrintf("Extracting rotations ... "); logFlush();
-				watchHess.start();
-				for(int pass=0; pass<2; pass++) //first pass is workspace query, next pass is actual calculation
-				{	char side = 'L'; //irrelevant since we are multiplying by identity
-					char trans = 'N'; //construct Q
-					pdormhr_(&side, &trans, &nRows, &nRows, &iLo, &iHi, H.data(), &one, &one, desc,
-						scaleFactors.data(), Q.data(), &one, &one, desc, work.data(), &lwork, &info);
-					if(info < 0)
-					{	int errCode = -info;
-						if(errCode < 100) die("Error in argument# %d to pdormhr.\n", errCode)
-						else die("Error in entry %d of argument# %d to pdormhr.\n", errCode%100, errCode/100)
-					}
-					if(pass) break; //done
-					//After first-pass, use results of work-space query to allocate:
-					lwork = int(work.data()[0]);
-					work.resize(lwork);
-				}
-				logPrintf("done.\n");
-				//--- set H to strict upper Hessenberg form:
-				double* Hdata = H.data();
-				for(int iCol: iColsMine)
-					for(int iRow: iRowsMine)
-					{	if(iRow > iCol+1) *Hdata = 0.;
-						Hdata++;
-					}
-				watchHess.stop();
+				BlockCyclicMatrix::Buffer Q;
+				bcm->hessenberg(H, iLo, iHi, Q);
 				
 				//Schur decomposition and eigenvalues:
-				job = 'T'; //Eigenvalues and Schur form
-				char compz = 'V'; //Schur vectors transformed using Q calculated above
-				std::vector<double> wr(nRows), wi(nRows); //real and imaginary parts of eigenvalues
-				work[0] = 0; lwork = -1; //for workspace query
-				std::vector<int> iwork(1); int liwork = -1; //for workspace query
-				logPrintf("Schur decomposition ... "); logFlush();
-				watchSchur.start();
-				for(int pass=0; pass<2; pass++) //first pass is workspace query, next pass is actual calculation
-				{	pdhseqr_(&job, &compz, &nRows, &iLo, &iHi, H.data(), desc, wr.data(), wi.data(),
-						Q.data(), desc, work.data(), &lwork, iwork.data(), &liwork, &info);
-					if(info < 0)
-					{	int errCode = -info;
-						if(errCode < 100) die("Error in argument# %d to pdhseqr.\n", errCode)
-						else die("Error in entry %d of argument# %d to pdhseqr.\n", errCode%100, errCode/100)
-					}
-					if(info > 0) die("Up to %d eigenvalues failed to converge.\n", info);
-					if(pass) break; //done
-					//After first-pass, use results of work-space query to allocate:
-					lwork = int(work.data()[0]); work.resize(lwork);
-					liwork = int(iwork.data()[0]); iwork.resize(liwork);
-				}
-				logPrintf("done.\n");
-				watchSchur.stop();
+				std::vector<complex> evals;
+				bcm->schur(H, iLo, iHi, Q, evals);
 				
 				//Compute eigenvectors:
-				std::vector<double> QL(nRows*nRows), QR(nRows*nRows);
-				computeEigenvectors(nRows, H.data(), Q.data(), QL.data(), QR.data());
+				BlockCyclicMatrix::Buffer VL, VR;
+				bcm->getEvecs(H, Q, VL, VR);
 				
 				//Fix normalization of eigenvectors:
-				std::vector<double*> QdataArr(2);
-				QdataArr[0] = QL.data();
-				QdataArr[1] = QR.data();
-				for(double* Qdata: QdataArr)
+				std::vector<double*> VdataArr(2);
+				VdataArr[0] = VL.data();
+				VdataArr[1] = VR.data();
+				for(double* Vdata: VdataArr)
 				{	for(int iCol=0; iCol<nRows; iCol++)
-					{	double* Qcur = Qdata + iCol*nRows;
-						if(wi[iCol]) //complex eigenvector pair
+					{	double* Qcur = Vdata + iCol*nRows;
+						if(evals[iCol].imag()) //complex eigenvector pair
 						{	double* Qnext = Qcur + nRows;
 							//Determine max entry:
 							int iMaxAbs = -1; double maxAbs = 0.;
@@ -933,30 +578,19 @@ struct LindbladLinear : public Integrator<DM1>
 				
 				
 				//Check decomposition by multiplying:
-				{	std::vector<double> QLTQR(H.size(), 0.);
-					char trans = 'T', noTrans = 'N';
-					double alpha = 1., beta = 0.;
-					//QLTQR = QL^T * QR
-					pdgemm_(&trans, &noTrans, &nRows, &nRows, &nRows, &alpha,
-						QL.data(), &one, &one, desc,
-						QR.data(), &one, &one, desc, &beta,
-						QLTQR.data(), &one, &one, desc);
-					printMatrix(QLTQR, "QL^T * QR");
+				{	BlockCyclicMatrix::Buffer VLTVR;
+					bcm->matMult(1., VL,true, VR,false, 0., VLTVR);
+					bcm->printMatrix(VLTVR, "VL^T * VR");
 				}
-				printMatrix(QL, "QL");
-				printMatrix(QR, "QR");
-				
-				//Sorting order for eigenvalues:
-				std::vector<size_t> sortIndex(nRows);
-				for(int i=0; i<nRows; i++) sortIndex[i] = i; //original order
-				//std::sort(sortIndex.begin(), sortIndex.end(), IndexCompare<std::vector<double>>(wr)); //optionally sort
+				bcm->printMatrix(VL, "VL");
+				bcm->printMatrix(VR, "VR");
 				
 				//Print eigenvalues:
 				logPrintf("\nEigenvalues:\n");
-				for(size_t i: sortIndex)
-					logPrintf("\t%11.8lf%+11.8lfj\n", wr[i], wi[i]);
+				for(complex eval: evals)
+					logPrintf("\t%11.8lf%+11.8lfj\n", eval.real(), eval.imag());
 				
-				logPrintf("Eigenvector errors: %le left, %le right\n", matrixErr(QL,ULref), matrixErr(QR,URref));
+				logPrintf("Eigenvector errors: %le left, %le right\n", bcm->matrixErr(VL,VLref), bcm->matrixErr(VR,VRref));
 				//############ HACK ########################
 				#endif
 			}
