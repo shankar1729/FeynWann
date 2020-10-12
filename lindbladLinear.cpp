@@ -578,11 +578,11 @@ struct LindbladLinear : public Integrator<DM1>
 				}
 				
 				//Check decomposition by multiplying:
-				/* {	BlockCyclicMatrix::Buffer VLTVR;
+				{	BlockCyclicMatrix::Buffer VLTVR;
 					bcm->matMult(1., VL,true, VR,false, 0., VLTVR);
 					bcm->printMatrix(VLTVR, "VL^T * VR");
 				}
-				bcm->printMatrix(VL, "VL");*/
+				bcm->printMatrix(VL, "VL");
 				bcm->printMatrix(VR, "VR");
 				
 				//Print eigenvalues:
