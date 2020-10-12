@@ -515,21 +515,11 @@ struct LindbladLinear : public Integrator<DM1>
 				BlockCyclicMatrix::Buffer VLref = bcm->readMatrix("testMatrix.VL.bin");
 				BlockCyclicMatrix::Buffer VRref = bcm->readMatrix("testMatrix.VR.bin");
 				
-				//Balance matrix:
-				int iLo, iHi; BlockCyclicMatrix::Buffer scale;
-				bcm->balance(H, iLo, iHi, scale, false, false);
 				
-				//Hessenberg reduction:
-				BlockCyclicMatrix::Buffer Q;
-				bcm->hessenberg(H, iLo, iHi, Q);
-				
-				//Schur decomposition and eigenvalues:
-				std::vector<complex> evals;
-				bcm->schur(H, iLo, iHi, Q, evals);
-				
-				//Compute eigenvectors:
-				BlockCyclicMatrix::Buffer VL, VR;
-				bcm->getEvecs(H, Q, VL, VR);
+				BlockCyclicMatrix::Buffer scale = bcm->balance(H); //Balance matrix
+				BlockCyclicMatrix::Buffer Q = bcm->hessenberg(H); //Hessenberg reduction
+				std::vector<complex> evals = bcm->schur(H, Q); //Schur decomposition and eigenvalues
+				BlockCyclicMatrix::Buffer VL, VR; bcm->getEvecs(H, Q, VL, VR, &scale); //Get eigenvectors
 				
 				//Fix normalization of eigenvectors:
 				std::vector<double*> VdataArr(2);

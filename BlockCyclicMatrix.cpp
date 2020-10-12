@@ -104,27 +104,33 @@ void BlockCyclicMatrix::printMatrix(const Buffer& mat, const char* name) const
 }
 
 
-void BlockCyclicMatrix::balance(Buffer& A, int& iLo, int& iHi, Buffer& scaleFactors, bool shouldPermute, bool shouldScale) const
+BlockCyclicMatrix::Buffer BlockCyclicMatrix::balance(Buffer& A) const
 {	static StopWatch watch("BlockCyclicMatrix::balance"); watch.start();
 	assert(A.size()==nDataMine); 
-	iLo = 1; iHi = N;
-	scaleFactors.assign(N, 1.);
+	int iLo = 1, iHi = N;
+	Buffer scaleFactors(N, 1.);
 	logPrintf("Balancing matrix ... "); logFlush();
-	char job = shouldPermute ? (shouldScale ? 'B' : 'P') : (shouldScale ? 'S' : 'N');
+	char job = 'S'; //Scale only (no permutations)
 	int info = 0;
 	pdgebal_(&job, &N, A.data(), desc, &iLo, &iHi, scaleFactors.data(), &info);
 	if(info < 0) die("Error in argument# %d to pdgebal.\n", -info);
-	logPrintf("done.\n");
-	logPrintf("Scale factors:"); for(double& s: scaleFactors) logPrintf(" %lg", s); logPrintf("\n");
-	logPrintf("iLo: %d  iHi: %d\n", iLo, iHi);
+	//Report range of scale factors:
+	double scaleMin = +DBL_MAX, scaleMax = -DBL_MAX;
+	for(const double s: scaleFactors)
+	{	scaleMin = std::min(s, scaleMin);
+		scaleMax = std::max(s, scaleMax);
+	}
+	logPrintf("done. Scale factor range: [ %lg , %lg ]\n", scaleMin, scaleMax);
 	watch.stop();
+	return scaleFactors;
 }
 
-void BlockCyclicMatrix::hessenberg(Buffer& H, int iLo, int iHi, Buffer& Q) const
+BlockCyclicMatrix::Buffer BlockCyclicMatrix::hessenberg(Buffer& H) const
 {	static StopWatch watch("BlockCyclicMatrix::hessenberg"); watch.start();
-	assert(H.size()==nDataMine); //Q is resized as needed
+	assert(H.size()==nDataMine);
 	
 	//Hessenberg reduction by Householder transformations:
+	int iLo = 1, iHi = N;
 	int lwork = -1, one = 1, info = 0;
 	Buffer work(1), tau(nColsMine);
 	logPrintf("Hessenberg reduction ... "); logFlush();
@@ -144,7 +150,7 @@ void BlockCyclicMatrix::hessenberg(Buffer& H, int iLo, int iHi, Buffer& Q) const
 	
 	//Get orthogonal matrix correspnding to Householder transformations:
 	//--- initialize Q to identity:
-	Q.resize(nDataMine);
+	Buffer Q(nDataMine);
 	double* Qptr = Q.data();
 	for(int iCol: iColsMine)
 		for(int iRow: iRowsMine)
@@ -176,16 +182,18 @@ void BlockCyclicMatrix::hessenberg(Buffer& H, int iLo, int iHi, Buffer& Q) const
 			Hdata++;
 		}
 	watch.stop();
+	return Q;
 }
 
 
 //Schur decomposition and eigenvalues:
-void BlockCyclicMatrix::schur(Buffer& H, int iLo, int iHi, Buffer& Q, std::vector<complex>& evals) const
+std::vector<complex> BlockCyclicMatrix::schur(Buffer& H, Buffer& Q) const
 {	static StopWatch watch("BlockCyclicMatrix::schur"); watch.start();
 	assert(H.size()==nDataMine);
 	assert(Q.size()==nDataMine);
 	char job = 'T'; //Eigenvalues and Schur form
 	char compz = 'V'; //Schur vectors transformed using Q provided at input
+	int iLo = 1, iHi = N;
 	Buffer wr(N), wi(N); //real and imaginary parts of eigenvalues
 	Buffer work(1); int lwork = -1, info = 0; //for workspace query
 	std::vector<int> iwork(1); int liwork = -1; //for workspace query
@@ -207,19 +215,19 @@ void BlockCyclicMatrix::schur(Buffer& H, int iLo, int iHi, Buffer& Q, std::vecto
 	logPrintf("done.\n");
 	watch.stop();
 	//Collect eigenvalues into complex array:
-	evals.resize(N);
+	std::vector<complex> evals(N);
 	for(int i=0; i<N; i++)
 		evals[i] = complex(wr[i], wi[i]);
+	return evals;
 }
 
-void BlockCyclicMatrix::getEvecs(const Buffer& T, const Buffer& Q, Buffer& VL, Buffer& VR) const
+void BlockCyclicMatrix::getEvecs(const Buffer& T, const Buffer& Q, Buffer& VL, Buffer& VR, Buffer* scaleFactors) const
 {	static StopWatch watch("BlockCyclicMatrix::eigenvectors"); watch.start();
 	
 	if(mpiUtil->nProcesses() > 1) die("Parallelization not yet implemented.\n");
 	assert(T.size()==nDataMine);
 	assert(Q.size()==nDataMine);
-	VL.resize(nDataMine);
-	VR.resize(nDataMine);
+	if(scaleFactors) assert(int(scaleFactors->size())==N);
 	
 	//Underflow/overflow and precision constants:
 	double uFlow = dlamch_("Safe minimum");
@@ -303,8 +311,24 @@ void BlockCyclicMatrix::getEvecs(const Buffer& T, const Buffer& Q, Buffer& VL, B
 		cblas_dscal(kiBlockSize*N, 1./fabs(rhsMax), rhs,1);
 		ki = kiStart;
 	}
-	cblas_dgemm(CblasColMajor, CblasNoTrans, CblasNoTrans, N, N, N,
-		1., Q.data(),N, Z.data(),N, 0., VR.data(),N);
+	//--- multiply by Q
+	matMult(1., Q,false, Z,false, 0.,VR);
+	//--- account for scaleFactors if necessary:
+	Buffer scaleMine, scaleMineInv;
+	if(scaleFactors)
+	{	scaleMine.reserve(nRowsMine);
+		scaleMineInv.reserve(nRowsMine);
+		for(int iRow: iRowsMine)
+		{	double s = scaleFactors->at(iRow);
+			scaleMine.push_back(s);
+			scaleMineInv.push_back(1./s);
+		}
+		//Apply scale factors:
+		double* VRdata = VR.data();
+		for(int iColMine=0; iColMine<nColsMine; iColMine++)
+			for(int iRowMine=0; iRowMine<nRowsMine; iRowMine++)
+				*(VRdata++) *= scaleMine[iRowMine];
+	}
 	
 	//Left eigenvector calculation:
 	Z.assign(N*N, 0.);
@@ -379,12 +403,19 @@ void BlockCyclicMatrix::getEvecs(const Buffer& T, const Buffer& Q, Buffer& VL, B
 		cblas_dscal(kiBlockSize*N, 1./fabs(rhsMax), rhs,1);
 		ki = kiStop;
 	}
-	cblas_dgemm(CblasColMajor, CblasNoTrans, CblasNoTrans, N, N, N,
-		1., Q.data(),N, Z.data(),N, 0., VL.data(),N);
+	//--- multiply by Q
+	matMult(1., Q,false, Z,false, 0.,VL);
+	//--- account for scaleFactors if necessary:
+	if(scaleFactors)
+	{	double* VLdata = VL.data();
+		for(int iColMine=0; iColMine<nColsMine; iColMine++)
+			for(int iRowMine=0; iRowMine<nRowsMine; iRowMine++)
+				*(VLdata++) *= scaleMineInv[iRowMine];
+	}
 	watch.stop();
 }
 
-void BlockCyclicMatrix::matMult(double alpha, const Buffer& A, bool transA, const Buffer& B, bool transB, double beta, Buffer& C)
+void BlockCyclicMatrix::matMult(double alpha, const Buffer& A, bool transA, const Buffer& B, bool transB, double beta, Buffer& C) const
 {	static StopWatch watch("BlockCyclicMatrix::matMult"); watch.start();
 	assert(A.size()==nDataMine);
 	assert(B.size()==nDataMine);

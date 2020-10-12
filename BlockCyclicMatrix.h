@@ -44,28 +44,26 @@ public:
 	
 	//---- Diagonalization and helper routines ----
 	
-	//! Balance a matrix A by permuting (if shouldPermute) and scaling (if shouldScale)
-	//! The range of zero'd entries by scaling / permuting is determined by iLo and iHi,
-	//! and the scale factors are set in scaleFactors.
-	//! If no permutation and scale are requested, A is untouched and iLo, iHi and scaleFactors are initialized to defaults
-	void balance(Buffer& A, int& iLo, int& iHi, Buffer& scaleFactors, bool shouldPermute, bool shouldScale) const;
+	//! Balance a matrix A by row/column scaling and return scale factors
+	Buffer balance(Buffer& A) const;
 	
-	//! Hessenberg reduction of a matrix H in place, with corresponding rotations extracted in Q (Hin = Q Hout Q^T)
-	void hessenberg(Buffer& H, int iLo, int iHi, Buffer& Q) const;
+	//! Hessenberg reduction of a matrix H in place, and return rotations Q (Hin = Q Hout Q^T)
+	Buffer hessenberg(Buffer& H) const;
 	
-	//! Schur decomposition of a Hessenberg matrix H in place, and get eigenvalues in evals
+	//! Schur decomposition of a Hessenberg matrix H in place, and return eigenvalues
 	//! At exit, H is replaced with a quasi-upper triangular matrix T
 	//! and the rotations Q are updated such that A = Q T Q^T,
 	//! where A = Q H Q^T is the original matrix that was converted to Hessenberg form.
-	void schur(Buffer& H, int iLo, int iHi, Buffer& Q, std::vector<complex>& evals) const;
+	std::vector<complex> schur(Buffer& H, Buffer& Q) const;
 	
 	//! Compute left and right eigenvectors given Shur decomposition of a non-symmetric matrix (equivalent to LAPACK dtrevc)
 	//! Input: upper quasi-triangular matrix T and orthogonal matrix Q, such that matrix A = Q T Q^T
 	//! Output: left and right eigenvectors of A in VL and VR
-	void getEvecs(const Buffer& T, const Buffer& Q, Buffer& VL, Buffer& VR) const;
+	//! Optionally correct the eigenvectors for scale factors used to balance A is scaleFactors is non-null
+	void getEvecs(const Buffer& T, const Buffer& Q, Buffer& VL, Buffer& VR, Buffer* scaleFactors=0) const;
 	
 	//! C = beta C + alpha op(A) * op(B), where op = identity or transpose depending on transA and transB
-	void matMult(double alpha, const Buffer& A, bool transA, const Buffer& B, bool transB, double beta, Buffer& C);
+	void matMult(double alpha, const Buffer& A, bool transA, const Buffer& B, bool transB, double beta, Buffer& C) const;
 
 	//---- I/O and debugging ----
 	Buffer readMatrix(string fname) const; //!< Read dense matrix from file
