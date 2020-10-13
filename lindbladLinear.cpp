@@ -514,69 +514,6 @@ struct LindbladLinear : public Integrator<DM1>
 				std::vector<int> evalSort = bcm->sortEvals(evals); //Sort eigenvalues
 				BlockCyclicMatrix::Buffer VL, VR; bcm->getEvecs(H, Q, VL, VR, &scale, &evalSort); //Get eigenvectors
 				
-				//Fix normalization of eigenvectors:
-				std::vector<double*> VdataArr(2);
-				VdataArr[0] = VL.data();
-				VdataArr[1] = VR.data();
-				for(double* Vdata: VdataArr)
-				{	for(int iCol=0; iCol<nRows; iCol++)
-					{	bool complexPair = (evals[iCol].imag()!=0.);
-						int iBlockSize = complexPair ? 2 : 1;
-						int iColStop = iCol+iBlockSize-1;
-						//Fetch entire eigenvector on all processes:
-						std::vector<double> Qcur(iBlockSize*nRows);
-						for(int j=iCol; j<=iColStop; j++)
-						{	int iColMine = bcm->localColIndex(j);
-							if(iColMine >= 0)
-								for(int iRowMine=0; iRowMine<bcm->nRowsMine; iRowMine++)
-									Qcur[bcm->iRowsMine[iRowMine]+(j-iCol)*nRows] = Vdata[iRowMine+iColMine*bcm->nRowsMine];
-						}
-						mpiWorld->allReduceData(Qcur, MPIUtil::ReduceSum);
-						//Apply scaling:
-						if(complexPair)
-						{	//Determine max entry:
-							int iMaxAbs = -1; double maxAbs = 0.;
-							for(int iRow=0; iRow<nRows; iRow++)
-							{	double absCur = complex(Qcur[iRow], Qcur[iRow+nRows]).abs();
-								if(absCur > maxAbs)
-								{	maxAbs = absCur;
-									iMaxAbs = iRow;
-								}
-							}
-							//Make max abs entry = 1:
-							complex scaleFac = complex(1.,0)/complex(Qcur[iMaxAbs], Qcur[iMaxAbs+nRows]);
-							for(int iRow=0; iRow<nRows; iRow++)
-							{	complex scaled = scaleFac * complex(Qcur[iRow], Qcur[iRow+nRows]);
-								Qcur[iRow] = scaled.real();
-								Qcur[iRow+nRows] = scaled.imag();
-							}
-						}
-						else
-						{	//Determine max entry:
-							int iMaxAbs = -1; double maxAbs = 0.;
-							for(int iRow=0; iRow<nRows; iRow++)
-							{	double absCur = fabs(Qcur[iRow]);
-								if(absCur > maxAbs)
-								{	maxAbs = absCur;
-									iMaxAbs = iRow;
-								}
-							}
-							//Make max abs entry = 1:
-							double scaleFac = 1./Qcur[iMaxAbs];
-							for(int iRow=0; iRow<nRows; iRow++)
-								Qcur[iRow] *= scaleFac;
-						}
-						//Set relevant pieces of eigenvector back:
-						for(int j=iCol; j<=iColStop; j++)
-						{	int iColMine = bcm->localColIndex(j);
-							if(iColMine >= 0)
-								for(int iRowMine=0; iRowMine<bcm->nRowsMine; iRowMine++)
-									Vdata[iRowMine+iColMine*bcm->nRowsMine] = Qcur[bcm->iRowsMine[iRowMine]+(j-iCol)*nRows];
-						}
-						iCol = iColStop;
-					}
-				}
-				
 				//Check decomposition by multiplying:
 				{	BlockCyclicMatrix::Buffer VLTVR;
 					bcm->matMult(1., VL,true, VR,false, 0., VLTVR);

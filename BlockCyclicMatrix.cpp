@@ -6,6 +6,13 @@
 #include <mkl_scalapack.h>
 #include <mkl_lapack.h>
 
+inline complex sqrt(const complex& c)
+{	double cAbs = c.abs();
+	double x = sqrt(0.5*(cAbs+c.real())); //always positive => -infty branch cut on c
+	double y = copysign(sqrt(0.5*(cAbs-c.real())), c.imag());
+	return complex(x, y);
+}
+
 //Return list of indices in a given dimension (row or column) that belong to me in block-cyclic distribution
 std::vector<int> distributedIndices(int nTotal, int blockSize, int iProcDim, int nProcsDim)
 {	int zero = 0;
@@ -494,6 +501,88 @@ void BlockCyclicMatrix::getEvecs(const Buffer& T, const Buffer& Q, Buffer& VL, B
 		for(int iColMine=0; iColMine<nColsMine; iColMine++)
 			for(int iRowMine=0; iRowMine<nRowsMine; iRowMine++)
 				*(VLdata++) *= scaleMineInv[iRowMine];
+	}
+	
+	//Fix normalization of eigenvectors:
+	Z.clear(); tDiag.clear(); tDiagU.clear(); //only keep tDiagL to test real/complex eval below; free rest
+	for(int ki=0; ki<N; ki++)
+	{	int kiOrig = evalSort ? evalSort->at(ki) : ki; //only for e-val lookup in next line
+		bool complexPair = (ki+1<N) and (tDiagL[kiOrig]!=0.);
+		int kiBlockSize = complexPair ? 2 : 1;
+		int kiStop = ki+kiBlockSize-1;
+		//Fetch entire right and left eigenvector (pair) on all processes:
+		Buffer VRcur(kiBlockSize*N), VLcur(kiBlockSize*N);
+		for(int bk=0; bk<kiBlockSize; bk++)
+		{	int iColMine = localColIndex(ki+bk);
+			if(iColMine >= 0)
+				for(int iRowMine=0; iRowMine<nRowsMine; iRowMine++)
+				{	int iRow = iRowsMine[iRowMine];
+					int index = iRowMine+iColMine*nRowsMine;
+					VLcur[iRow+bk*N] = VL[index];
+					VRcur[iRow+bk*N] = VR[index];
+				}
+		}
+		mpiWorld->allReduceData(VRcur, MPIUtil::ReduceSum);
+		mpiWorld->allReduceData(VLcur, MPIUtil::ReduceSum);
+		//Apply scaling:
+		if(complexPair)
+		{	//Determine max entry of each and mutual dot product:
+			int iMaxNormR = -1; double maxNormR = 0.;
+			int iMaxNormL = -1; double maxNormL = 0.;
+			complex dotProduct = 0.;
+			for(int iRow=0; iRow<N; iRow++)
+			{	complex zR(VRcur[iRow], VRcur[iRow+N]); double normCurR = zR.norm();
+				complex zL(VLcur[iRow], VLcur[iRow+N]); double normCurL = zL.norm();
+				if(normCurR > maxNormR) { maxNormR = normCurR; iMaxNormR = iRow; }
+				if(normCurL > maxNormL) { maxNormL = normCurL; iMaxNormL = iRow; }
+				dotProduct += zL.conj()*zR;
+			}
+			//Make max abs entry = 1 first, and then apply complex phases to ensure dot(VL,VR) = id:
+			complex zRmax(VRcur[iMaxNormR], VRcur[iMaxNormR+N]);
+			complex zLmax(VLcur[iMaxNormL], VLcur[iMaxNormL+N]);
+			complex dotFac = sqrt(dotProduct / (zLmax.conj() * zRmax));
+			complex scaleFacR = complex(1.,0)/(zRmax * dotFac);
+			complex scaleFacL = complex(1.,0)/(zLmax * dotFac.conj());
+			for(int iRow=0; iRow<N; iRow++)
+			{	complex zR = scaleFacR * complex(VRcur[iRow], VRcur[iRow+N]);
+				complex zL = scaleFacL * complex(VLcur[iRow], VLcur[iRow+N]);
+				VRcur[iRow] = zR.real(); VRcur[iRow+N] = zR.imag();
+				VLcur[iRow] = zL.real(); VLcur[iRow+N] = zL.imag();
+			}
+		}
+		else
+		{	//Determine max entry:
+			int iMaxAbsR = -1; double maxAbsR = 0.;
+			int iMaxAbsL = -1; double maxAbsL = 0.;
+			double dotProduct = 0.;
+			for(int iRow=0; iRow<N; iRow++)
+			{	double absCurL = fabs(VLcur[iRow]); if(absCurL > maxAbsL) {	maxAbsL = absCurL; iMaxAbsL = iRow; }
+				double absCurR = fabs(VRcur[iRow]); if(absCurR > maxAbsR) {	maxAbsR = absCurR; iMaxAbsR = iRow; }
+				dotProduct += VLcur[iRow] * VRcur[iRow];
+			}
+			//Make max abs entry = 1, and then scale to ensure dot(VL,VR) = id:
+			double zRmax = VRcur[iMaxAbsR];
+			double zLmax = VLcur[iMaxAbsL];
+			double dotFac = sqrt(dotProduct / (zRmax * zLmax));
+			double scaleFacR = 1./(zRmax * dotFac);
+			double scaleFacL = 1./(zLmax * dotFac);
+			for(int iRow=0; iRow<N; iRow++)
+			{	VRcur[iRow] *= scaleFacR;
+				VLcur[iRow] *= scaleFacL;
+			}
+		}
+		//Set relevant pieces of eigenvector back:
+		for(int bk=0; bk<kiBlockSize; bk++)
+		{	int iColMine = localColIndex(ki+bk);
+			if(iColMine >= 0)
+				for(int iRowMine=0; iRowMine<nRowsMine; iRowMine++)
+				{	int iRow = iRowsMine[iRowMine];
+					int index = iRowMine+iColMine*nRowsMine;
+					VL[index] = VLcur[iRow+bk*N];
+					VR[index] = VRcur[iRow+bk*N];
+				}
+		}
+		ki = kiStop;
 	}
 	watch.stop();
 }
