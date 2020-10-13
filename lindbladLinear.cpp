@@ -507,12 +507,8 @@ struct LindbladLinear : public Integrator<DM1>
 				BlockCyclicMatrix::Buffer H = bcm->readMatrix("testMatrix.bin");
 				BlockCyclicMatrix::Buffer VLref = bcm->readMatrix("testMatrix.VL.bin");
 				BlockCyclicMatrix::Buffer VRref = bcm->readMatrix("testMatrix.VR.bin");
-				
-				BlockCyclicMatrix::Buffer scale = bcm->balance(H); //Balance matrix
-				BlockCyclicMatrix::Buffer Q = bcm->hessenberg(H); //Hessenberg reduction
-				std::vector<complex> evals = bcm->schur(H, Q); //Schur decomposition and eigenvalues
-				std::vector<int> evalSort = bcm->sortEvals(evals); //Sort eigenvalues
-				BlockCyclicMatrix::Buffer VL, VR; bcm->getEvecs(H, Q, VL, VR, &scale, &evalSort); //Get eigenvectors
+				BlockCyclicMatrix::Buffer VR, VL;
+				std::vector<complex> evals = bcm->diagonalize(H, VR, VL);
 				
 				//Check decomposition by multiplying:
 				{	BlockCyclicMatrix::Buffer VLTVR;
@@ -525,7 +521,7 @@ struct LindbladLinear : public Integrator<DM1>
 				//Print eigenvalues:
 				logPrintf("\nEigenvalues:\n");
 				for(int i=0; i<nRows; i++)
-				{	logPrintf("\t%11.8lf%+11.8lfj (original index: %d)\n", evals[i].real(), evals[i].imag(), evalSort[i]);
+				{	logPrintf("\t%11.8lf%+11.8lfj\n", evals[i].real(), evals[i].imag());
 				}
 				
 				logPrintf("Eigenvector errors: %le left, %le right\n", bcm->matrixErr(VL,VLref), bcm->matrixErr(VR,VRref));

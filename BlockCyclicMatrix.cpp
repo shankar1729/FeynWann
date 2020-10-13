@@ -110,6 +110,18 @@ void BlockCyclicMatrix::printMatrix(const Buffer& mat, const char* name) const
 	else mpiUtil->send(buf, 0, 0);
 }
 
+std::vector<complex> BlockCyclicMatrix::diagonalize(Buffer& A, Buffer& VR, Buffer& VL, bool shouldBalance, bool shouldSort) const
+{	BlockCyclicMatrix::Buffer scale; std::vector<int> evalSort; //optional scale factors and eigenvalue sorting
+	if(shouldBalance) scale = balance(A); //Balance matrix
+	BlockCyclicMatrix::Buffer Q = hessenberg(A); //Hessenberg reduction
+	std::vector<complex> evals = schur(A, Q); //Schur decomposition and eigenvalues
+	if(shouldSort) evalSort = sortEvals(evals); //Sort eigenvalues
+	getEvecs(A, Q, VR, VL,  //Get eigenvectors ...
+		shouldBalance ? &scale : NULL, //... accounting for scale factors if balanced above
+		shouldSort ? &evalSort : NULL); //... matching eigenvalue permutation if sorted above
+	return evals;
+}
+
 
 BlockCyclicMatrix::Buffer BlockCyclicMatrix::balance(Buffer& A) const
 {	static StopWatch watch("BlockCyclicMatrix::balance"); watch.start();
@@ -250,7 +262,7 @@ std::vector<int> BlockCyclicMatrix::sortEvals(std::vector<complex>& evals) const
 	return sortIndex;
 }
 
-void BlockCyclicMatrix::getEvecs(const Buffer& T, const Buffer& Q, Buffer& VL, Buffer& VR, const Buffer* scaleFactors, const std::vector<int>* evalSort) const
+void BlockCyclicMatrix::getEvecs(const Buffer& T, const Buffer& Q, Buffer& VR, Buffer& VL, const Buffer* scaleFactors, const std::vector<int>* evalSort) const
 {	static StopWatch watch("BlockCyclicMatrix::getEvecs"); watch.start();
 	assert(T.size()==nDataMine);
 	assert(Q.size()==nDataMine);
@@ -293,6 +305,7 @@ void BlockCyclicMatrix::getEvecs(const Buffer& T, const Buffer& Q, Buffer& VL, B
 	double x[4], xNorm, scale; //1x1 or 2x2 matrix used in dlanl2; its norm and scale factor
 	Buffer Z(nDataMine); //eigenvectors of T (multiplied by Q at the end)
 	//Right eigenvector calculation:
+	logPrintf("Computing right eigenvectors of Schur matrix ... "); logFlush();
 	for(int ki=N-1; ki>=0; ki--)
 	{	bool complexPair = ((ki>0) and (tDiagL[ki-1]!=0.));
 		int kiBlockSize = complexPair ? 2  : 1; //current block size in ki
@@ -379,6 +392,7 @@ void BlockCyclicMatrix::getEvecs(const Buffer& T, const Buffer& Q, Buffer& VL, B
 		}
 		ki = kiStart;
 	}
+	logPrintf("done.\nRotating right eigenvectors to original basis ... "); logFlush();
 	//--- multiply by Q
 	matMult(1., Q,false, Z,false, 0.,VR);
 	//--- account for scaleFactors if necessary:
@@ -397,8 +411,10 @@ void BlockCyclicMatrix::getEvecs(const Buffer& T, const Buffer& Q, Buffer& VL, B
 			for(int iRowMine=0; iRowMine<nRowsMine; iRowMine++)
 				*(VRdata++) *= scaleMine[iRowMine];
 	}
+	logPrintf("done.\n");
 	
 	//Left eigenvector calculation:
+	logPrintf("Computing right eigenvectors of Schur matrix ... "); logFlush();
 	for(int ki=0; ki<N; ki++)
 	{	bool complexPair = (ki+1<N) and (tDiagL[ki]!=0.);
 		int kiBlockSize = complexPair ? 2  : 1; //current block size in ki
@@ -493,6 +509,7 @@ void BlockCyclicMatrix::getEvecs(const Buffer& T, const Buffer& Q, Buffer& VL, B
 		}
 		ki = kiStop;
 	}
+	logPrintf("done.\nRotating left eigenvectors to original basis ... "); logFlush();
 	//--- multiply by Q
 	matMult(1., Q,false, Z,false, 0.,VL);
 	//--- account for scaleFactors if necessary:
@@ -502,8 +519,10 @@ void BlockCyclicMatrix::getEvecs(const Buffer& T, const Buffer& Q, Buffer& VL, B
 			for(int iRowMine=0; iRowMine<nRowsMine; iRowMine++)
 				*(VLdata++) *= scaleMineInv[iRowMine];
 	}
+	logPrintf("done.\n");
 	
 	//Fix normalization of eigenvectors:
+	logPrintf("Normalizing left - right eigenvectors mutually ... "); logFlush();
 	Z.clear(); tDiag.clear(); tDiagU.clear(); //only keep tDiagL to test real/complex eval below; free rest
 	for(int ki=0; ki<N; ki++)
 	{	int kiOrig = evalSort ? evalSort->at(ki) : ki; //only for e-val lookup in next line
@@ -584,6 +603,7 @@ void BlockCyclicMatrix::getEvecs(const Buffer& T, const Buffer& Q, Buffer& VL, B
 		}
 		ki = kiStop;
 	}
+	logPrintf("done.\n");
 	watch.stop();
 }
 
