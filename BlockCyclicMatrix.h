@@ -45,9 +45,8 @@ public:
 	
 	//---- Diagonalization and helper routines ----
 	
-	//! Diagonalize non-symmetric matrix A, returning eigenvalues and setting right and left eigenvectors in VR and VL
-	//! Balance the matrix for numerical stability if shouldBalance=true
-	//! and sort eigenvalues in ascending real part order if shouldSort=true
+	//! Diagonalize non-symmetric matrix A, returning eigenvalues and setting right and left eigenvectors in VR and VL.
+	//! Balance the matrix for numerical stability if shouldBalance=true.
 	//! Note that the matrix A is replaced by its quasi-triangular Schur form on output.
 	//! The eigenvectors VR and VL are distributed the same way as A, and contain
 	//! a single column for real eigenvalues and two consecutive columns of real
@@ -55,7 +54,7 @@ public:
 	//! The eigenvectors are normalized so that inv(VR) = dagger(VL), when interpreted as a complex matrix.
 	//! (Correspondingly, VL^T * VR is a scalar matrix with 1 on the diagonals for real eigenvectors
 	//! and 1/2 on the diagonals for the real and imaginary part columns of complex eigenvectors.)
-	std::vector<complex> diagonalize(Buffer& A, Buffer& VR, Buffer& VL, bool shouldBalance=true, bool shouldSort=true) const;
+	std::vector<complex> diagonalize(Buffer& A, Buffer& VR, Buffer& VL, bool shouldBalance=true) const;
 	
 	//! Calculate and report errors in the computed eigenvalue decomposition
 	void checkDiagonalization(const Buffer& A, const Buffer& VR, const Buffer& VL, const std::vector<complex>& E) const;
@@ -72,15 +71,12 @@ public:
 	//! where A = Q H Q^T is the original matrix that was converted to Hessenberg form.
 	std::vector<complex> schur(Buffer& H, Buffer& Q) const;
 	
-	//! Sort eigenvalues in ascending order of real part, and return sorting indices
-	std::vector<int> sortEvals(std::vector<complex>& evals) const;
-	
 	//! Compute right and left eigenvectors given Shur decomposition of a non-symmetric matrix (equivalent to LAPACK dtrevc)
 	//! Input: upper quasi-triangular matrix T and orthogonal matrix Q, such that matrix A = Q T Q^T
 	//! Output: right and left eigenvectors of A in VR and VL
 	//! Optionally correct the eigenvectors for scale factors used to balance A is scaleFactors is non-null
 	//! If evalSort is provided, sort eigenvectors to match the sorting of eigenvalues
-	void getEvecs(const Buffer& T, const Buffer& Q, Buffer& VR, Buffer& VL, const Buffer* scaleFactors=0, const std::vector<int>* evalSort=0) const;
+	void getEvecs(const Buffer& T, const Buffer& Q, Buffer& VR, Buffer& VL, const Buffer* scaleFactors=0) const;
 	
 	//! C = beta C + alpha op(A) * op(B), where op = identity or transpose depending on transA and transB
 	void matMult(double alpha, const Buffer& A, bool transA, const Buffer& B, bool transB, double beta, Buffer& C) const;

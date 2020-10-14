@@ -137,7 +137,7 @@ void BlockCyclicMatrix::testRandom(double fillFactor) const
 			*(Adata++) = (f < fillFactor) ? val : 0.;
 		}
 	Buffer Acopy(A); //run diagonalization on a destructible copy
-	std::vector<complex> E = diagonalize(Acopy, VR, VL, true, false);
+	std::vector<complex> E = diagonalize(Acopy, VR, VL);
 	
 	//Determine error in eigen-decomposition:
 	checkDiagonalization(A, VR, VL, E);
@@ -204,16 +204,13 @@ void BlockCyclicMatrix::checkDiagonalization(const Buffer& A, const Buffer& VR, 
 }
 
 
-std::vector<complex> BlockCyclicMatrix::diagonalize(Buffer& A, Buffer& VR, Buffer& VL, bool shouldBalance, bool shouldSort) const
+std::vector<complex> BlockCyclicMatrix::diagonalize(Buffer& A, Buffer& VR, Buffer& VL, bool shouldBalance) const
 {	static StopWatch watch("BlockCyclicMatrix::diagonalize"); watch.start();
 	Buffer scale; std::vector<int> evalSort; //optional scale factors and eigenvalue sorting
 	if(shouldBalance) scale = balance(A); //Balance matrix
 	Buffer Q = hessenberg(A); //Hessenberg reduction
 	std::vector<complex> evals = schur(A, Q); //Schur decomposition and eigenvalues
-	if(shouldSort) evalSort = sortEvals(evals); //Sort eigenvalues
-	getEvecs(A, Q, VR, VL,  //Get eigenvectors ...
-		shouldBalance ? &scale : NULL, //... accounting for scale factors if balanced above
-		shouldSort ? &evalSort : NULL); //... matching eigenvalue permutation if sorted above
+	getEvecs(A, Q, VR, VL, shouldBalance ? &scale : NULL); //Transform Schur vectors to eigenvectors
 	watch.stop();
 	return evals;
 }
@@ -324,9 +321,9 @@ std::vector<complex> BlockCyclicMatrix::schur(Buffer& H, Buffer& Q) const
 		if(info > 0) die("Up to %d eigenvalues failed to converge.\n", info);
 		if(pass) break; //done
 		//After first-pass, use results of work-space query to allocate:
-		int nExtra = 2*nDataMine + 10*blockSize*blockSize; //note bug in pdhseqr: workspace underestimated
-		lwork = int(work.data()[0])+nExtra; work.resize(lwork);
-		liwork = int(iwork.data()[0])+nExtra; iwork.resize(liwork);
+		lwork = liwork = 2*std::max(int(work.data()[0]), int(iwork.data()[0])); //note bug in pdhseqr: liwork underestimated
+		work.resize(lwork);
+		iwork.resize(liwork);
 	}
 	logPrintf("done.\n");
 	watch.stop();
@@ -338,29 +335,7 @@ std::vector<complex> BlockCyclicMatrix::schur(Buffer& H, Buffer& Q) const
 	return evals;
 }
 
-
-std::vector<int> BlockCyclicMatrix::sortEvals(std::vector<complex>& evals) const
-{	//Helper class to sort complex array by ascending real part and descending imaginary part
-	struct IndexCompare
-	{	const std::vector<complex>& array;
-		IndexCompare(const std::vector<complex>& array) : array(array) {}
-		bool operator()(int i1, int i2) const 
-		{	complex diff = array[i1] - array[i2];
-			return diff.real() ? (diff.real()<0.) : (diff.imag()>0.);
-		}
-	};
-	//Determine sort indices:
-	std::vector<int> sortIndex(N);
-	for(int i=0; i<N; i++) sortIndex[i] = i;
-	std::sort(sortIndex.begin(), sortIndex.end(), IndexCompare(evals));
-	//Apply sort indices:
-	std::vector<complex> out(N);
-	for(int i=0; i<N; i++) out[i] = evals[sortIndex[i]];
-	std::swap(out, evals);
-	return sortIndex;
-}
-
-void BlockCyclicMatrix::getEvecs(const Buffer& T, const Buffer& Q, Buffer& VR, Buffer& VL, const Buffer* scaleFactors, const std::vector<int>* evalSort) const
+void BlockCyclicMatrix::getEvecs(const Buffer& T, const Buffer& Q, Buffer& VR, Buffer& VL, const Buffer* scaleFactors) const
 {	static StopWatch watch("BlockCyclicMatrix::getEvecs"); watch.start();
 	assert(T.size()==nDataMine);
 	assert(Q.size()==nDataMine);
@@ -391,11 +366,6 @@ void BlockCyclicMatrix::getEvecs(const Buffer& T, const Buffer& Q, Buffer& VR, B
 	mpiUtil->allReduceData(tDiag, MPIUtil::ReduceSum);
 	mpiUtil->allReduceData(tDiagU, MPIUtil::ReduceSum);
 	mpiUtil->allReduceData(tDiagL, MPIUtil::ReduceSum);
-	
-	//Eigenalue inverse sort index:
-	std::vector<int> sortIndexInv(N);
-	if(evalSort) for(int i=0; i<N; i++) sortIndexInv[evalSort->at(i)] = i;
-	else for(int i=0; i<N; i++) sortIndexInv[i] = i;
 	
 	//Temporaries for blas calls:
 	int notTrans=0, isTrans=1, two=2, info=0;
@@ -481,8 +451,7 @@ void BlockCyclicMatrix::getEvecs(const Buffer& T, const Buffer& Q, Buffer& VR, B
 		cblas_dscal(kiBlockSize*N, 1./fabs(rhsMax), rhs.data(),1);
 		//Distribute the eigenvector to Z on relevant processes:
 		for(int bk=0; bk<kiBlockSize; bk++)
-		{	int colDest = sortIndexInv[kiStart+bk];
-			int iColMine = localColIndex(colDest);
+		{	int iColMine = localColIndex(kiStart+bk);
 			if(iColMine >= 0)
 			{	for(int iRowMine=0; iRowMine<nRowsMine; iRowMine++)
 					Z[iRowMine+iColMine*nRowsMine] = rhs[iRowsMine[iRowMine]+bk*N];
@@ -598,8 +567,7 @@ void BlockCyclicMatrix::getEvecs(const Buffer& T, const Buffer& Q, Buffer& VR, B
 		cblas_dscal(kiBlockSize*N, 1./fabs(rhsMax), rhs.data(),1);
 		//Distribute the eigenvector to Z on relevant processes:
 		for(int bk=0; bk<kiBlockSize; bk++)
-		{	int colDest = sortIndexInv[ki+bk];
-			int iColMine = localColIndex(colDest);
+		{	int iColMine = localColIndex(ki+bk);
 			if(iColMine >= 0)
 			{	for(int iRowMine=0; iRowMine<nRowsMine; iRowMine++)
 					Z[iRowMine+iColMine*nRowsMine] = rhs[iRowsMine[iRowMine]+bk*N];
@@ -623,8 +591,7 @@ void BlockCyclicMatrix::getEvecs(const Buffer& T, const Buffer& Q, Buffer& VR, B
 	logPrintf("Normalizing left - right eigenvectors mutually ... "); logFlush();
 	Z.clear(); tDiag.clear(); tDiagU.clear(); //only keep tDiagL to test real/complex eval below; free rest
 	for(int ki=0; ki<N; ki++)
-	{	int kiOrig = evalSort ? evalSort->at(ki) : ki; //only for e-val lookup in next line
-		bool complexPair = (ki+1<N) and (tDiagL[kiOrig]!=0.);
+	{	bool complexPair = (ki+1<N) and (tDiagL[ki]!=0.);
 		int kiBlockSize = complexPair ? 2 : 1;
 		int kiStop = ki+kiBlockSize-1;
 		//Fetch entire right and left eigenvector (pair) on all processes:
