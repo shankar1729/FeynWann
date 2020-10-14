@@ -5,6 +5,7 @@
 #include <mkl_pblas.h>
 #include <mkl_scalapack.h>
 #include <mkl_lapack.h>
+#include <core/Random.h>
 
 inline complex sqrt(const complex& c)
 {	double cAbs = c.abs();
@@ -120,6 +121,81 @@ void BlockCyclicMatrix::printMatrix(const Buffer& mat, const char* name) const
 	}
 	else mpiUtil->send(buf, 0, 0);
 }
+
+//Test with a random matrix:
+void BlockCyclicMatrix::testRandom(double fillFactor) const
+{
+	//Create and diagonalize test matrix:
+	Buffer A(nDataMine), VR, VL; 
+	double* Adata = A.data();
+	for(int iCol: iColsMine)
+		for(int iRow: iRowsMine)
+		{	Random::seed(iRow + N*iCol); //to make matrix independent of parallelization
+			*(Adata++) = (Random::uniform() < fillFactor) ? Random::normal() : 0.;
+		}
+	Buffer Acopy(A); //run diagonalization on a destructible copy
+	std::vector<complex> E = diagonalize(Acopy, VR, VL);
+	
+	//Determine error in eigen-decomposition:
+	checkDiagonalization(A, VR, VL, E);
+}
+
+void BlockCyclicMatrix::checkDiagonalization(const Buffer& A, const Buffer& VR, const Buffer& VL, const std::vector<complex>& E) const
+{
+	//Report eigenvalue statistics:
+	int nReal = 0;
+	double EreMin = +DBL_MAX, EreMax = -DBL_MAX, EreMean = 0., EreSqSum = 0.;
+	double EimMin = +DBL_MAX, EimMax = -DBL_MAX, EimMean = 0., EimSqSum = 0.;
+	for(const complex& e: E)
+	{	double re = e.real(), im = fabs(e.imag());
+		if(not im) nReal++;
+		EreMin = std::min(EreMin, re); EreMax = std::max(EreMax, re);
+		EimMin = std::min(EimMin, im); EimMax = std::max(EimMax, im);
+		EreMean += re; EreSqSum += std::pow(re,2);
+		EimMean += im; EimSqSum += std::pow(im,2);
+	}
+	EreMean /= N; EimMean /= N;
+	double EreStd = sqrt(EreSqSum/N - std::pow(EreMean,2));
+	double EimStd = sqrt(EimSqSum/N - std::pow(EimMean,2));
+	logPrintf("Eigenvalue statistics:\n");
+	logPrintf("\t%d real and %d complex pairs\n", nReal, (N-nReal)/2);
+	logPrintf("\tReal part:  min: %9.3lg  max: %9.3lg  mean: %9.3lg  std: %9.3lg\n", EreMin, EreMax, EreMean, EreStd);
+	logPrintf("\t|Im part|:  min: %9.3lg  max: %9.3lg  mean: %9.3lg  std: %9.3lg\n", EimMin, EimMax, EimMean, EimStd);
+	
+	//Check VL-VR overlap:
+	BlockCyclicMatrix::Buffer O, Oref(nDataMine);
+	matMult(1., VL,true, VR,false, 0., O);
+	double* OrefPtr = Oref.data();
+	for(int iCol: iColsMine)
+		for(int iRow: iRowsMine)
+			*(OrefPtr++) = (iRow==iCol ? (E[iRow].imag() ? 0.5 : 1.) : 0.);
+	logPrintf("RMSE VL^VR: %le\n", matrixErr(O,Oref));
+	//printMatrix(O, "O");
+	
+	//Form matrix of eigenvalues:
+	BlockCyclicMatrix::Buffer Emat(nDataMine);
+	double* Edata = Emat.data();
+	for(int iCol: iColsMine)
+		for(int iRow: iRowsMine)
+		{	double val = 0.;
+			if(iRow==iCol) val = E[iRow].real();
+			if((iRow==iCol+1) and (E[iRow].imag()<0.)) val = E[iRow].imag();
+			if((iRow==iCol-1) and (E[iRow].imag()>0.)) val = E[iRow].imag();
+			*(Edata++) = val;
+		}
+	BlockCyclicMatrix::Buffer lhs(nDataMine), rhs(nDataMine);
+	
+	//Right eigenvector error report:
+	matMult(1., A,false, VR,false, 0., lhs);
+	matMult(1., VR,false, Emat,false, 0., rhs);
+	logPrintf("RMS A*VR-VR*E: %le\n", matrixErr(lhs,rhs));
+	
+	//Left eigenvector error report:
+	matMult(1., VL,true, A,false, 0., lhs);
+	matMult(1., Emat,false, VL,true, 0., rhs);
+	logPrintf("RMS VL'*A-E*VL': %le\n", matrixErr(lhs,rhs));
+}
+
 
 std::vector<complex> BlockCyclicMatrix::diagonalize(Buffer& A, Buffer& VR, Buffer& VL, bool shouldBalance, bool shouldSort) const
 {	static StopWatch watch("BlockCyclicMatrix::diagonalize"); watch.start();

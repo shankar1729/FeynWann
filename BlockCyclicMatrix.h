@@ -57,6 +57,9 @@ public:
 	//! and 1/2 on the diagonals for the real and imaginary part columns of complex eigenvectors.)
 	std::vector<complex> diagonalize(Buffer& A, Buffer& VR, Buffer& VL, bool shouldBalance=true, bool shouldSort=true) const;
 	
+	//! Calculate and report errors in the computed eigenvalue decomposition
+	void checkDiagonalization(const Buffer& A, const Buffer& VR, const Buffer& VL, const std::vector<complex>& E) const;
+	
 	//! Balance a matrix A by row/column scaling and return scale factors
 	Buffer balance(Buffer& A) const;
 	
@@ -87,6 +90,7 @@ public:
 	double matrixErr(const Buffer& A, const Buffer& B) const; //!< Calculate error between two distributed matrices
 	double identityErr(const Buffer& A) const; //!< Calculate error between a distributed matrix and identity
 	void printMatrix(const Buffer& mat, const char* name="") const; //!< Synchronized print of all pieces of a distributed matrix
+	void testRandom(double fillFactor) const; //!< Test diagonalization with a random matrix with specified fill factor
 	
 	//---- Indexing utilties ----
 	
