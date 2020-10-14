@@ -933,10 +933,13 @@ int main(int argc, char** argv)
 	logPrintf("T = %lg\n", T);
 	logPrintf("mode = %s\n", mode.c_str());
 	if(spectrumMode)
-	{	logPrintf("nEigs = %d\n", nEigs);
-		logPrintf("eigTol = %lg\n", eigTol);
-		logPrintf("innerIter = %d\n", innerIter);
-		logPrintf("innerTol = %lg\n", innerTol);
+	{	if(sparseDiag)
+		{	logPrintf("nEigs = %d\n", nEigs);
+			logPrintf("eigTol = %lg\n", eigTol);
+			logPrintf("innerIter = %d\n", innerIter);
+			logPrintf("innerTol = %lg\n", innerTol);
+		}
+		else logPrintf("blockSize = %d\n", blockSize);
 	}
 	else
 	{	logPrintf("dt = %lg\n", dt);

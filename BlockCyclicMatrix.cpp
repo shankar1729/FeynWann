@@ -89,8 +89,8 @@ double BlockCyclicMatrix::matrixErr(const Buffer& A, const Buffer& B) const
 double BlockCyclicMatrix::identityErr(const Buffer& A) const
 {	double errSq = 0.;
 	const double* Aptr = A.data();
-	for(int iRow: iRowsMine)
-		for(int iCol: iColsMine)
+	for(int iCol: iColsMine)
+		for(int iRow: iRowsMine)
 			errSq += std::pow(*(Aptr++) - (iRow==iCol ? 1. : 0.), 2);
 	mpiUtil->allReduce(errSq, MPIUtil::ReduceSum);
 	return sqrt(errSq/(N*N));
@@ -130,11 +130,14 @@ void BlockCyclicMatrix::testRandom(double fillFactor) const
 	double* Adata = A.data();
 	for(int iCol: iColsMine)
 		for(int iRow: iRowsMine)
-		{	Random::seed(iRow + N*iCol); //to make matrix independent of parallelization
-			*(Adata++) = (Random::uniform() < fillFactor) ? Random::normal() : 0.;
+		{	//Simple reproducible xorshift RNG:
+			uint32_t x = iRow + N*iCol;
+			x ^= x << 13; x ^= x >> 17; x ^= x << 5; double f = 2.3283e-10*x; //in [0,1)
+			x ^= x << 13; x ^= x >> 17; x ^= x << 5; double val = 2.3283e-10*x - 0.5; //in [-0.5,0.5)
+			*(Adata++) = (f < fillFactor) ? val : 0.;
 		}
 	Buffer Acopy(A); //run diagonalization on a destructible copy
-	std::vector<complex> E = diagonalize(Acopy, VR, VL);
+	std::vector<complex> E = diagonalize(Acopy, VR, VL, true, false);
 	
 	//Determine error in eigen-decomposition:
 	checkDiagonalization(A, VR, VL, E);
@@ -142,13 +145,17 @@ void BlockCyclicMatrix::testRandom(double fillFactor) const
 
 void BlockCyclicMatrix::checkDiagonalization(const Buffer& A, const Buffer& VR, const Buffer& VL, const std::vector<complex>& E) const
 {
+	//Get matrix norm:
+	int one = 1;
+	double Anorm = pdlange_("F", &N, &N, A.data(), &one, &one, desc, NULL);
+	
 	//Report eigenvalue statistics:
 	int nReal = 0;
 	double EreMin = +DBL_MAX, EreMax = -DBL_MAX, EreMean = 0., EreSqSum = 0.;
 	double EimMin = +DBL_MAX, EimMax = -DBL_MAX, EimMean = 0., EimSqSum = 0.;
 	for(const complex& e: E)
 	{	double re = e.real(), im = fabs(e.imag());
-		if(not im) nReal++;
+		if(im < 1e-14*Anorm) nReal++;
 		EreMin = std::min(EreMin, re); EreMax = std::max(EreMax, re);
 		EimMin = std::min(EimMin, im); EimMax = std::max(EimMax, im);
 		EreMean += re; EreSqSum += std::pow(re,2);
