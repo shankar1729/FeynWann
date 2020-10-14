@@ -7,13 +7,6 @@
 #include <mkl_lapack.h>
 #include <core/Random.h>
 
-inline complex sqrt(const complex& c)
-{	double cAbs = c.abs();
-	double x = sqrt(0.5*(cAbs+c.real())); //always positive => -infty branch cut on c
-	double y = copysign(sqrt(0.5*(cAbs-c.real())), c.imag());
-	return complex(x, y);
-}
-
 //Return list of indices in a given dimension (row or column) that belong to me in block-cyclic distribution
 std::vector<int> distributedIndices(int nTotal, int blockSize, int iProcDim, int nProcsDim)
 {	int zero = 0;
@@ -86,13 +79,18 @@ double BlockCyclicMatrix::matrixErr(const Buffer& A, const Buffer& B) const
 }
 
 //Calculate error between a distributed matrix and identity
-double BlockCyclicMatrix::identityErr(const Buffer& A) const
-{	double errSq = 0.;
+double BlockCyclicMatrix::identityErr(const Buffer& A, double* offDiagErr) const
+{	double errSq = 0., offErrSq = 0.;
 	const double* Aptr = A.data();
 	for(int iCol: iColsMine)
 		for(int iRow: iRowsMine)
-			errSq += std::pow(*(Aptr++) - (iRow==iCol ? 1. : 0.), 2);
+		{	double errSqCur = std::pow(*(Aptr++) - (iRow==iCol ? 1. : 0.), 2);
+			errSq += errSqCur;
+			if(iRow!=iCol) offErrSq += errSqCur;
+		}
 	mpiUtil->allReduce(errSq, MPIUtil::ReduceSum);
+	mpiUtil->allReduce(offErrSq, MPIUtil::ReduceSum);
+	if(offDiagErr) *offDiagErr = sqrt(offErrSq/(N*N));
 	return sqrt(errSq/(N*N));
 }
 
@@ -170,13 +168,10 @@ void BlockCyclicMatrix::checkDiagonalization(const Buffer& A, const Buffer& VR, 
 	logPrintf("\t|Im part|:  min: %9.3lg  max: %9.3lg  mean: %9.3lg  std: %9.3lg\n", EimMin, EimMax, EimMean, EimStd);
 	
 	//Check VL-VR overlap:
-	BlockCyclicMatrix::Buffer O, Oref(nDataMine);
+	BlockCyclicMatrix::Buffer O;
 	matMult(1., VL,true, VR,false, 0., O);
-	double* OrefPtr = Oref.data();
-	for(int iCol: iColsMine)
-		for(int iRow: iRowsMine)
-			*(OrefPtr++) = (iRow==iCol ? (E[iRow].imag() ? 0.5 : 1.) : 0.);
-	logPrintf("RMSE VL^VR: %le\n", matrixErr(O,Oref));
+	double offDiagErr, Oerr = identityErr(O, &offDiagErr);
+	logPrintf("RMSE VL^VR: %le (off-diag: %le)\n", Oerr, offDiagErr);
 	//printMatrix(O, "O");
 	
 	//Form matrix of eigenvalues:
@@ -335,6 +330,7 @@ std::vector<complex> BlockCyclicMatrix::schur(Buffer& H, Buffer& Q) const
 	return evals;
 }
 
+//Eigenvector transformation
 void BlockCyclicMatrix::getEvecs(const Buffer& T, const Buffer& Q, Buffer& VR, Buffer& VL, const Buffer* scaleFactors) const
 {	static StopWatch watch("BlockCyclicMatrix::getEvecs"); watch.start();
 	assert(T.size()==nDataMine);
@@ -368,7 +364,7 @@ void BlockCyclicMatrix::getEvecs(const Buffer& T, const Buffer& Q, Buffer& VR, B
 	mpiUtil->allReduceData(tDiagL, MPIUtil::ReduceSum);
 	
 	//Temporaries for blas calls:
-	int notTrans=0, isTrans=1, two=2, info=0;
+	int notTrans=0, two=2, info=0;
 	double oneD = 1.;
 	double x[4], xNorm, scale; //1x1 or 2x2 matrix used in dlanl2; its norm and scale factor
 	Buffer Z(nDataMine); //eigenvectors of T (multiplied by Q at the end)
@@ -459,219 +455,40 @@ void BlockCyclicMatrix::getEvecs(const Buffer& T, const Buffer& Q, Buffer& VR, B
 		}
 		ki = kiStart;
 	}
+	tNorm.clear(); tDiag.clear(); tDiagL.clear(); tDiagU.clear();
 	logPrintf("done.\nRotating right eigenvectors to original basis ... "); logFlush();
 	//--- multiply by Q
 	matMult(1., Q,false, Z,false, 0.,VR);
 	//--- account for scaleFactors if necessary:
-	Buffer scaleMine, scaleMineInv;
 	if(scaleFactors)
-	{	scaleMine.reserve(nRowsMine);
-		scaleMineInv.reserve(nRowsMine);
-		for(int iRow: iRowsMine)
-		{	double s = scaleFactors->at(iRow);
-			scaleMine.push_back(s);
-			scaleMineInv.push_back(1./s);
-		}
-		//Apply scale factors:
-		double* VRdata = VR.data();
+	{	double* VRdata = VR.data();
 		for(int iColMine=0; iColMine<nColsMine; iColMine++)
-			for(int iRowMine=0; iRowMine<nRowsMine; iRowMine++)
-				*(VRdata++) *= scaleMine[iRowMine];
+			for(int iRow: iRowsMine)
+				*(VRdata++) *= scaleFactors->at(iRow);
 	}
 	logPrintf("done.\n");
 	
 	//Left eigenvector calculation:
-	logPrintf("Computing right eigenvectors of Schur matrix ... "); logFlush();
-	for(int ki=0; ki<N; ki++)
-	{	bool complexPair = (ki+1<N) and (tDiagL[ki]!=0.);
-		int kiBlockSize = complexPair ? 2  : 1; //current block size in ki
-		int kiStop = ki + kiBlockSize-1; //end of current block in ki
-		//Get the eigenvalue:
-		double wr = tDiag[ki];
-		double mwi = complexPair ? -sqrt(fabs(tDiagL[ki]))*sqrt(fabs(tDiagU[ki])) : 0; //written like this to avoid over/under-flow
-		double sMin = std::max(prec*(fabs(wr)+fabs(mwi)), sNum); //small number threshold for this eigenvector (pair)
-		//Construct RHS:
-		Buffer rhs(kiBlockSize*N);
-		if(complexPair)
-		{	if(fabs(tDiagU[ki]) > fabs(tDiagL[ki]))
-			{	rhs[ki] = -mwi/tDiagU[ki];
-				rhs[kiStop+N] = 1.;
-			}
-			else
-			{	rhs[ki] = 1.;
-				rhs[kiStop+N] = mwi/tDiagL[ki];
-			}
-		}
-		else rhs[ki] = 1.;
-		for(int bk=0; bk<kiBlockSize; bk++)
-		{	int iRowMine = localRowIndex(ki+bk);
-			if(iRowMine >= 0)
-			{	int iColMineStart, iColMineStop;
-				getRange(iColsMine, kiStop+1, N, iColMineStart, iColMineStop);
-				for(int iColMine=iColMineStart; iColMine<iColMineStop; iColMine++)
-					rhs[iColsMine[iColMine]+bk*N] = -rhs[ki+bk+bk*N] * T[iRowMine+iColMine*nRowsMine]; //set on exacty one process
-			}
-			mpiUtil->allReduce(&rhs[(kiStop+1)+bk*N], N-(kiStop+1), MPIUtil::ReduceSum); //make available on all processes
-		}
-		//Solve quasi-triangular system (T(kiStop+1:,kiStop+1:) - (wr-i*wi))*x = rhs
-		double vCrit = bNum, vMax = 1.; //for scaling
-		for(int j=kiStop+1; j<N; j++)
-		{	int jBlockSize = ((j+1<N) and (tDiagL[j]!=0.)) ? 2 : 1; //current block size in j
-			int jStop = j+jBlockSize-1; //end of current block in j
-			//Scale to avoid overflow when forming RHS elements if needed:
-			if(std::max(tNorm[j],tNorm[jStop]) > vCrit)
-			{	double scaleFac = 1./vMax;
-				for(int bk=0; bk<kiBlockSize; bk++)
-					cblas_dscal(N-ki, scaleFac, &rhs[ki+bk*N],1);
-				vMax = 1.;
-				vCrit = bNum;
-			}
-			//Form RHS elements:
-			for(int bk=0; bk<kiBlockSize; bk++)
-			{	for(int bj=0; bj<jBlockSize; bj++)
-				{	double rhsUpdate = 0.;
-					int iColMine = localColIndex(j+bj);
-					if(iColMine >= 0)
-					{	int iRowMineStart, iRowMineStop;
-						getRange(iRowsMine, kiStop+1, j, iRowMineStart, iRowMineStop);
-						for(int iRowMine=iRowMineStart; iRowMine<iRowMineStop; iRowMine++)
-							rhsUpdate -= T[iRowMine+iColMine*nRowsMine] * rhs[iRowsMine[iRowMine]+bk*N];
-					}
-					mpiUtil->allReduce(rhsUpdate, MPIUtil::ReduceSum);
-					rhs[j+bj+bk*N] += rhsUpdate;
-				}
-			}
-			//Solve kiBlockSize x jBlockSize complex equation to get x:
-			double T22[4] = { tDiag[j], tDiagL[j], tDiagU[j], tDiag[jStop] }; //2x2 diagonal block of T (only 1x1 valid/needed if jStop==j)
-			dlaln2_((jBlockSize==2 ? &isTrans : &notTrans),
-				&jBlockSize, &kiBlockSize, &sMin, &oneD,
-				T22, &two, &oneD, &oneD, 
-				&rhs[j], &N, &wr, &mwi, x, &two,
-				&scale, &xNorm, &info);
-			//Scale if necessary:
-			if(scale != 1.)
-			{	for(int bk=0; bk<kiBlockSize; bk++)
-					cblas_dscal(N-ki, scale, &rhs[ki+bk*N],1);
-			}
-			//Update solution:
-			for(int bk=0; bk<kiBlockSize; bk++)
-				for(int bj=0; bj<jBlockSize; bj++)
-				{	rhs[(j+bj)+bk*N] = x[bj+2*bk];
-					vMax = std::max(vMax, x[bj+2*bk]);
-				}
-			vCrit = bNum / vMax;
-			j = jStop;
-		}
-		//Scale max entry to 1:
-		double rhsMax = rhs[cblas_idamax(kiBlockSize*N, rhs.data(),1)];
-		cblas_dscal(kiBlockSize*N, 1./fabs(rhsMax), rhs.data(),1);
-		//Distribute the eigenvector to Z on relevant processes:
-		for(int bk=0; bk<kiBlockSize; bk++)
-		{	int iColMine = localColIndex(ki+bk);
-			if(iColMine >= 0)
-			{	for(int iRowMine=0; iRowMine<nRowsMine; iRowMine++)
-					Z[iRowMine+iColMine*nRowsMine] = rhs[iRowsMine[iRowMine]+bk*N];
-			}
-		}
-		ki = kiStop;
+	logPrintf("Computing left eigenvectors ... "); logFlush();
+	//--- set VL to identity:
+	VL.resize(nDataMine);
+	double* VLdata = VL.data();
+	for(int iCol: iColsMine)
+		for(int iRow: iRowsMine)
+			*(VLdata++) = (iRow==iCol) ? 1. : 0.;
+	//--- create transpose(VR) as an LHS matrix for inversion:
+	Buffer VRT(nDataMine);
+	matMult(1., VR,true, VL,false, 0.,VRT);
+	//--- update VL = inv(transpose(VR))
+	const int one = 1; info = 0;
+	std::vector<int> pivot(N);
+	pdgesv_(&N, &N, VRT.data(), &one, &one, desc, pivot.data(), VL.data(), &one, &one, desc, &info);
+	if(info < 0)
+	{	int errCode = -info;
+		if(errCode < 100) die("Error in argument# %d to pdgesv.\n", errCode)
+		else die("Error in entry %d of argument# %d to pdgesv.\n", errCode%100, errCode/100)
 	}
-	logPrintf("done.\nRotating left eigenvectors to original basis ... "); logFlush();
-	//--- multiply by Q
-	matMult(1., Q,false, Z,false, 0.,VL);
-	//--- account for scaleFactors if necessary:
-	if(scaleFactors)
-	{	double* VLdata = VL.data();
-		for(int iColMine=0; iColMine<nColsMine; iColMine++)
-			for(int iRowMine=0; iRowMine<nRowsMine; iRowMine++)
-				*(VLdata++) *= scaleMineInv[iRowMine];
-	}
-	logPrintf("done.\n");
-	
-	//Fix normalization of eigenvectors:
-	logPrintf("Normalizing left - right eigenvectors mutually ... "); logFlush();
-	Z.clear(); tDiag.clear(); tDiagU.clear(); //only keep tDiagL to test real/complex eval below; free rest
-	for(int ki=0; ki<N; ki++)
-	{	bool complexPair = (ki+1<N) and (tDiagL[ki]!=0.);
-		int kiBlockSize = complexPair ? 2 : 1;
-		int kiStop = ki+kiBlockSize-1;
-		//Fetch entire right and left eigenvector (pair) on all processes:
-		Buffer VRcur(kiBlockSize*N), VLcur(kiBlockSize*N);
-		for(int bk=0; bk<kiBlockSize; bk++)
-		{	int iColMine = localColIndex(ki+bk);
-			if(iColMine >= 0)
-				for(int iRowMine=0; iRowMine<nRowsMine; iRowMine++)
-				{	int iRow = iRowsMine[iRowMine];
-					int index = iRowMine+iColMine*nRowsMine;
-					VLcur[iRow+bk*N] = VL[index];
-					VRcur[iRow+bk*N] = VR[index];
-				}
-		}
-		mpiWorld->allReduceData(VRcur, MPIUtil::ReduceSum);
-		mpiWorld->allReduceData(VLcur, MPIUtil::ReduceSum);
-		//Apply scaling:
-		if(complexPair)
-		{	//Determine max entry of each and mutual dot product:
-			int iMaxNormR = -1; double maxNormR = 0.;
-			int iMaxNormL = -1; double maxNormL = 0.;
-			complex dotProduct = 0.;
-			for(int iRow=0; iRow<N; iRow++)
-			{	complex zR(VRcur[iRow], VRcur[iRow+N]); double normCurR = zR.norm();
-				complex zL(VLcur[iRow], VLcur[iRow+N]); double normCurL = zL.norm();
-				if(normCurR > maxNormR) { maxNormR = normCurR; iMaxNormR = iRow; }
-				if(normCurL > maxNormL) { maxNormL = normCurL; iMaxNormL = iRow; }
-				dotProduct += zL.conj()*zR;
-			}
-			//Make max abs entry = 1 first, and then apply complex phases to ensure dot(VL,VR) = id:
-			complex zRmax(VRcur[iMaxNormR], VRcur[iMaxNormR+N]);
-			complex zLmax(VLcur[iMaxNormL], VLcur[iMaxNormL+N]);
-			if(dotProduct.norm() < prec) dotProduct = 1.; //unlikely (impossible?) corner case of orthogonal L-R evecs
-			dotProduct /= (zLmax.conj() * zRmax); //acount for max-value pre-scaling done to the columns below
-			complex dotFac = sqrt(dotProduct);
-			complex scaleFacR = complex(1.,0)/(zRmax * dotFac);
-			complex scaleFacL = complex(1.,0)/(zLmax * dotFac.conj());
-			for(int iRow=0; iRow<N; iRow++)
-			{	complex zR = scaleFacR * complex(VRcur[iRow], VRcur[iRow+N]);
-				complex zL = scaleFacL * complex(VLcur[iRow], VLcur[iRow+N]);
-				VRcur[iRow] = zR.real(); VRcur[iRow+N] = zR.imag();
-				VLcur[iRow] = zL.real(); VLcur[iRow+N] = zL.imag();
-			}
-		}
-		else
-		{	//Determine max entry:
-			int iMaxAbsR = -1; double maxAbsR = 0.;
-			int iMaxAbsL = -1; double maxAbsL = 0.;
-			double dotProduct = 0.;
-			for(int iRow=0; iRow<N; iRow++)
-			{	double absCurL = fabs(VLcur[iRow]); if(absCurL > maxAbsL) {	maxAbsL = absCurL; iMaxAbsL = iRow; }
-				double absCurR = fabs(VRcur[iRow]); if(absCurR > maxAbsR) {	maxAbsR = absCurR; iMaxAbsR = iRow; }
-				dotProduct += VLcur[iRow] * VRcur[iRow];
-			}
-			//Make max abs entry = 1, and then scale to ensure dot(VL,VR) = id:
-			double zRmax = VRcur[iMaxAbsR];
-			double zLmax = VLcur[iMaxAbsL];
-			if(std::pow(dotProduct,2) < prec) dotProduct = 1.; //unlikely (impossible?) corner case of orthogonal L-R evecs
-			dotProduct /= (zRmax * zLmax); //acount for max-value pre-scaling done to the columns below
-			double dotFac = sqrt(fabs(dotProduct));
-			double scaleFacR = 1./(zRmax * dotFac);
-			double scaleFacL = 1./(zLmax * copysign(dotFac,dotProduct));
-			for(int iRow=0; iRow<N; iRow++)
-			{	VRcur[iRow] *= scaleFacR;
-				VLcur[iRow] *= scaleFacL;
-			}
-		}
-		//Set relevant pieces of eigenvector back:
-		for(int bk=0; bk<kiBlockSize; bk++)
-		{	int iColMine = localColIndex(ki+bk);
-			if(iColMine >= 0)
-				for(int iRowMine=0; iRowMine<nRowsMine; iRowMine++)
-				{	int iRow = iRowsMine[iRowMine];
-					int index = iRowMine+iColMine*nRowsMine;
-					VL[index] = VLcur[iRow+bk*N];
-					VR[index] = VRcur[iRow+bk*N];
-				}
-		}
-		ki = kiStop;
-	}
+	if(info > 0) die("Matrix singular at column# %d in pdgesv.\n", info);
 	logPrintf("done.\n");
 	watch.stop();
 }
