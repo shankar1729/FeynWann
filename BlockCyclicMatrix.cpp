@@ -170,8 +170,7 @@ void BlockCyclicMatrix::checkDiagonalization(const Buffer& A, const Buffer& VR, 
 	//Check VL-VR overlap:
 	BlockCyclicMatrix::Buffer O;
 	matMult(1., VL,true, VR,false, 0., O);
-	double offDiagErr, Oerr = identityErr(O, &offDiagErr);
-	logPrintf("RMSE VL^VR: %le (off-diag: %le)\n", Oerr, offDiagErr);
+	logPrintf("RMSE VL^VR: %le\n", identityErr(O));
 	//printMatrix(O, "O");
 	
 	//Form matrix of eigenvalues:
@@ -332,7 +331,7 @@ std::vector<complex> BlockCyclicMatrix::schur(Buffer& H, Buffer& Q) const
 
 //Eigenvector transformation
 void BlockCyclicMatrix::getEvecs(const Buffer& T, const Buffer& Q, Buffer& VR, Buffer& VL, const Buffer* scaleFactors) const
-{	static StopWatch watch("BlockCyclicMatrix::getEvecs"); watch.start();
+{	static StopWatch watchLeft("BlockCyclicMatrix::leftEvecs"), watchRight("BlockCyclicMatrix::rightEvecs");
 	assert(T.size()==nDataMine);
 	assert(Q.size()==nDataMine);
 	if(scaleFactors) assert(int(scaleFactors->size())==N);
@@ -364,125 +363,141 @@ void BlockCyclicMatrix::getEvecs(const Buffer& T, const Buffer& Q, Buffer& VR, B
 	mpiUtil->allReduceData(tDiagL, MPIUtil::ReduceSum);
 	
 	//Temporaries for blas calls:
-	int notTrans=0, two=2, info=0;
+	int notTrans=0, isTrans=1, two=2, info=0;
 	double oneD = 1.;
 	double x[4], xNorm, scale; //1x1 or 2x2 matrix used in dlanl2; its norm and scale factor
 	Buffer Z(nDataMine); //eigenvectors of T (multiplied by Q at the end)
-	//Right eigenvector calculation:
-	logPrintf("Computing right eigenvectors of Schur matrix ... "); logFlush();
-	for(int ki=N-1; ki>=0; ki--)
-	{	bool complexPair = ((ki>0) and (tDiagL[ki-1]!=0.));
+	
+	//Left eigenvector calculation:
+	watchLeft.start();
+	logPrintf("Computing left eigenvectors of Schur matrix ... "); logFlush();
+	for(int ki=0; ki<N; ki++)
+	{	bool complexPair = (ki+1<N) and (tDiagL[ki]!=0.);
 		int kiBlockSize = complexPair ? 2  : 1; //current block size in ki
-		int kiStart = ki + 1 - kiBlockSize; //start of current block in ki
+		int kiStop = ki + kiBlockSize-1; //end of current block in ki
 		//Get the eigenvalue:
 		double wr = tDiag[ki];
-		double wi = complexPair ? sqrt(fabs(tDiagU[kiStart])) * sqrt(fabs(tDiagL[kiStart])) : 0.; //written like this to avoid over/under-flow
-		double sMin = std::max(prec*(fabs(wr)+fabs(wi)), sNum); //small number threshold for this eigenvector (pair)
+		double mwi = complexPair ? -sqrt(fabs(tDiagL[ki]))*sqrt(fabs(tDiagU[ki])) : 0; //written like this to avoid over/under-flow
+		double sMin = std::max(prec*(fabs(wr)+fabs(mwi)), sNum); //small number threshold for this eigenvector (pair)
 		//Construct RHS:
 		Buffer rhs(kiBlockSize*N);
 		if(complexPair)
-		{	if(fabs(tDiagU[kiStart]) > fabs(tDiagL[kiStart]))
-			{	rhs[kiStart] = 1.;
-				rhs[ki+N] = wi/tDiagU[kiStart];
+		{	if(fabs(tDiagU[ki]) > fabs(tDiagL[ki]))
+			{	rhs[ki] = -mwi/tDiagU[ki];
+				rhs[kiStop+N] = 1.;
 			}
 			else
-			{	rhs[kiStart] = -wi/tDiagL[kiStart];
-				rhs[ki+N] = 1.;
+			{	rhs[ki] = 1.;
+				rhs[kiStop+N] = mwi/tDiagL[ki];
 			}
 		}
 		else rhs[ki] = 1.;
 		for(int bk=0; bk<kiBlockSize; bk++)
-		{	int iColMine = localColIndex(kiStart+bk);
-			if(iColMine >= 0)
-			{	int iRowMineStart, iRowMineStop;
-				getRange(iRowsMine, 0, kiStart, iRowMineStart, iRowMineStop);
-				for(int iRowMine=iRowMineStart; iRowMine<iRowMineStop; iRowMine++)
-					rhs[iRowsMine[iRowMine]+bk*N] = -rhs[kiStart+bk+bk*N] * T[iRowMine+iColMine*nRowsMine]; //set on exacty one process
+		{	int iRowMine = localRowIndex(ki+bk);
+			if(iRowMine >= 0)
+			{	int iColMineStart, iColMineStop;
+				getRange(iColsMine, kiStop+1, N, iColMineStart, iColMineStop);
+				for(int iColMine=iColMineStart; iColMine<iColMineStop; iColMine++)
+					rhs[iColsMine[iColMine]+bk*N] = -rhs[ki+bk+bk*N] * T[iRowMine+iColMine*nRowsMine]; //set on exacty one process
 			}
-			mpiUtil->allReduce(&rhs[bk*N], kiStart, MPIUtil::ReduceSum); //make available on all processes
+			mpiUtil->allReduce(&rhs[(kiStop+1)+bk*N], N-(kiStop+1), MPIUtil::ReduceSum); //make available on all processes
 		}
-		//Solve upper quasi-triangular system (T[:kiStart,:kiStart] - (wr+i*wi))*x = scale*rhs
-		for(int j=kiStart-1; j>=0.; j--)
-		{	int jBlockSize = ((j>0) and (tDiagL[j-1]!=0.)) ? 2 : 1; //current block size in j
-			int jStart = j+1-jBlockSize; //start of current block in j
-			double T22[4] = { tDiag[jStart], tDiagL[jStart], tDiagU[jStart], tDiag[j] }; //2x2 diagonal block of T (only 1x1 valid/needed if jStart==j)
-			dlaln2_(&notTrans, &jBlockSize, &kiBlockSize, &sMin, &oneD,
-				T22, &two, &oneD, &oneD,
-				&rhs[jStart], &N, &wr, &wi, x, &two,
-				&scale, &xNorm, &info);
-			//Scale relevant x to avoid overflow in rhs update:
-			if((xNorm>1.) and (std::max(tNorm[jStart],tNorm[j])>bNum/xNorm))
-			{	double xNormInv = 1./xNorm;
+		//Solve quasi-triangular system (T(kiStop+1:,kiStop+1:) - (wr-i*wi))*x = rhs
+		double vCrit = bNum, vMax = 1.; //for scaling
+		for(int j=kiStop+1; j<N; j++)
+		{	int jBlockSize = ((j+1<N) and (tDiagL[j]!=0.)) ? 2 : 1; //current block size in j
+			int jStop = j+jBlockSize-1; //end of current block in j
+			//Scale to avoid overflow when forming RHS elements if needed:
+			if(std::max(tNorm[j],tNorm[jStop]) > vCrit)
+			{	double scaleFac = 1./vMax;
 				for(int bk=0; bk<kiBlockSize; bk++)
-					for(int bj=0; bj<jBlockSize; bj++)
-						x[bj+2*bk] *= xNormInv;
-				scale *= xNormInv;
+					cblas_dscal(N-ki, scaleFac, &rhs[ki+bk*N],1);
+				vMax = 1.;
+				vCrit = bNum;
 			}
-			if(scale != 1.)
-				for(int bk=0; bk<kiBlockSize; bk++)
-					cblas_dscal(ki+1, scale, &rhs[bk*N],1); //scale when needed
-			//Update the right hand side
+			//Form RHS elements:
 			for(int bk=0; bk<kiBlockSize; bk++)
-			{	Buffer rhsUpdate(jStart);
-				for(int bj=0; bj<jBlockSize; bj++)
-				{	double xCur = x[bj+2*bk];
-					rhs[jStart+bj + bk*N] = xCur;
-					int iColMine = localColIndex(jStart+bj);
+			{	for(int bj=0; bj<jBlockSize; bj++)
+				{	double rhsUpdate = 0.;
+					int iColMine = localColIndex(j+bj);
 					if(iColMine >= 0)
 					{	int iRowMineStart, iRowMineStop;
-						getRange(iRowsMine, 0, jStart, iRowMineStart, iRowMineStop);
+						getRange(iRowsMine, kiStop+1, j, iRowMineStart, iRowMineStop);
 						for(int iRowMine=iRowMineStart; iRowMine<iRowMineStop; iRowMine++)
-							rhsUpdate[iRowsMine[iRowMine]] -= xCur * T[iRowMine+iColMine*nRowsMine];
+							rhsUpdate -= T[iRowMine+iColMine*nRowsMine] * rhs[iRowsMine[iRowMine]+bk*N];
 					}
-				}
-				if(jStart)
-				{	mpiUtil->allReduceData(rhsUpdate, MPIUtil::ReduceSum);
-					cblas_daxpy(jStart, 1., rhsUpdate.data(),1, &rhs[bk*N],1);
+					mpiUtil->allReduce(rhsUpdate, MPIUtil::ReduceSum);
+					rhs[j+bj+bk*N] += rhsUpdate;
 				}
 			}
-			j = jStart;
+			//Solve kiBlockSize x jBlockSize complex equation to get x:
+			double T22[4] = { tDiag[j], tDiagL[j], tDiagU[j], tDiag[jStop] }; //2x2 diagonal block of T (only 1x1 valid/needed if jStop==j)
+			dlaln2_((jBlockSize==2 ? &isTrans : &notTrans),
+				&jBlockSize, &kiBlockSize, &sMin, &oneD,
+				T22, &two, &oneD, &oneD, 
+				&rhs[j], &N, &wr, &mwi, x, &two,
+				&scale, &xNorm, &info);
+			//Scale if necessary:
+			if(scale != 1.)
+			{	for(int bk=0; bk<kiBlockSize; bk++)
+					cblas_dscal(N-ki, scale, &rhs[ki+bk*N],1);
+			}
+			//Update solution:
+			for(int bk=0; bk<kiBlockSize; bk++)
+				for(int bj=0; bj<jBlockSize; bj++)
+				{	rhs[(j+bj)+bk*N] = x[bj+2*bk];
+					vMax = std::max(vMax, x[bj+2*bk]);
+				}
+			vCrit = bNum / vMax;
+			j = jStop;
 		}
 		//Scale max entry to 1:
 		double rhsMax = rhs[cblas_idamax(kiBlockSize*N, rhs.data(),1)];
 		cblas_dscal(kiBlockSize*N, 1./fabs(rhsMax), rhs.data(),1);
 		//Distribute the eigenvector to Z on relevant processes:
 		for(int bk=0; bk<kiBlockSize; bk++)
-		{	int iColMine = localColIndex(kiStart+bk);
+		{	int iColMine = localColIndex(ki+bk);
 			if(iColMine >= 0)
 			{	for(int iRowMine=0; iRowMine<nRowsMine; iRowMine++)
 					Z[iRowMine+iColMine*nRowsMine] = rhs[iRowsMine[iRowMine]+bk*N];
 			}
 		}
-		ki = kiStart;
+		ki = kiStop;
 	}
-	tNorm.clear(); tDiag.clear(); tDiagL.clear(); tDiagU.clear();
-	logPrintf("done.\nRotating right eigenvectors to original basis ... "); logFlush();
+	logPrintf("done.\nRotating left eigenvectors to original basis ... "); logFlush();
 	//--- multiply by Q
-	matMult(1., Q,false, Z,false, 0.,VR);
+	matMult(1., Q,false, Z,false, 0.,VL);
 	//--- account for scaleFactors if necessary:
 	if(scaleFactors)
-	{	double* VRdata = VR.data();
+	{	//Collect scale factors relevant to my rows:
+		Buffer scaleMineInv; scaleMineInv.reserve(nRowsMine);
+		for(int iRow: iRowsMine)
+			scaleMineInv.push_back(1./scaleFactors->at(iRow));
+		//Apply scale factors:
+		double* VLdata = VL.data();
 		for(int iColMine=0; iColMine<nColsMine; iColMine++)
-			for(int iRow: iRowsMine)
-				*(VRdata++) *= scaleFactors->at(iRow);
+			for(int iRowMine=0; iRowMine<nRowsMine; iRowMine++)
+				*(VLdata++) *= scaleMineInv[iRowMine];
 	}
 	logPrintf("done.\n");
+	watchLeft.stop();
 	
-	//Left eigenvector calculation:
-	logPrintf("Computing left eigenvectors ... "); logFlush();
-	//--- set VL to identity:
-	VL.resize(nDataMine);
-	double* VLdata = VL.data();
+	//Right eigenvector calculation:
+	watchRight.start();
+	logPrintf("Computing right eigenvectors ... "); logFlush();
+	//--- set VR to identity:
+	VR.resize(nDataMine);
+	double* VRdata = VR.data();
 	for(int iCol: iColsMine)
 		for(int iRow: iRowsMine)
-			*(VLdata++) = (iRow==iCol) ? 1. : 0.;
-	//--- create transpose(VR) as an LHS matrix for inversion:
-	Buffer VRT(nDataMine);
-	matMult(1., VR,true, VL,false, 0.,VRT);
-	//--- update VL = inv(transpose(VR))
+			*(VRdata++) = (iRow==iCol) ? 1. : 0.;
+	//--- create transpose(VL) as an LHS matrix for inversion:
+	Buffer VLT(nDataMine);
+	matMult(1., VL,true, VR,false, 0.,VLT); //note VR is identity here
+	//--- update VR = inv(transpose(VL))
 	const int one = 1; info = 0;
 	std::vector<int> pivot(N);
-	pdgesv_(&N, &N, VRT.data(), &one, &one, desc, pivot.data(), VL.data(), &one, &one, desc, &info);
+	pdgesv_(&N, &N, VLT.data(), &one, &one, desc, pivot.data(), VR.data(), &one, &one, desc, &info);
 	if(info < 0)
 	{	int errCode = -info;
 		if(errCode < 100) die("Error in argument# %d to pdgesv.\n", errCode)
@@ -490,7 +505,7 @@ void BlockCyclicMatrix::getEvecs(const Buffer& T, const Buffer& Q, Buffer& VR, B
 	}
 	if(info > 0) die("Matrix singular at column# %d in pdgesv.\n", info);
 	logPrintf("done.\n");
-	watch.stop();
+	watchRight.stop();
 }
 
 void BlockCyclicMatrix::matMult(double alpha, const Buffer& A, bool transA, const Buffer& B, bool transB, double beta, Buffer& C) const
