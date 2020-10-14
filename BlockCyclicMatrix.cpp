@@ -75,13 +75,24 @@ BlockCyclicMatrix::Buffer BlockCyclicMatrix::readMatrix(string fname) const
 	return out;
 }
 
-//Calculate error between distirbuted matrices
+//Calculate error between distributed matrices
 double BlockCyclicMatrix::matrixErr(const Buffer& A, const Buffer& B) const
 {	double errSq = 0.;
 	for(size_t i=0; i<nDataMine; i++)
 		errSq += std::pow(A[i]-B[i], 2);
 	mpiUtil->allReduce(errSq, MPIUtil::ReduceSum);
-	return sqrt(errSq);
+	return sqrt(errSq/(N*N));
+}
+
+//Calculate error between a distributed matrix and identity
+double BlockCyclicMatrix::identityErr(const Buffer& A) const
+{	double errSq = 0.;
+	const double* Aptr = A.data();
+	for(int iRow: iRowsMine)
+		for(int iCol: iColsMine)
+			errSq += std::pow(*(Aptr++) - (iRow==iCol ? 1. : 0.), 2);
+	mpiUtil->allReduce(errSq, MPIUtil::ReduceSum);
+	return sqrt(errSq/(N*N));
 }
 
 //Print all pieces of distributed block cyclic matrix
@@ -111,14 +122,16 @@ void BlockCyclicMatrix::printMatrix(const Buffer& mat, const char* name) const
 }
 
 std::vector<complex> BlockCyclicMatrix::diagonalize(Buffer& A, Buffer& VR, Buffer& VL, bool shouldBalance, bool shouldSort) const
-{	BlockCyclicMatrix::Buffer scale; std::vector<int> evalSort; //optional scale factors and eigenvalue sorting
+{	static StopWatch watch("BlockCyclicMatrix::diagonalize"); watch.start();
+	Buffer scale; std::vector<int> evalSort; //optional scale factors and eigenvalue sorting
 	if(shouldBalance) scale = balance(A); //Balance matrix
-	BlockCyclicMatrix::Buffer Q = hessenberg(A); //Hessenberg reduction
+	Buffer Q = hessenberg(A); //Hessenberg reduction
 	std::vector<complex> evals = schur(A, Q); //Schur decomposition and eigenvalues
 	if(shouldSort) evalSort = sortEvals(evals); //Sort eigenvalues
 	getEvecs(A, Q, VR, VL,  //Get eigenvectors ...
 		shouldBalance ? &scale : NULL, //... accounting for scale factors if balanced above
 		shouldSort ? &evalSort : NULL); //... matching eigenvalue permutation if sorted above
+	watch.stop();
 	return evals;
 }
 
@@ -129,9 +142,8 @@ BlockCyclicMatrix::Buffer BlockCyclicMatrix::balance(Buffer& A) const
 	int iLo = 1, iHi = N;
 	Buffer scaleFactors(N, 1.);
 	logPrintf("Balancing matrix ... "); logFlush();
-	char job = 'S'; //Scale only (no permutations)
 	int info = 0;
-	pdgebal_(&job, &N, A.data(), desc, &iLo, &iHi, scaleFactors.data(), &info);
+	pdgebal_("Scale", &N, A.data(), desc, &iLo, &iHi, scaleFactors.data(), &info);
 	if(info < 0) die("Error in argument# %d to pdgebal.\n", -info);
 	//Report range of scale factors:
 	double scaleMin = +DBL_MAX, scaleMax = -DBL_MAX;
@@ -177,9 +189,7 @@ BlockCyclicMatrix::Buffer BlockCyclicMatrix::hessenberg(Buffer& H) const
 	work[0] = 0; lwork = -1; //for workspace query
 	logPrintf("Extracting rotations ... "); logFlush();
 	for(int pass=0; pass<2; pass++) //first pass is workspace query, next pass is actual calculation
-	{	char side = 'L'; //irrelevant since we are multiplying by identity
-		char trans = 'N'; //construct Q
-		pdormhr_(&side, &trans, &N, &N, &iLo, &iHi, H.data(), &one, &one, desc,
+	{	pdormhr_("Left", "NoTrans", &N, &N, &iLo, &iHi, H.data(), &one, &one, desc,
 			tau.data(), Q.data(), &one, &one, desc, work.data(), &lwork, &info);
 		if(info < 0)
 		{	int errCode = -info;
@@ -204,21 +214,24 @@ BlockCyclicMatrix::Buffer BlockCyclicMatrix::hessenberg(Buffer& H) const
 	return Q;
 }
 
+extern "C" {
+	//Tweaked version of pdhseqr to fix some workspace bugs implemented in PDHSEQRf.f
+	void pdhseqrf_(const char* job, const char* compz, const int* n, const int* ilo, const int* ihi, double* h, const int* desch,
+		double* wr, double* wi, double* z, const int* descz, double* work, const int* lwork, int* iwork, const int* liwork, int* info);
+}
 
 //Schur decomposition and eigenvalues:
 std::vector<complex> BlockCyclicMatrix::schur(Buffer& H, Buffer& Q) const
 {	static StopWatch watch("BlockCyclicMatrix::schur"); watch.start();
 	assert(H.size()==nDataMine);
 	assert(Q.size()==nDataMine);
-	char job = 'T'; //Eigenvalues and Schur form
-	char compz = 'V'; //Schur vectors transformed using Q provided at input
 	int iLo = 1, iHi = N;
 	Buffer wr(N), wi(N); //real and imaginary parts of eigenvalues
 	Buffer work(1); int lwork = -1, info = 0; //for workspace query
-	std::vector<int> iwork(1); int liwork = -1; //for workspace query
+	std::vector<int> iwork(N); int liwork = -1; //for workspace query
 	logPrintf("Schur decomposition ... "); logFlush();
 	for(int pass=0; pass<2; pass++) //first pass is workspace query, next pass is actual calculation
-	{	pdhseqr_(&job, &compz, &N, &iLo, &iHi, H.data(), desc, wr.data(), wi.data(),
+	{	pdhseqr_("Schur", "Vectors", &N, &iLo, &iHi, H.data(), desc, wr.data(), wi.data(),
 			Q.data(), desc, work.data(), &lwork, iwork.data(), &liwork, &info);
 		if(info < 0)
 		{	int errCode = -info;
@@ -228,11 +241,13 @@ std::vector<complex> BlockCyclicMatrix::schur(Buffer& H, Buffer& Q) const
 		if(info > 0) die("Up to %d eigenvalues failed to converge.\n", info);
 		if(pass) break; //done
 		//After first-pass, use results of work-space query to allocate:
-		lwork = int(work.data()[0]); work.resize(lwork);
-		liwork = int(iwork.data()[0]); iwork.resize(liwork);
+		int nExtra = 2*nDataMine + 10*blockSize*blockSize; //note bug in pdhseqr: workspace underestimated
+		lwork = int(work.data()[0])+nExtra; work.resize(lwork);
+		liwork = int(iwork.data()[0])+nExtra; iwork.resize(liwork);
 	}
 	logPrintf("done.\n");
 	watch.stop();
+
 	//Collect eigenvalues into complex array:
 	std::vector<complex> evals(N);
 	for(int i=0; i<N; i++)
@@ -559,7 +574,9 @@ void BlockCyclicMatrix::getEvecs(const Buffer& T, const Buffer& Q, Buffer& VR, B
 			//Make max abs entry = 1 first, and then apply complex phases to ensure dot(VL,VR) = id:
 			complex zRmax(VRcur[iMaxNormR], VRcur[iMaxNormR+N]);
 			complex zLmax(VLcur[iMaxNormL], VLcur[iMaxNormL+N]);
-			complex dotFac = sqrt(dotProduct / (zLmax.conj() * zRmax));
+			if(dotProduct.norm() < prec) dotProduct = 1.; //unlikely (impossible?) corner case of orthogonal L-R evecs
+			dotProduct /= (zLmax.conj() * zRmax); //acount for max-value pre-scaling done to the columns below
+			complex dotFac = sqrt(dotProduct);
 			complex scaleFacR = complex(1.,0)/(zRmax * dotFac);
 			complex scaleFacL = complex(1.,0)/(zLmax * dotFac.conj());
 			for(int iRow=0; iRow<N; iRow++)
@@ -582,9 +599,11 @@ void BlockCyclicMatrix::getEvecs(const Buffer& T, const Buffer& Q, Buffer& VR, B
 			//Make max abs entry = 1, and then scale to ensure dot(VL,VR) = id:
 			double zRmax = VRcur[iMaxAbsR];
 			double zLmax = VLcur[iMaxAbsL];
-			double dotFac = sqrt(dotProduct / (zRmax * zLmax));
+			if(std::pow(dotProduct,2) < prec) dotProduct = 1.; //unlikely (impossible?) corner case of orthogonal L-R evecs
+			dotProduct /= (zRmax * zLmax); //acount for max-value pre-scaling done to the columns below
+			double dotFac = sqrt(fabs(dotProduct));
 			double scaleFacR = 1./(zRmax * dotFac);
-			double scaleFacL = 1./(zLmax * dotFac);
+			double scaleFacL = 1./(zLmax * copysign(dotFac,dotProduct));
 			for(int iRow=0; iRow<N; iRow++)
 			{	VRcur[iRow] *= scaleFacR;
 				VLcur[iRow] *= scaleFacL;

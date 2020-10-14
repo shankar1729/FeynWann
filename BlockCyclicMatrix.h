@@ -85,6 +85,7 @@ public:
 	//---- I/O and debugging ----
 	Buffer readMatrix(string fname) const; //!< Read dense matrix from file
 	double matrixErr(const Buffer& A, const Buffer& B) const; //!< Calculate error between two distributed matrices
+	double identityErr(const Buffer& A) const; //!< Calculate error between a distributed matrix and identity
 	void printMatrix(const Buffer& mat, const char* name="") const; //!< Synchronized print of all pieces of a distributed matrix
 	
 	//---- Indexing utilties ----

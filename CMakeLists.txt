@@ -127,11 +127,12 @@ add_FeynWann_executable(debugEph)
 
 target_link_libraries(lindblad ${GSL_BLAS_LIBRARY})
 
-#Optional ScaLAPACK provided through MKL:
+#Optional ScaLAPACK:
 option(EnableScaLAPACK "Enable ScaLAPACK support (currently used only by the dense diagonalization in lindbladLinear)")
 if(EnableScaLAPACK)
-	find_package(MKL REQUIRED) #This sets SCALAPACK_ENABLED and adds scalapack librarties to MKL_LIBRARIES
-	include_directories("${MKL_INCLUDE_DIR}")
+	add_definitions("-DSCALAPACK_ENABLED")
+	include_directories(/opt/intel/mkl/include ${MKL_PATH}/include) #needed for c function definitions
+	#JDFTx must be built with scalapack support for this to work (not tested in this cmake script)
 endif()
 
 #Optional lindbladian linear dynamics and spectrum that requires SLEPc
@@ -142,6 +143,5 @@ if(EnableSLEPc)
 	include_directories("${PETSC_INCLUDE_DIR}")
 	include_directories("${SLEPC_INCLUDE_DIR}")
 	add_FeynWann_executable(lindbladLinear)
-	target_link_libraries(lindbladLinear ${GSL_BLAS_LIBRARY} ${PETSC_LIBRARY} ${SLEPC_LIBRARY} ${MKL_LIBRARIES})
+	target_link_libraries(lindbladLinear ${GSL_BLAS_LIBRARY} ${PETSC_LIBRARY} ${SLEPC_LIBRARY})
 endif()
-

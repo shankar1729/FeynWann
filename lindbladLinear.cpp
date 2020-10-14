@@ -499,32 +499,68 @@ struct LindbladLinear : public Integrator<DM1>
 			if(spectrumMode and (not sparseDiag))
 			{	//Convert to dense matrix for ScaLAPACK:
 				#ifdef SCALAPACK_ENABLED
-				const int nRows = 22; //HACK rhoSizeTot
+				
+				//HACK Read test matrix
+				std::vector<complex> Eref;
+				FILE* fp = fopen("testMatrix.E.bin", "r");
+				while(!feof(fp))
+				{	complex tmp; if(fread(&tmp, sizeof(double), 2, fp) != 2) break;
+					Eref.push_back(tmp);
+				}
+				fclose(fp);
+				const int nRows = Eref.size(); logPrintf("nRows: %d\n", nRows);
 				bcm = std::make_shared<BlockCyclicMatrix>(nRows, blockSize, mpiWorld);
 				
 				//############ HACK ########################
 				//Read test matrix:
-				BlockCyclicMatrix::Buffer H = bcm->readMatrix("testMatrix.bin");
-				BlockCyclicMatrix::Buffer VLref = bcm->readMatrix("testMatrix.VL.bin");
-				BlockCyclicMatrix::Buffer VRref = bcm->readMatrix("testMatrix.VR.bin");
+				BlockCyclicMatrix::Buffer H = bcm->readMatrix("testMatrix.bin"), Hcopy(H);
 				BlockCyclicMatrix::Buffer VR, VL;
-				std::vector<complex> evals = bcm->diagonalize(H, VR, VL);
-				
-				//Check decomposition by multiplying:
-				{	BlockCyclicMatrix::Buffer VLTVR;
-					bcm->matMult(1., VL,true, VR,false, 0., VLTVR);
-					bcm->printMatrix(VLTVR, "VL^T * VR");
-				}
-				bcm->printMatrix(VL, "VL");
-				bcm->printMatrix(VR, "VR");
+				std::vector<complex> evals = bcm->diagonalize(Hcopy, VR, VL, false, true);
 				
 				//Print eigenvalues:
-				logPrintf("\nEigenvalues:\n");
+				//logPrintf("\nEigenvalues:\n");
+				double eigErr = 0.;
 				for(int i=0; i<nRows; i++)
-				{	logPrintf("\t%11.8lf%+11.8lfj\n", evals[i].real(), evals[i].imag());
+				{	//logPrintf("\t%11.8lf%+11.8lfj\n", evals[i].real(), evals[i].imag());
+					eigErr += (evals[i] - Eref[i]).norm();
 				}
+				eigErr = sqrt(eigErr/nRows);
+				logPrintf("\n");
 				
-				logPrintf("Eigenvector errors: %le left, %le right\n", bcm->matrixErr(VL,VLref), bcm->matrixErr(VR,VRref));
+				logPrintf("RMSE E: %le\n", eigErr);
+				
+				//Check Vl-VR overlap:
+				BlockCyclicMatrix::Buffer O, Oref(bcm->nDataMine);
+				bcm->matMult(1., VL,true, VR,false, 0., O);
+				double* OrefPtr = Oref.data();
+				for(int iCol: bcm->iColsMine)
+					for(int iRow: bcm->iRowsMine)
+						*(OrefPtr++) = (iRow==iCol ? (evals[iRow].imag() ? 0.5 : 1.) : 0.);
+				logPrintf("RMSE VL^VR: %le\n", bcm->matrixErr(O,Oref));
+				//bcm->printMatrix(O, "O");
+				
+				//Form matrix of eigenvalues:
+				BlockCyclicMatrix::Buffer Emat(bcm->nDataMine);
+				double* Edata = Emat.data();
+				for(int iCol: bcm->iColsMine)
+					for(int iRow: bcm->iRowsMine)
+					{	double val = 0.;
+						if(iRow==iCol) val = evals[iRow].real();
+						if((iRow==iCol+1) and (evals[iRow].imag()<0.)) val = evals[iRow].imag();
+						if((iRow==iCol-1) and (evals[iRow].imag()>0.)) val = evals[iRow].imag();
+						*(Edata++) = val;
+					}
+				BlockCyclicMatrix::Buffer lhs(bcm->nDataMine), rhs(bcm->nDataMine);
+				
+				bcm->matMult(1., H,false, VR,false, 0., lhs);
+				bcm->matMult(1., VR,false, Emat,false, 0., rhs);
+				logPrintf("RMS A*VR-VR*E: %le\n", bcm->matrixErr(lhs,rhs));
+				cblas_daxpy(bcm->nDataMine, -1., lhs.data(),1, rhs.data(),1); //compute difference
+				
+				bcm->matMult(1., VL,true, H,false, 0., lhs);
+				bcm->matMult(1., Emat,false, VL,true, 0., rhs);
+				logPrintf("RMS VL'*A-E*VL': %le\n", bcm->matrixErr(lhs,rhs));
+				
 				//############ HACK ########################
 				#endif
 			}
