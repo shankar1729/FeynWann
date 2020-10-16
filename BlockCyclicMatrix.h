@@ -32,7 +32,8 @@ public:
 	
 	int N; //!< matrix dimension
 	int blockSize; //!< block size for block-cyclic distribution
-	MPIUtil* mpiUtil;
+	MPIUtil* mpiUtil; //!< parent MPI communictor
+	MPIUtil *mpiRow, *mpiCol; //!< cooommunictars within each process row and column
 	int blacsContext;
 	int desc[9]; //!< BLACS description of matrix distribution
 	int nProcsRow, nProcsCol; //!< BLACS process grid dimensions
@@ -42,6 +43,7 @@ public:
 	std::vector<int> iRowsMine, iColsMine; //!< Indices of rows and columns that belng to current process
 
 	BlockCyclicMatrix(int N, int blockSize, MPIUtil* mpiUtil); //!< Set up for diagnalization of NxN matrices parallelized over mpiUtil
+	~BlockCyclicMatrix();
 	
 	//---- Diagonalization and helper routines ----
 	
@@ -82,7 +84,6 @@ public:
 	void matMult(double alpha, const Buffer& A, bool transA, const Buffer& B, bool transB, double beta, Buffer& C) const;
 
 	//---- I/O and debugging ----
-	Buffer readMatrix(string fname) const; //!< Read dense matrix from file
 	double matrixErr(const Buffer& A, const Buffer& B) const; //!< Calculate error between two distributed matrices
 	double identityErr(const Buffer& A, double* offDiag=0) const; //!< Calculate error between a distributed matrix and identity (offDiag contains error in off-diagonal parts)
 	void printMatrix(const Buffer& mat, const char* name="") const; //!< Synchronized print of all pieces of a distributed matrix
