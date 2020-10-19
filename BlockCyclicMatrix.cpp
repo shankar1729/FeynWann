@@ -31,7 +31,6 @@ BlockCyclicMatrix::BlockCyclicMatrix(int N, int blockSize, MPIUtil* mpiUtil) : N
 	nProcsRow = int(round(sqrt(nProcesses)));
 	while(nProcesses % nProcsRow) nProcsRow--;
 	nProcsCol = nProcesses / nProcsRow;
-
 	//Initialize BLACS process grid:
 	{	int unused=-1, what=0;
 		blacs_get_(&unused, &what, &blacsContext);
@@ -359,9 +358,9 @@ void BlockCyclicMatrix::getEvecs(const Buffer& T, const Buffer& Q, Buffer& VR, B
 	mpiUtil->allReduceData(tDiagL, MPIUtil::ReduceSum);
 	
 	//Temporaries for blas calls:
-	int notTrans=0, isTrans=1, two=2, info=0;
+	int notTrans=0, two=2, info=0;
 	double oneD = 1.;
-	double x[4], xNorm, scale; //1x1 or 2x2 matrix used in dlanl2; its norm and scale factor
+	double rhs[4], x[4], xNorm, scale; //1x1 or 2x2 matrices used in dlanl2; norm and scale factor of x
 	Buffer Z(nDataMine); //eigenvectors of T (multiplied by Q at the end)
 	
 	//Left eigenvector calculation:
@@ -432,9 +431,8 @@ void BlockCyclicMatrix::getEvecs(const Buffer& T, const Buffer& Q, Buffer& VR, B
 				}
 			}
 			//Solve kiBlockSize x jBlockSize complex equation to get x:
-			double T22[4] = { tDiag[j], tDiagL[j], tDiagU[j], tDiag[jStop] }; //2x2 diagonal block of T (only 1x1 valid/needed if jStop==j)
-			dlaln2_((jBlockSize==2 ? &isTrans : &notTrans),
-				&jBlockSize, &kiBlockSize, &sMin, &oneD,
+			const double T22[4] = { tDiag[j], tDiagU[j], tDiagL[j], tDiag[jStop] }; //2x2 diagonal block of T (only 1x1 valid/needed if jStop==j)
+			dlaln2_(&notTrans, &jBlockSize, &kiBlockSize, &sMin, &oneD,
 				T22, &two, &oneD, &oneD, 
 				&rhs[j], &N, &wr, &mwi, x, &two,
 				&scale, &xNorm, &info);
@@ -446,13 +444,13 @@ void BlockCyclicMatrix::getEvecs(const Buffer& T, const Buffer& Q, Buffer& VR, B
 				for(int bk=0; bk<kiBlockSize; bk++)
 					cblas_dscal(N-ki, scale, &rhs[ki+bk*N],1);
 			}
+			*/
 			//Update solution:
 			for(int bk=0; bk<kiBlockSize; bk++)
 				for(int bj=0; bj<jBlockSize; bj++)
 				{	rhs[(j+bj)+bk*N] = x[bj+2*bk];
 					vMax = std::max(vMax, x[bj+2*bk]);
 				}
-			*/
 			vCrit = bNum / vMax;
 			j = jStop;
 		}
@@ -484,15 +482,15 @@ void BlockCyclicMatrix::getEvecs(const Buffer& T, const Buffer& Q, Buffer& VR, B
 	//--- in the process, also zero-out block-diagonal part of transpose(T) stored in Z 
 	//--- and prepare the indexing arrays required for synchonizing 2x2 blocks split across processes
 	Buffer ZdiagMine; ZdiagMine.reserve(nColsMine);
-	int iProcRowNext = (iProcRow+1) % nProcsRow, iProcRowPrev = (iProcRow-1) % nProcsRow;
-	int iProcColNext = (iProcCol+1) % nProcsCol, iProcColPrev = (iProcCol-1) % nProcsCol;
-	std::vector<int> iRowMinePadded; //iRowMine whose 2x2 operations will happen on this process, and -1 where data is needed from iProcRowNext
-	std::vector<int> iPaddedRecv; //indices into iRowMinePadded for data that should be received from iProcRowNext
-	std::vector<int> iRowMineSend; //iRowMine that need to be sent to iProcRowPrev
-	int nBlocksPerRow = ceildiv(nRowsMine,blockSize);
-	iRowMinePadded.reserve(nRowsMine + nBlocksPerRow);
-	iPaddedRecv.reserve(nBlocksPerRow);
-	iRowMineSend.reserve(nBlocksPerRow);
+	int iProcRowNext = positiveRemainder(iProcRow+1, nProcsRow), iProcRowPrev = positiveRemainder(iProcRow-1, nProcsRow);
+	int iProcColNext = positiveRemainder(iProcCol+1, nProcsCol), iProcColPrev = positiveRemainder(iProcCol-1, nProcsCol);
+	std::vector<int> iColsMinePadded; //iColMine whose 2x2 operations will happen on this process, and -1 where data is needed from iProcColNext
+	std::vector<int> iPaddedNext; //indices into iColsMinePadded for data that should be received from, processed and sent back to iProcColNext
+	std::vector<int> iColsMinePrev; //iColMine that needs to be sent to iProcColPrev, processed there and then received back
+	int nBlocksPerCol = ceildiv(nColsMine,blockSize);
+	iColsMinePadded.reserve(nColsMine + nBlocksPerCol);
+	iPaddedNext.reserve(nBlocksPerCol);
+	iColsMinePrev.reserve(nBlocksPerCol);
 	for(int ki=0; ki<N; ki++)
 	{	bool complexPair = (ki+1<N) and (tDiagL[ki]!=0.);
 		int kiBlockSize = complexPair ? 2  : 1; //current block size in ki
@@ -506,57 +504,59 @@ void BlockCyclicMatrix::getEvecs(const Buffer& T, const Buffer& Q, Buffer& VR, B
 			IF_COL_MINE(ki)     { ZdiagMine.push_back(Ugreater ? wi/tDiagU[ki] : 1.);  ZERO_ENTRY_Z(ki) ZERO_ENTRY_Z(kiStop) }
 			IF_COL_MINE(kiStop) { ZdiagMine.push_back(Ugreater ? 1. : -wi/tDiagL[ki]); ZERO_ENTRY_Z(ki) ZERO_ENTRY_Z(kiStop) }
 			//Update 2x2 sync arrays:
-			iRowMine = localRowIndex(ki); int iRowMine2 = localRowIndex(kiStop);
-			if(iRowMine >= 0)
-			{	if(iRowMine2 >= 0)
+			iColMine = localColIndex(ki); int iColMine2 = localColIndex(kiStop);
+			if(iColMine >= 0)
+			{	if(iColMine2 >= 0)
 				{	//both ki and kiStop on this process; no communication needed
-					iRowMinePadded.push_back(iRowMine);
-					iRowMinePadded.push_back(iRowMine2);
+					iColsMinePadded.push_back(iColMine);
+					iColsMinePadded.push_back(iColMine2);
 				}
 				else
 				{	//ki on this process, but kiStop on next process 
-					iRowMinePadded.push_back(iRowMine);
-					iRowMinePadded.push_back(-1); //need to recv kiStop from next process
-					iPaddedRecv.push_back(iRowMinePadded.size()-1); //point to last entry added above
+					iColsMinePadded.push_back(iColMine);
+					iColsMinePadded.push_back(-1); //need to recv kiStop from next process
+					iPaddedNext.push_back(iColsMinePadded.size()-1); //point to last entry added above
 				}
 			}
 			else
-			{	if(iRowMine2 >= 0)
+			{	if(iColMine2 >= 0)
 				{	//kiStop on this process, but ki on prev process
-					iRowMineSend.push_back(iRowMine2); //send data to prev process, which will process the 2x2 block
+					iColsMinePrev.push_back(iColMine2); //send data to prev process, which will process the 2x2 block
 				}
 				//else both not ki and kiStop not involved in this process
 			}
 		}
 		else
 		{	IF_COL_MINE(ki) { ZdiagMine.push_back(1.); ZERO_ENTRY_Z(ki) } 
-			iRowMine = localRowIndex(ki);
-			if(iRowMine >= 0) iRowMinePadded.push_back(iRowMine); //never need communictaion for 1x1 block
+			iColMine = localColIndex(ki);
+			if(iColMine >= 0) iColsMinePadded.push_back(iColMine); //never need communictaion for 1x1 block
 		}
 		#undef IF_COL_MINE
 		#undef ZERO_ENTRY_Z
 		ki = kiStop;
 	}
 	
-	{	ostringstream oss; oss << "Process (" << iProcRow << "," << iProcCol << "):";
-		oss << " SEND(" << iRowMineSend.size() << ")"; for(int i: iRowMineSend) oss << ' ' << iRowsMine[i];
-		oss << " RECV(" << iPaddedRecv.size() << ")"; for(int i: iPaddedRecv) { assert(i); assert(iRowMinePadded[i]==-1); oss << ' ' << iRowsMine[iRowMinePadded[i-1]]+1; }
+	/*{	ostringstream oss; oss << "Process (" << iProcRow << "," << iProcCol << "):";
+		oss << " SEND(" << iColsMinePrev.size() << ")"; for(int i: iColsMinePrev) oss << ' ' << iColsMine[i];
+		oss << " RECV(" << iPaddedNext.size() << ")"; for(int i: iPaddedNext) { assert(i); assert(iColsMinePadded[i]==-1); oss << ' ' << iColsMine[iColsMinePadded[i-1]]+1; }
 		printf("\n%s", oss.str().c_str()); fflush(stdout);
-	}
+	}*/
 	
 	//--- apply diagonal scaling factors
 	//--- (diagonal blocks still left at zero, so Z is strictly lower triangular)
 	{	double* Zdata = Z.data();
 		for(int iColMine=0; iColMine<nColsMine; iColMine++)
-		{	double diagCur = ZdiagMine[iColMine];
-			cblas_dscal(nRowsMine, -diagCur, Zdata,1); //diagonal scaling of off-diagonal terms
-			int iRowMine = localRowIndex(iColsMine[iColMine]);
-			//if(iRowMine >= 0) Zdata[iRowMine] = diagCur; //set diagonal term
+		{	cblas_dscal(nRowsMine, -ZdiagMine[iColMine], Zdata,1);
 			Zdata += nRowsMine;
 		}
 	}
 	//--- solve set of quasi-triangular systems (T - (wr-i*wi))*x = Z in parallel
 	Buffer Tcur(nRowsMine*2), Zupdate(nColsMine*2);
+	int nColsPadded = iColsMinePadded.size();
+	int nColsPrev = iColsMinePrev.size();
+	int nColsNext = iPaddedNext.size();
+	Buffer xMine(nColsPadded*2); //buffer used for the kiBlockSize x jBlockSize updates
+	Buffer prevBuf(nColsPrev), nextBuf(nColsNext); //buffers for sending/recv'ing from prev and next process
 	for(int j=0; j<N; j++)
 	{	int jBlockSize = ((j+1<N) and (tDiagL[j]!=0.)) ? 2 : 1; //current block size in j
 		int jStop = j+jBlockSize-1; //end of current block in j
@@ -572,24 +572,114 @@ void BlockCyclicMatrix::getEvecs(const Buffer& T, const Buffer& Q, Buffer& VR, B
 					eblas_copy(&Tcur[nRowsMine*bj], &T[nRowsMine*localColIndex(j+bj)], iRowMineStop);
 				mpiRow->bcast(&Tcur[nRowsMine*bj], iRowMineStop, whoseProcCol);
 			}
+		//Update  Z(j,ki) -= sum_(ki < i < j) [ T(i,j) * Z(i,ki) ]
+		//--- done as  Z(j,ki) -= sum_(i < j) [ T(i,j) * Z(i,ki) ] since Z is strictly lower triangular (diag part set later)
 		if(iColMineStop)
-		{	//Update  Z(j,ki) -= sum_(ki < i < j) [ T(i,j) * Z(i,ki) ]
-			//--- done as  Z(j,ki) -= sum_(i < j) [ T(i,j) * Z(i,ki) ] since Z is strictly lower triangular (diag part set later)
-			//--- compute the local piece of the matrix product
+		{	//Compute the local piece of the matrix product
 			if(iRowMineStop)
 				cblas_dgemm(CblasColMajor, CblasTrans, CblasNoTrans, iColMineStop, jBlockSize, iRowMineStop,
 					1., Z.data(),nRowsMine, Tcur.data(),nRowsMine, 0., Zupdate.data(),nColsMine);
-			//--- accumulate result on the appropriate process
+			//Accumulate result on the appropriate process
 			for(int bj=0; bj<jBlockSize; bj++)
 			{	int whoseProcRow = ((j+bj) / blockSize) % nProcsRow;
 				mpiCol->reduce(&Zupdate[nColsMine*bj], iColMineStop, MPIUtil::ReduceSum, whoseProcRow);
 				if(whoseProcRow == iProcRow)
 					cblas_daxpy(iColMineStop, -1., &Zupdate[nColsMine*bj],1, &Z[localRowIndex(j+bj)],nRowsMine);
 			}
-			//Solve kiBlockSize x jBlockSize complex equations to update Z:
-			//--- prepare RHS, accounting for blocks split across processes if any
-			
 		}
+		//Solve kiBlockSize x jBlockSize complex equations to update Z:
+		//--- prepare RHS, accounting for blocks split across processes if any
+		bool localRow[2];
+		for(int bj=0; bj<jBlockSize; bj++)
+		{	int iRowMine = localRowIndex(j+bj);
+			localRow[bj] = (iRowMine >= 0);
+			if(localRow[bj])
+			{	//Send columns of Z to prev process:
+				MPIUtil::Request sendRequest;
+				if(nColsPrev)
+				{	for(int i=0; i<nColsPrev; i++)
+						prevBuf[i] = Z[iRowMine+iColsMinePrev[i]*nRowsMine];
+					mpiRow->sendData(prevBuf, iProcColPrev, j+bj, &sendRequest);
+				}
+				//Recv columns of Z from next process:
+				if(nColsNext)
+				{	mpiRow->recvData(nextBuf, iProcColNext, j+bj);
+					for(int i=0; i<nColsNext; i++)
+						xMine[iPaddedNext[i]+bj*nColsPadded] = nextBuf[i];
+				}
+				//Collect local pieces:
+				for(int i=0; i<nColsPadded; i++)
+				{	int iColMine = iColsMinePadded[i];
+					if(iColMine >= 0)
+						xMine[i+bj*nColsPadded] = Z[iRowMine+iColMine*nRowsMine];
+				}
+				if(nColsPrev) mpiRow->wait(sendRequest);
+			}
+		}
+		if(jBlockSize == 2)
+		{	if(localRow[0] and (not localRow[1])) mpiCol->recv(&xMine[nColsPadded], nColsPadded, iProcRowNext, j+1); //recv second row from next process
+			if(localRow[1] and (not localRow[0])) mpiCol->send(&xMine[nColsPadded], nColsPadded, iProcRowPrev, j+1); //send second row to prev process
+		}
+		//--- perform kiBlockSize x jBlockSize updates from rhsMine to xMine
+		if(localRow[0])
+		{	const double T22[4] = { tDiag[j], tDiagU[j], tDiagL[j], tDiag[jStop] }; //2x2 diagonal block of T (only 1x1 valid/needed if jStop==j)
+			for(int iPadded=0; iPadded<nColsPadded; iPadded++)
+			{	int iColMine = iColsMinePadded[iPadded];
+				assert(iColMine >= 0);
+				int ki = iColsMine[iColMine];
+				if(ki >= j) break;
+				bool complexPair = (ki+1<N) and (tDiagL[ki]!=0.);
+				int kiBlockSize = complexPair ? 2  : 1; //current block size in ki
+				int iPaddedStop = iPadded + kiBlockSize-1; //end of current block in iPadded
+				double wr = tDiag[ki];
+				double mwi = complexPair ? -sqrt(fabs(tDiagL[ki]*tDiagU[ki])) : 0;
+				double sMin = std::max(prec*(fabs(wr)+fabs(mwi)), sNum); //small number threshold for this eigenvector (pair)
+				//Fetch RHS:
+				for(int bk=0; bk<kiBlockSize; bk++)
+					for(int bj=0; bj<jBlockSize; bj++)
+						rhs[bj+2*bk] = xMine[(iPadded+bk)+bj*nColsPadded];
+				//Perform block solve:
+				dlaln2_(&notTrans, &jBlockSize, &kiBlockSize, &sMin, &oneD,
+					T22, &two, &oneD, &oneD, 
+					rhs, &two, &wr, &mwi, x, &two,
+					&scale, &xNorm, &info);
+				if(scale != 1.) die_alone("Overflow encountered.\n");
+				//Set x back:
+				for(int bk=0; bk<kiBlockSize; bk++)
+					for(int bj=0; bj<jBlockSize; bj++)
+						xMine[(iPadded+bk)+bj*nColsPadded] = x[bj+2*bk];
+				iPadded = iPaddedStop;
+			}
+		}
+		//--- set results from xMine back to Z, accounting for blocks split across processes if any
+		if(jBlockSize == 2)
+		{	if(localRow[0] and (not localRow[1])) mpiCol->send(&xMine[nColsPadded], nColsPadded, iProcRowNext, j+1); //send second row back to next process
+			if(localRow[1] and (not localRow[0])) mpiCol->recv(&xMine[nColsPadded], nColsPadded, iProcRowPrev, j+1); //recv second row back from prev process
+		}
+		for(int bj=0; bj<jBlockSize; bj++)
+			if(localRow[bj])
+			{	int iRowMine = localRowIndex(j+bj);
+				//Send columns of Z back to next process:
+				MPIUtil::Request sendRequest;
+				if(nColsNext)
+				{	for(int i=0; i<nColsNext; i++)
+						nextBuf[i] = xMine[iPaddedNext[i]+bj*nColsPadded];
+					mpiRow->sendData(nextBuf, iProcColNext, j+bj, &sendRequest);
+				}
+				//Recv columns of Z back from prev process:
+				if(nColsPrev)
+				{	mpiRow->recvData(prevBuf, iProcColPrev, j+bj);
+					for(int i=0; i<nColsPrev; i++)
+						Z[iRowMine+iColsMinePrev[i]*nRowsMine] = prevBuf[i];
+				}
+				//Set local pieces back in Z:
+				for(int i=0; i<nColsPadded; i++)
+				{	int iColMine = iColsMinePadded[i];
+					if(iColMine >= 0)
+						Z[iRowMine+iColMine*nRowsMine] = xMine[i+bj*nColsPadded];
+				}
+				if(nColsNext) mpiRow->wait(sendRequest);
+			}
 		j = jStop;
 	}
 	//--- set the diagonal blocks of Z:
