@@ -160,7 +160,7 @@ struct LindbladLinear : public Integrator<DM1>
 	
 	//--------- Time evolution sparse matrix and SLEPc conversion -----------
 	
-	struct Triplet { int i, j; double val; bool local; }; //entry in triplet format matrix (along with tage for process locality)for initial construction
+	struct Triplet { int i, j; double val; bool local; }; //entry in triplet format matrix (along with tag for process locality) for initial construction
 	Mat evolveMat; //Time evolution operator
 	//Mat precondMat; //Preconditioning matrix
 	Vec vRho, vRhoDot; //!< temporary copies of drho and rdhoDot data in Petsc format

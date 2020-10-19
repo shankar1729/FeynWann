@@ -219,7 +219,7 @@ BlockCyclicMatrix::Buffer BlockCyclicMatrix::balance(Buffer& A) const
 	{	scaleMin = std::min(s, scaleMin);
 		scaleMax = std::max(s, scaleMax);
 	}
-	logPrintf("done. Scale factor range: [ %lg , %lg ]\n", scaleMin, scaleMax);
+	logPrintf("done at t[s]: %.2lf. Scale factor range: [ %lg , %lg ]\n", clock_sec(), scaleMin, scaleMax);
 	watch.stop();
 	return scaleFactors;
 }
@@ -245,7 +245,7 @@ BlockCyclicMatrix::Buffer BlockCyclicMatrix::hessenberg(Buffer& H) const
 		lwork = int(work.data()[0]);
 		work.resize(lwork);
 	}
-	logPrintf("done.\n");
+	logPrintf("done at t[s]: %.2lf.\n", clock_sec());
 	
 	//Get orthogonal matrix correspnding to Householder transformations:
 	//--- initialize Q to identity:
@@ -269,7 +269,7 @@ BlockCyclicMatrix::Buffer BlockCyclicMatrix::hessenberg(Buffer& H) const
 		lwork = int(work.data()[0]);
 		work.resize(lwork);
 	}
-	logPrintf("done.\n");
+	logPrintf("done at t[s]: %.2lf.\n", clock_sec());
 	
 	//Set H to strict upper Hessenberg form:
 	double* Hdata = H.data();
@@ -313,7 +313,7 @@ std::vector<complex> BlockCyclicMatrix::schur(Buffer& H, Buffer& Q) const
 		work.resize(lwork);
 		iwork.resize(liwork);
 	}
-	logPrintf("done.\n");
+	logPrintf("done at t[s]: %.2lf.\n", clock_sec());
 	watch.stop();
 
 	//Collect eigenvalues into complex array:
@@ -567,8 +567,9 @@ void BlockCyclicMatrix::getEvecs(const Buffer& T, const Buffer& Q, Buffer& VR, B
 		if(iRowMine >= 0)
 			Z[iRowMine+iColMine*nRowsMine] = ZdiagMine[iColMine];
 	}
-	logPrintf("done.\nRotating left eigenvectors to original basis ... "); logFlush();
+	logPrintf("done at t[s]: %.2lf.\n", clock_sec());
 	//--- multiply by Q
+	logPrintf("Rotating left eigenvectors to original basis ... "); logFlush();
 	matMult(1., Q,false, Z,false, 0.,VL);
 	//--- account for scaleFactors if necessary:
 	if(scaleFactors)
@@ -582,7 +583,7 @@ void BlockCyclicMatrix::getEvecs(const Buffer& T, const Buffer& Q, Buffer& VR, B
 			for(int iRowMine=0; iRowMine<nRowsMine; iRowMine++)
 				*(VLdata++) *= scaleMineInv[iRowMine];
 	}
-	logPrintf("done.\n");
+	logPrintf("done at t[s]: %.2lf.\n", clock_sec());
 	watchLeft.stop();
 	
 	//Right eigenvector calculation:
@@ -607,7 +608,7 @@ void BlockCyclicMatrix::getEvecs(const Buffer& T, const Buffer& Q, Buffer& VR, B
 		else die("Error in entry %d of argument# %d to pdgesv.\n", errCode%100, errCode/100)
 	}
 	if(info > 0) die("Matrix singular at column# %d in pdgesv.\n", info);
-	logPrintf("done.\n");
+	logPrintf("done at t[s]: %.2lf.\n", clock_sec());
 	watchRight.stop();
 }
 
