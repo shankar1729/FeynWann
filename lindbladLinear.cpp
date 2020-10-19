@@ -252,6 +252,7 @@ struct LindbladLinear : public Integrator<DM1>
 	//--------- Blacs / ScaLAPACK interface for dense diagonalization -----------
 	#ifdef SCALAPACK_ENABLED
 	std::shared_ptr<BlockCyclicMatrix> bcm;
+	BlockCyclicMatrix::Buffer evolveMatDense;
 	#endif
 	
 	//--------- Initialize -------------
@@ -291,9 +292,6 @@ struct LindbladLinear : public Integrator<DM1>
 		nInnerAll.resize(nk);
 		
 		//Read k-point info and initialize states:
-		
-	if((not spectrumMode) or sparseDiag) { //HACK
-		
 		mpiWorld->fseek(fp, byteOffsets[ikStart], SEEK_SET);
 		for(size_t ikMine=0; ikMine<nkMine; ikMine++)
 		{	State& s = state[ikMine];
@@ -325,9 +323,6 @@ struct LindbladLinear : public Integrator<DM1>
 			for(int b=0; b<s.nInner; b++)
 				s.rho0[b] = fermi((s.E[b+s.innerStart]-dmu)*invT);
 		}
-		
-	} //HACK
-		
 		mpiWorld->fclose(fp);
 		
 		//Synchronize energy range:
@@ -381,12 +376,14 @@ struct LindbladLinear : public Integrator<DM1>
 				mpiWorld->bcast(&Eall[iEstart], iEstop-iEstart, jProc);
 			}
 			//Collect matrix elements in triplet format:
-			std::vector<Triplet> evolveEntries;
-		
-		if((not spectrumMode) or sparseDiag) { //HACK
-		
+			bool denseMode = spectrumMode and (not sparseDiag);
+			std::vector<Triplet> evolveEntries; //list of all entries initialized on this process; used in sparse mode
+			#ifdef SCALAPACK_ENABLED
+			std::vector<std::vector<std::pair<double,int>>> evolveEntriesProc(mpiWorld->nProcesses()); //list of entries by destination process; used in dense mode
+			if(denseMode) bcm = std::make_shared<BlockCyclicMatrix>(rhoSizeTot, blockSize, mpiWorld); //ScaLAPACK wrapper object
+			#endif
 			State* sPtr = state.data();
-			logPrintf("Initialing time evolution operator ... "); logFlush();
+			logPrintf("Initializing time evolution operator ... "); logFlush();
 			for(size_t ik1=ikStart; ik1<ikStop; ik1++)
 			{	State& s = *(sPtr++);
 				const double* E1 = &(s.E[s.innerStart]);
@@ -484,32 +481,87 @@ struct LindbladLinear : public Integrator<DM1>
 							} \
 						} \
 					}
-					EXTRACT_NNZ(1,2)
-					EXTRACT_NNZ(2,1)
-					EXTRACT_NNZ(1,1)
-					EXTRACT_NNZ(2,2)
+					#define EXTRACT_NNZ_DENSE(i,j) \
+					{	const complex* data = L##i##j.data(); \
+						for(int col=0; col<L##i##j.nCols(); col++) \
+						{	for(int row=0; row<L##i##j.nRows(); row++) \
+							{	double M = (data++)->real(); \
+								if(M) \
+								{	int iRow = row+nRhoPrev##i; \
+									int iCol = col+nRhoPrev##j; \
+									int localIndex, whose = bcm->globalIndex(iRow, iCol, localIndex); \
+									evolveEntriesProc[whose].push_back(std::make_pair(M,localIndex)); \
+								} \
+							} \
+						} /* TODO */ \
+					}
+					if(denseMode)
+					{
+						#ifdef SCALAPACK_ENABLED
+						EXTRACT_NNZ_DENSE(1,2)
+						EXTRACT_NNZ_DENSE(2,1)
+						EXTRACT_NNZ_DENSE(1,1)
+						EXTRACT_NNZ_DENSE(2,2)
+						#endif
+					}
+					else
+					{	EXTRACT_NNZ(1,2)
+						EXTRACT_NNZ(2,1)
+						EXTRACT_NNZ(1,1)
+						EXTRACT_NNZ(2,2)
+					}
 					#undef EXTRACT_NNZ
+					#undef EXTRACT_NNZ_DENSE
 				}
 			}
 			logPrintf("done.\n"); 
-			
-		} //HACK
 			
 			//Convert from triplet to appropriate format:
 			if(spectrumMode and (not sparseDiag))
 			{	//Convert to dense matrix for ScaLAPACK:
 				#ifdef SCALAPACK_ENABLED
-				//HACK: test with a random matrix
-				int nRows = 0; double fillFactor = 0.;
-				if(mpiWorld->isHead())
-				{	char* buf = getenv("MATRIX_SIZE"); if(buf) nRows = atoi(buf);
-					buf = getenv("MATRIX_FILL"); if(buf) fillFactor = atof(buf);
+				logPrintf("Converting to block-cyclic distributed dense matrix ... "); logFlush();
+				//--- sync sizes of remote pieces:
+				std::vector<size_t> nEntriesFromProc(mpiWorld->nProcesses());
+				{	std::vector<size_t> nEntriesToProc(mpiWorld->nProcesses());
+					std::vector<MPIUtil::Request> requests(2*(mpiWorld->nProcesses()-1));
+					int iRequest = 0;
+					for(int jProc=0; jProc<mpiWorld->nProcesses(); jProc++)
+						if(jProc != mpiWorld->iProcess())
+						{	nEntriesToProc[jProc] = evolveEntriesProc[jProc].size();
+							mpiWorld->send(&nEntriesToProc[jProc], 1, jProc, 0, &requests[iRequest++]);
+							mpiWorld->recv(&nEntriesFromProc[jProc], 1, jProc, 0, &requests[iRequest++]);
+							
+						}
+					mpiWorld->waitAll(requests);
 				}
-				mpiWorld->bcast(nRows);
-				mpiWorld->bcast(fillFactor);
-				if((nRows<=0) or (fillFactor<=0.)) die("Specify variables MATRIX_SIZE and MATRIX_FILL for random test.\n");
-				bcm = std::make_shared<BlockCyclicMatrix>(nRows, blockSize, mpiWorld);
-				bcm->testRandom(fillFactor);
+				//--- transfer remote pieces:
+				std::vector<std::vector<std::pair<double,int>>> evolveEntriesMine(mpiWorld->nProcesses());
+				{	std::vector<MPIUtil::Request> requests(2*(mpiWorld->nProcesses()-1));
+					int iRequest = 0;
+					for(int jProc=0; jProc<mpiWorld->nProcesses(); jProc++)
+						if(jProc == mpiWorld->iProcess())
+							std::swap(evolveEntriesProc[jProc], evolveEntriesMine[jProc]);
+						else
+						{	evolveEntriesMine[jProc].resize(nEntriesFromProc[jProc]);
+							MPI_Irecv(evolveEntriesMine[jProc].data(), evolveEntriesMine[jProc].size(), MPI_DOUBLE_INT, jProc, 1, MPI_COMM_WORLD, &requests[iRequest++]);
+							MPI_Isend(evolveEntriesProc[jProc].data(), evolveEntriesProc[jProc].size(), MPI_DOUBLE_INT, jProc, 1, MPI_COMM_WORLD, &requests[iRequest++]);
+						}
+					mpiWorld->waitAll(requests);
+					evolveEntriesProc.clear();
+				}
+				//--- set to dense matrix:
+				size_t nNZ = 0;
+				evolveMatDense.assign(bcm->nDataMine, 0.);
+				for(const auto& entries: evolveEntriesMine)
+				{	for(const std::pair<double,int>& entry: entries)
+						evolveMatDense[entry.second] += entry.first;
+					nNZ += entries.size();
+				}
+				mpiWorld->allReduce(nNZ, MPIUtil::ReduceSum);
+				logPrintf("done. Total terms: %lu in %lu x %lu matrix (%.1lf%% fill)\n",
+					nNZ, rhoSizeTot, rhoSizeTot, nNZ*100./(rhoSizeTot*rhoSizeTot));
+				logFlush();
 				#endif
 			}
 			else
@@ -867,9 +919,9 @@ int main(int argc, char** argv)
 	const double dmu = inputMap.get("dmu", 0.) * eV; //optional: shift in fermi level from neutral value / VBM in eV (default: 0)
 	const double T = inputMap.get("T") * Kelvin; //temperature in Kelvin (ambient phonon T = initial electron T)
 	const string mode = inputMap.getString("mode"); //RealTime or Spectrum or SpectrumSparse
-	if(mode!="RealTime" and mode!="Spectrum" and mode!="SpectrumSparse")
+	if((mode!="RealTime") and (mode!="Spectrum") and (mode!="SpectrumSparse"))
 		die("\nmode must be 'RealTime', 'Spectrum' or 'SpectrumSparse'\n");
-	const bool spectrumMode = (mode == "Spectrum" or mode == "SpectrumSparse");
+	const bool spectrumMode = (mode == "Spectrum") or (mode == "SpectrumSparse");
 	const bool sparseDiag = (mode == "SpectrumSparse");
 	#ifndef SCALAPACK_ENABLED
 	if(spectrumMode and (not sparseDiag))
@@ -1065,7 +1117,16 @@ int main(int argc, char** argv)
 	else if(spectrumMode and (not sparseDiag))
 	{
 		//----------- Dense diagonalization using ScaLAPACK ---------------
-		
+		#ifdef SCALAPACK_ENABLED
+		BlockCyclicMatrix::Buffer VL, VR;
+		std::vector<complex> evals = lbl.bcm->diagonalize(lbl.evolveMatDense, VR, VL);
+		lbl.bcm->checkDiagonalization(lbl.evolveMatDense, VR, VL, evals);
+		logPrintf("\n%19s %19s\n", "Re(eig)", "Im(eig)");
+		for(size_t iEig=0; iEig<lbl.rhoSizeTot; iEig++)
+		{	logPrintf("%19.12le %19.12le\n", evals[iEig].real(), evals[iEig].imag());
+		}
+		logPrintf("\n");
+		#endif
 	}
 	else if(not ePhEnabled)
 	{	//Simple probe-pump-probe with no relaxation:

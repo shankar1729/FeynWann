@@ -40,8 +40,9 @@ public:
 	int iProcRow, iProcCol; //!< Current process index in BLACS process grid
 	int nRowsMine, nColsMine; //!< Number of rows and columns on current process
 	size_t nDataMine; //!< Total number of local matrix entries
-	std::vector<int> iRowsMine, iColsMine; //!< Indices of rows and columns that belng to current process
-
+	std::vector<int> iRowsMine, iColsMine; //!< Indices of rows and columns that belong to current process
+	std::vector<int> nRowsProc; //!< number of rows on each process
+	
 	BlockCyclicMatrix(int N, int blockSize, MPIUtil* mpiUtil); //!< Set up for diagnalization of NxN matrices parallelized over mpiUtil
 	~BlockCyclicMatrix();
 	
@@ -91,9 +92,12 @@ public:
 	
 	//---- Indexing utilties ----
 	
-	//!Get index into local storage given global indices and dimensions
+	//! Get index into local storage given global indices and dimensions
 	//! Returns -1 if corresponding value does not belong to current process
 	inline int localIndex(int iRow, int iCol) const;
+	
+	//! Return process number where this entry will be local, and set corresponding localIndex in localIndex
+	inline int globalIndex(int iRow, int iCol, int& localIndex) const;
 	
 	//! Get the range of indices [iMineStart,iMineStop) to sorted array iMine that have values in range [iStart,iStop)
 	inline void getRange(const std::vector<int>& iMine, int iStart, int iStop, int& iMineStart, int& iMineStop) const;
@@ -120,6 +124,23 @@ inline int BlockCyclicMatrix::localIndex(int iRow, int iCol) const
 	#undef InitIndices
 	//Compute flattened local index:
 	return iColMine*nRowsMine + iRowMine;
+}
+
+inline int BlockCyclicMatrix::globalIndex(int iRow, int iCol, int& localIndex) const
+{	//Split row and column indices, each into process index and local index:
+	#define InitIndices(dim) \
+		int iBlock##dim##Global = i##dim / blockSize; \
+		int whose##dim = iBlock##dim##Global % nProcs##dim; /*process index*/ \
+		int iBlock##dim = iBlock##dim##Global / nProcs##dim; /*local block index*/ \
+		int iElem##dim = i##dim % blockSize; /*index within block*/ \
+		int i##dim##Local = iBlock##dim * blockSize + iElem##dim;
+	InitIndices(Row)
+	InitIndices(Col)
+	#undef InitIndices
+	//Compute flattened processor index and corresponding local index:
+	int whose = whoseRow*nProcsCol + whoseCol; //row-major process mapping
+	localIndex = iRowLocal + iColLocal*nRowsProc[whose]; //column-major data mapping in each process
+	return whose;
 }
 
 inline void BlockCyclicMatrix::getRange(const std::vector<int>& iMine, int iStart, int iStop, int& iMineStart, int& iMineStop) const

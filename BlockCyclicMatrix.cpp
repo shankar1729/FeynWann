@@ -56,6 +56,11 @@ BlockCyclicMatrix::BlockCyclicMatrix(int N, int blockSize, MPIUtil* mpiUtil) : N
 		descinit_(desc, &N, &N, &blockSize, &blockSize, &zero, &zero, &blacsContext, &nRowsMine, &info);
 		assert(info==0);
 	}
+	
+	//Make number of rows on each process globally available:
+	nRowsProc.assign(mpiWorld->nProcesses(), 0);
+	nRowsProc[mpiWorld->iProcess()] = nRowsMine;
+	mpiWorld->allReduceData(nRowsProc, MPIUtil::ReduceMax);
 }
 
 BlockCyclicMatrix::~BlockCyclicMatrix()
