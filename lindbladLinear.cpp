@@ -1032,7 +1032,7 @@ int main(int argc, char** argv)
 		//----------- Dense diagonalization using ScaLAPACK ---------------
 		#ifdef SCALAPACK_ENABLED
 		BlockCyclicMatrix::Buffer VL, VR, spinPert, spinMat;
-		std::vector<complex> evals = lbl.bcm->diagonalize(lbl.evolveMatDense, VR, VL); //diagonalize
+		std::vector<complex> evals = lbl.bcm->diagonalize(lbl.evolveMatDense, VR, VL, false); //diagonalize
 		lbl.bcm->checkDiagonalization(lbl.evolveMatDense, VR, VL, evals); //check diagonalization
 		lbl.bcm->matMultVec(1., VL, lbl.spinPertDense, spinPert); //weight of each eigenmode in each B-field perturbation
 		lbl.bcm->matMultVec(1., VR, lbl.spinMatDense, spinMat); //spin matrix elements of each eigenmode
