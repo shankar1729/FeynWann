@@ -252,7 +252,7 @@ struct LindbladLinear : public Integrator<DM1>
 	//--------- Blacs / ScaLAPACK interface for dense diagonalization -----------
 	#ifdef SCALAPACK_ENABLED
 	std::shared_ptr<BlockCyclicMatrix> bcm;
-	BlockCyclicMatrix::Buffer evolveMatDense;
+	BlockCyclicMatrix::Buffer evolveMatDense, spinMatDense, spinPertDense;
 	#endif
 	
 	//--------- Initialize -------------
@@ -399,7 +399,6 @@ struct LindbladLinear : public Integrator<DM1>
 						for(int b=0; b<nInner1; b++)
 							if(a != b)
 							{	evolveEntries.push_back(Triplet{nRhoPrev1+a+b*nInner1, nRhoPrev1+b+a*nInner1, E1[b]-E1[a]});
-								//diagVals[i*n+j] = complex(0, eps(i)-eps(j));
 							}
 				}
 				//Electron-phonon part:
@@ -562,6 +561,70 @@ struct LindbladLinear : public Integrator<DM1>
 				logPrintf("done. Total terms: %lu in %lu x %lu matrix (%.1lf%% fill)\n",
 					nNZ, rhoSizeTot, rhoSizeTot, nNZ*100./(rhoSizeTot*rhoSizeTot));
 				logFlush();
+				
+				//Compute spin and magnetic field vectors:
+				double Bmag = pumpB.length(); //perturbation strength set by input, but all components calculated
+				if(not Bmag)
+				{	const double Tesla = Joule/(Ampere*meter*meter);
+					Bmag = 1.*Tesla;
+					logPrintf("Setting test |B| = 1 Tesla for B-field perturbation matrix. (Use pumpB to override if needed.)\n");
+				}
+				logPrintf("Initializing spin matrix elements ... "); logFlush();
+				size_t rhoSizeMine = drho.size();
+				DM1 spinMat(rhoSizeMine*6); //6 columns: Sx Sy Sz dRho(Bx) dRho(By) dRho(Bz)
+				const State* sPtr = state.data();
+				const double prefac = spinWeight*(1./nkTot); //BZ integration weight
+				for(size_t ik=ikStart; ik<ikStop; ik++)
+				{	const State& s = *(sPtr++);
+					for(int iDir=0; iDir<3; iDir++)
+					{	//Spin matrix element to column iDir:
+						accumRhoHC((0.5*prefac)*s.S[iDir], spinMat.data()+(rhoOffset[ik]+iDir*rhoSizeMine));
+						//Magnetic field perturbation to column 3+iDir:
+						matrix Htot(s.E(s.innerStart, s.innerStart+s.nInner));
+						Htot -= Bmag * s.S[iDir];
+						//--- compute Fermi function perturbation:
+						diagMatrix Epert; matrix Vpert;
+						Htot.diagonalize(Vpert, Epert);
+						diagMatrix fPert(s.nInner);
+						for(int b=0; b<s.nInner; b++)
+							fPert[b] = fermi((Epert[b]-dmu)*invT);
+						matrix rhoPert = Vpert * fPert * dagger(Vpert);
+						accumRhoHC(0.5*(rhoPert-s.rho0), spinMat.data()+(rhoOffset[ik]+(iDir+3)*rhoSizeMine));
+					}
+				}
+				
+				//Redistribute to match ScaLAPACK matrices:
+				spinMatDense.resize(bcm->nRowsMine*3); //spin matrix
+				spinPertDense.resize(bcm->nRowsMine*3); //B-field perturbation
+				int jProc = mpiWorld->iProcess();
+				int iProcPrev = positiveRemainder(mpiWorld->iProcess()-1, mpiWorld->nProcesses());
+				int iProcNext = positiveRemainder(mpiWorld->iProcess()+1, mpiWorld->nProcesses());
+				for(int iProcShift=0; iProcShift<mpiWorld->nProcesses(); iProcShift++)
+				{	//Set local matrix elements from spinMat to spinMatDense:
+					int iRowStart = nRhoPrev[kDivision.start(jProc)]; //global start row of current data block
+					int iRowStop = nRhoPrev[kDivision.stop(jProc)]; //global stop row of current data block
+					int nRowsCur = rhoSize[jProc];
+					assert(iRowStop - iRowStart == nRowsCur);
+					int iRowMineStart, iRowMineStop; //local row indices that match
+					bcm->getRange(bcm->iRowsMine, iRowStart, iRowStop, iRowMineStart, iRowMineStop);
+					for(int iRowMine=iRowMineStart; iRowMine<iRowMineStop; iRowMine++)
+					{	int iRow = bcm->iRowsMine[iRowMine];
+						for(int iCol=0; iCol<3; iCol++)
+						{	spinMatDense[iRowMine+iCol*bcm->nRowsMine] = spinMat[(iRow-iRowStart)+iCol*nRowsCur];
+							spinPertDense[iRowMine+iCol*bcm->nRowsMine] = spinMat[(iRow-iRowStart)+(iCol+3)*nRowsCur];
+						}
+					}
+					//Circulate spinMat in communication ring:
+					int jProcNext = (jProc + 1) % mpiWorld->nProcesses();
+					DM1 spinMatNext(rhoSize[jProcNext]*6);
+					std::vector<MPIUtil::Request> request(2);
+					mpiWorld->sendData(spinMat, iProcPrev, iProcShift, &request[0]);
+					mpiWorld->recvData(spinMatNext, iProcNext, iProcShift, &request[1]);
+					mpiWorld->waitAll(request);
+					std::swap(spinMat, spinMatNext);
+					jProc = jProcNext;
+				}
+				logPrintf("done.\n");
 				#endif
 			}
 			else
@@ -1118,12 +1181,37 @@ int main(int argc, char** argv)
 	{
 		//----------- Dense diagonalization using ScaLAPACK ---------------
 		#ifdef SCALAPACK_ENABLED
-		BlockCyclicMatrix::Buffer VL, VR;
-		std::vector<complex> evals = lbl.bcm->diagonalize(lbl.evolveMatDense, VR, VL);
-		lbl.bcm->checkDiagonalization(lbl.evolveMatDense, VR, VL, evals);
-		logPrintf("\n%19s %19s\n", "Re(eig)", "Im(eig)");
-		for(size_t iEig=0; iEig<lbl.rhoSizeTot; iEig++)
-		{	logPrintf("%19.12le %19.12le\n", evals[iEig].real(), evals[iEig].imag());
+		BlockCyclicMatrix::Buffer VL, VR, spinPert, spinMat;
+		std::vector<complex> evals = lbl.bcm->diagonalize(lbl.evolveMatDense, VR, VL); //diagonalize
+		lbl.bcm->checkDiagonalization(lbl.evolveMatDense, VR, VL, evals); //check diagonalization
+		lbl.bcm->matMultVec(1., VL, lbl.spinPertDense, spinPert); //weight of each eigenmode in each B-field perturbation
+		lbl.bcm->matMultVec(1., VR, lbl.spinMatDense, spinMat); //spin matrix elements of each eigenmode
+		logPrintf("\n%19s %19s %19s %19s %19s %19s %19s %19s\n", "Re(eig)", "Im(eig)",
+			"rho1(Bx)", "rho1(By)", "rho1(Bz)", "Sx", "Sy", "Sz");
+		for(int iBlock=0; iBlock<ceildiv(lbl.bcm->N,blockSize); iBlock++)
+		{	//Make block of eigenvector overlaps on all processes:
+			int whose = iBlock % lbl.bcm->nProcsCol;
+			int iEigStart = iBlock*blockSize;
+			int iEigStop = std::min((iBlock+1)*blockSize, lbl.bcm->N);
+			int blockSizeCur = iEigStop-iEigStart;
+			BlockCyclicMatrix::Buffer spinMatBlock(blockSizeCur*3), spinPertBlock(blockSizeCur*3);
+			if(whose == lbl.bcm->iProcCol)
+			{	int eigStartLocal = (iBlock / lbl.bcm->nProcsCol) * blockSize;
+				for(int j=0; j<3; j++)
+					for(int i=0; i<blockSizeCur; i++)
+					{	spinPertBlock[i+j*blockSizeCur] = spinPert[eigStartLocal+i+j*lbl.bcm->nColsMine];
+						spinMatBlock[i+j*blockSizeCur] = spinMat[eigStartLocal+i+j*lbl.bcm->nColsMine];
+					}
+			}
+			lbl.bcm->mpiRow->bcastData(spinPertBlock, whose);
+			lbl.bcm->mpiRow->bcastData(spinMatBlock, whose);
+			for(int i=0; i<blockSizeCur; i++)
+			{	int iEig = iEigStart+i;
+				logPrintf("%19.12le %19.12le %19.12le %19.12le %19.12le %19.12le %19.12le %19.12le\n",
+					evals[iEig].real(), evals[iEig].imag(),
+					spinPertBlock[i], spinPertBlock[i+blockSizeCur], spinPertBlock[i+2*blockSizeCur],
+					spinMatBlock[i], spinMatBlock[i+blockSizeCur], spinMatBlock[i+2*blockSizeCur] );
+			}
 		}
 		logPrintf("\n");
 		#endif

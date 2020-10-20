@@ -84,6 +84,12 @@ public:
 	//! C = beta C + alpha op(A) * op(B), where op = identity or transpose depending on transA and transB
 	void matMult(double alpha, const Buffer& A, bool transA, const Buffer& B, bool transB, double beta, Buffer& C) const;
 
+	//! C = A^T * B, where A is N x N, B is nRowsMine x nVec and C is nColsMine x nVec.
+	//! Here, nVec is a certain number of vectors, typically << N.
+	//! Note that B should contain all nVec vetcors irrespective of nColsMine,
+	//! and the result in C contains all nVec vectors irrespective of nRowsMine
+	void matMultVec(double alpha, const Buffer& A, const Buffer& B, Buffer& C) const;
+
 	//---- I/O and debugging ----
 	double matrixErr(const Buffer& A, const Buffer& B) const; //!< Calculate error between two distributed matrices
 	double identityErr(const Buffer& A, double* offDiag=0) const; //!< Calculate error between a distributed matrix and identity (offDiag contains error in off-diagonal parts)

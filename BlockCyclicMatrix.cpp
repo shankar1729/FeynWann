@@ -632,5 +632,16 @@ void BlockCyclicMatrix::matMult(double alpha, const Buffer& A, bool transA, cons
 	watch.stop();
 }
 
+void BlockCyclicMatrix::matMultVec(double alpha, const Buffer& A, const Buffer& B, Buffer& C) const
+{	static StopWatch watch("BlockCyclicMatrix::matMultVec"); watch.start();
+	assert(A.size()==nDataMine);
+	assert(B.size() % nRowsMine == 0);
+	int nVec = B.size() / nRowsMine;
+	C.resize(nVec * nColsMine);
+	cblas_dgemm(CblasColMajor, CblasTrans, CblasNoTrans, nColsMine, nVec, nRowsMine,
+		alpha, A.data(), nRowsMine, B.data(), nRowsMine, 0., C.data(), nColsMine);
+	mpiCol->allReduceData(C, MPIUtil::ReduceSum);
+	watch.stop();
+}
 
 #endif //SCALAPACK_ENABLED
