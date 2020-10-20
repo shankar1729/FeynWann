@@ -398,7 +398,14 @@ struct LindbladLinear : public Integrator<DM1>
 				{	for(int a=0; a<nInner1; a++)
 						for(int b=0; b<nInner1; b++)
 							if(a != b)
-							{	evolveEntries.push_back(Triplet{nRhoPrev1+a+b*nInner1, nRhoPrev1+b+a*nInner1, E1[b]-E1[a]});
+							{	int iRow = nRhoPrev1+a+b*nInner1;
+								int iCol = nRhoPrev1+b+a*nInner1;
+								double Ediff = E1[b]-E1[a];
+								if(denseMode)
+								{	int localIndex, whose = bcm->globalIndex(iRow, iCol, localIndex);
+									evolveEntriesProc[whose].push_back(std::make_pair(Ediff,localIndex));
+								}
+								else evolveEntries.push_back(Triplet{iRow, iCol, Ediff});
 							}
 				}
 				//Electron-phonon part:
