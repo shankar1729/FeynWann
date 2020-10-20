@@ -94,6 +94,7 @@ public:
 	double matrixErr(const Buffer& A, const Buffer& B) const; //!< Calculate error between two distributed matrices
 	double identityErr(const Buffer& A, double* offDiag=0) const; //!< Calculate error between a distributed matrix and identity (offDiag contains error in off-diagonal parts)
 	void printMatrix(const Buffer& mat, const char* name="") const; //!< Synchronized print of all pieces of a distributed matrix
+	void writeMatrix(const Buffer& mat, const char* fname) const; //!< Binary-write matrix to file
 	void testRandom(double fillFactor) const; //!< Test diagonalization with a random matrix with specified fill factor
 	
 	//---- Indexing utilties ----

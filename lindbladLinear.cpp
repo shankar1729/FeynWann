@@ -30,7 +30,7 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 #include "Integrator.h"
 #include "BlockCyclicMatrix.h"
 #include <core/Units.h>
-#include <slepceps.h>
+#include <petsc.h>
 
 //Slightly more graceful wrapper to CHKERRQ() macro from Petsc:
 PetscInt iErr = 0;
@@ -898,7 +898,6 @@ inline vector3<complex> normalize(const vector3<complex>& v) { return v * (1./sq
 int main(int argc, char** argv)
 {	
 	InitParams ip = FeynWann::initialize(argc, argv, "Lindblad linearized dynamics or spectrum in an ab initio Wannier basis");
-	int argcSlepc=1; CHECKERR(SlepcInitialize(&argcSlepc, &argv, (char*)0, "")); //don't let slepc see the actual command line (too many conflicts)
 	
 	//Get the system parameters:
 	InputMap inputMap(ip.inputFilename);
@@ -961,6 +960,7 @@ int main(int argc, char** argv)
 	const bool verbose = (verboseMode=="yes");
 	const string inFile = inputMap.has("inFile") ? inputMap.getString("inFile") : "ldbd.dat"; //input file name
 	const string checkpointFile = (inputMap.has("checkpointFile") and (not spectrumMode)) ? inputMap.getString("checkpointFile") : ""; //checkpoint file name
+	const string evecFile = inputMap.has("evecFile") ? inputMap.getString("evecFile") : "ldbd.evecs"; //eigenvector file name
 	
 	logPrintf("\nInputs after conversion to atomic units:\n");
 	logPrintf("dmu = %lg\n", dmu);
@@ -1003,6 +1003,12 @@ int main(int argc, char** argv)
 	if(not spectrumMode) logPrintf("checkpointFile = %s\n", checkpointFile.c_str());
 	logPrintf("\n");
 	
+	//Initialize PETSc if necessary:
+	if(not spectrumMode)
+	{	int argcSlepc=1;
+		CHECKERR(PetscInitialize(&argcSlepc, &argv, (char*)0, "")); //don't let petsc see the actual command line (too many conflicts)
+	}
+	
 	//Create and initialize lindblad calculator:
 	LindbladLinear lbl(dmu, T, spectrumMode, blockSize,
 		pumpOmega, pumpA0, pumpTau, pumpPol, (pumpMode=="Bfield"), pumpB,
@@ -1012,10 +1018,10 @@ int main(int argc, char** argv)
 	logPrintf("Initialization completed successfully at t[s]: %9.2lf\n\n", clock_sec());
 	logFlush();
 	
-	logPrintf("%lu active k-points parallelized over %d processes.\n", lbl.nk, mpiWorld->nProcesses());
+	if(not spectrumMode) logPrintf("%lu active k-points parallelized over %d processes.\n", lbl.nk, mpiWorld->nProcesses());
 	if(ip.dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
-		CHECKERR(SlepcFinalize());
+		if(not spectrumMode) CHECKERR(PetscFinalize());
 		FeynWann::finalize();
 		return 0;
 	}
@@ -1032,7 +1038,8 @@ int main(int argc, char** argv)
 		lbl.bcm->matMultVec(1., VR, lbl.spinMatDense, spinMat); //spin matrix elements of each eigenmode
 		logPrintf("\n%19s %19s %19s %19s %19s %19s %19s %19s\n", "Re(eig)", "Im(eig)",
 			"rho1(Bx)", "rho1(By)", "rho1(Bz)", "Sx", "Sy", "Sz");
-		for(int iBlock=0; iBlock<ceildiv(lbl.bcm->N,blockSize); iBlock++)
+		int nBlocks = ceildiv(lbl.bcm->N, blockSize);
+		for(int iBlock=0; iBlock<nBlocks; iBlock++)
 		{	//Make block of eigenvector overlaps on all processes:
 			int whose = iBlock % lbl.bcm->nProcsCol;
 			int iEigStart = iBlock*blockSize;
@@ -1058,6 +1065,12 @@ int main(int argc, char** argv)
 			}
 		}
 		logPrintf("\n");
+		//Eigenvector output:
+		if(evecFile != "None")
+		{	logPrintf("Writing eigenvectors (VR) to '%s' ... ", evecFile.c_str()); logFlush();
+			lbl.bcm->writeMatrix(VR, evecFile.c_str());
+			logPrintf("done.\n");
+		}
 		#endif
 	}
 	else if(not ePhEnabled)
@@ -1108,7 +1121,7 @@ int main(int argc, char** argv)
 	
 	//Cleanup:
 	CHECKERR(lbl.cleanup());
-	CHECKERR(SlepcFinalize());
+	if(not spectrumMode) CHECKERR(PetscFinalize());
 	FeynWann::finalize();
 	return 0;
 }

@@ -58,9 +58,9 @@ BlockCyclicMatrix::BlockCyclicMatrix(int N, int blockSize, MPIUtil* mpiUtil) : N
 	}
 	
 	//Make number of rows on each process globally available:
-	nRowsProc.assign(mpiWorld->nProcesses(), 0);
-	nRowsProc[mpiWorld->iProcess()] = nRowsMine;
-	mpiWorld->allReduceData(nRowsProc, MPIUtil::ReduceMax);
+	nRowsProc.assign(mpiUtil->nProcesses(), 0);
+	nRowsProc[mpiUtil->iProcess()] = nRowsMine;
+	mpiUtil->allReduceData(nRowsProc, MPIUtil::ReduceMax);
 }
 
 BlockCyclicMatrix::~BlockCyclicMatrix()
@@ -117,6 +117,53 @@ void BlockCyclicMatrix::printMatrix(const Buffer& mat, const char* name) const
 		logFlush();
 	}
 	else mpiUtil->send(buf, 0, 0);
+}
+
+void BlockCyclicMatrix::writeMatrix(const Buffer& mat, const char* fname) const
+{	assert(mat.size() == nDataMine);
+	int nBlocks = ceildiv(N, blockSize);
+	int blockInterval = std::max(1, int(round(nBlocks/50.))); //interval for reporting progress
+	FILE* fp = 0;
+	BlockCyclicMatrix::Buffer buf, bufCur(blockSize*blockSize);
+	if(mpiUtil->isHead())
+	{	fp = fopen(fname, "w");
+		buf.resize(N * blockSize); //all rows of a block of columns
+	}
+	//Outer loop over column blocks:
+	for(int jBlock=0; jBlock<nBlocks; jBlock++)
+	{	int jWhose = jBlock % nProcsCol;
+		int jStart = jBlock*blockSize;
+		int jStop = std::min((jBlock+1)*blockSize, N);
+		int jCount = jStop - jStart;
+		int jLocal = (jBlock / nProcsCol) * blockSize;
+		//Inner loop over row blocks:
+		for(int iBlock=0; iBlock<nBlocks; iBlock++)
+		{	int iWhose = iBlock % nProcsRow;
+			int iStart = iBlock*blockSize;
+			int iStop = std::min((iBlock+1)*blockSize, N);
+			int iCount = iStop - iStart;
+			int iLocal = (iBlock / nProcsRow) * blockSize;
+			int whose = jWhose + iWhose * nProcsCol;
+			int count = jCount*iCount;
+			if(mpiUtil->isHead())
+			{	if(whose)
+				{	//Recv data from process that owns this block and copy to output buffer:
+					mpiUtil->recv(bufCur.data(), count, whose, iBlock+jBlock*nBlocks);
+					dlacpy_("A", &iCount, &jCount, bufCur.data(),&iCount, &buf[iStart],&N);
+				}
+				else //Direct local copy of block to output buffer:
+					dlacpy_("A", &iCount, &jCount, &mat[iLocal+jLocal*nRowsMine],&nRowsMine, &buf[iStart],&N);
+			}
+			else if(whose == mpiUtil->iProcess())
+			{	//Send data to head:
+				dlacpy_("A", &iCount, &jCount, &mat[iLocal+jLocal*nRowsMine],&nRowsMine, bufCur.data(),&iCount);
+				mpiUtil->send(bufCur.data(), count, 0, iBlock+jBlock*nBlocks);
+			}
+		}
+		if(mpiUtil->isHead()) fwrite(buf.data(), sizeof(double), N*jCount, fp);
+		if((jBlock+1)%blockInterval==0) { logPrintf("%d%% ", int(round((jBlock+1)*100./nBlocks))); logFlush(); }
+	}
+	if(mpiUtil->isHead()) fclose(fp);
 }
 
 //Test with a random matrix:
