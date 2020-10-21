@@ -744,7 +744,7 @@ struct LindbladLinear : public Integrator<DM1>
 			}
 			else logPrintf("Integrate: Step: %4d   t[fs]: %6.1lf   Etot[eV]: %.6lf", stepID, t/fs, Etot/eV);
 			logPrintf("   dfMax: %6.4lf", dfMax);
-			if(spinorial) logPrintf("   S: [ %11.4lg %11.4lg %11.4lg ]", Stot[0],  Stot[1],  Stot[2]);
+			if(spinorial) logPrintf("   S: [ %16.15lg %16.15lg %16.15lg ]", Stot[0],  Stot[1],  Stot[2]);
 			logPrintf("\n"); logFlush();
 			//Save distribution functions:
 			ofstream ofs("dist."+ossID.str());
