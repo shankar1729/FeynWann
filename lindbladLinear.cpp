@@ -521,7 +521,8 @@ struct LindbladLinear : public Integrator<DM1>
 				{	const State& s = *(sPtr++);
 					for(int iDir=0; iDir<3; iDir++)
 					{	//Spin matrix element to column iDir:
-						accumRhoHC((0.5*prefac)*s.S[iDir], spinMat.data()+(rhoOffset[ik]+iDir*rhoSizeMine));
+						matrix OSmat = s.S[iDir] - 0.5*diag(s.S[iDir]); //S with an overlap factor such that S^rho = Tr[rho*S]
+						accumRhoHC(prefac*OSmat, spinMat.data()+(rhoOffset[ik]+iDir*rhoSizeMine));
 						//Magnetic field perturbation to column 3+iDir:
 						matrix Htot(s.E(s.innerStart, s.innerStart+s.nInner));
 						Htot -= Bmag * s.S[iDir];
