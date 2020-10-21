@@ -330,6 +330,7 @@ struct LindbladLinear : public Integrator<DM1>
 				const int whose1 = mpiWorld->iProcess();
 				const diagMatrix& f1 = s.rho0;
 				const diagMatrix f1bar = bar(f1);
+				#ifdef SCALAPACK_ENABLED
 				//Coherent evolution (only in spectrum mode):
 				if(spectrumMode)
 				{	for(int a=0; a<nInner1; a++)
@@ -342,6 +343,7 @@ struct LindbladLinear : public Integrator<DM1>
 								evolveEntriesProc[whose].push_back(std::make_pair(Ediff,localIndex));
 							}
 				}
+				#endif
 				//Electron-phonon part:
 				const double prefacEph = 2*M_PI/nkTot; //factor of 2 from the +h.c. contribution
 				std::vector<LindbladFile::GePhEntry>::iterator g = s.GePh.begin();
