@@ -244,13 +244,14 @@ void BlockCyclicMatrix::checkDiagonalization(const Buffer& A, const Buffer& VR, 
 }
 
 
-std::vector<complex> BlockCyclicMatrix::diagonalize(Buffer& A, Buffer& VR, Buffer& VL, bool shouldBalance) const
+std::vector<complex> BlockCyclicMatrix::diagonalize(const Buffer& A, Buffer& VR, Buffer& VL, bool shouldBalance) const
 {	static StopWatch watch("BlockCyclicMatrix::diagonalize"); watch.start();
 	Buffer scale; std::vector<int> evalSort; //optional scale factors and eigenvalue sorting
-	if(shouldBalance) scale = balance(A); //Balance matrix
-	Buffer Q = hessenberg(A); //Hessenberg reduction
-	std::vector<complex> evals = schur(A, Q); //Schur decomposition and eigenvalues
-	getEvecs(A, Q, VR, VL, shouldBalance ? &scale : NULL); //Transform Schur vectors to eigenvectors
+	Buffer H(A); //modifiable copy that is balanced, Hessenberg'd and Schur'd
+	if(shouldBalance) scale = balance(H); //Balance matrix
+	Buffer Q = hessenberg(H); //Hessenberg reduction
+	std::vector<complex> evals = schur(H, Q); //Schur decomposition and eigenvalues
+	getEvecs(H, Q, VR, VL, shouldBalance ? &scale : NULL); //Transform Schur vectors to eigenvectors
 	watch.stop();
 	return evals;
 }
