@@ -97,7 +97,7 @@ else()
 endif()
 
 #Main library for FeynWann containing all the auxiliary functionality
-add_library(FeynWann ${LINK_TYPE} FeynWann.cpp DistributedMatrix.cpp InputMap.cpp Histogram.cpp Interp1.cpp)
+add_library(FeynWann ${LINK_TYPE} FeynWann.cpp DistributedMatrix.cpp InputMap.cpp Histogram.cpp Interp1.cpp BlockCyclicMatrix.cpp)
 find_library(JDFTX_LIBRARY jdftx PATHS ${JDFTX_BUILD} NO_DEFAULT_PATH)
 target_link_libraries(FeynWann ${JDFTX_LIBRARY} ${FFTW3_MPI_LIBRARY} ${FFTW3_THREADS_LIBRARY} ${FFTW3_LIBRARY} ${MPI_CXX_LIBRARIES} ${EXTRA_LIBRARIES})
 
@@ -127,6 +127,14 @@ add_FeynWann_executable(debugEph)
 
 target_link_libraries(lindblad ${GSL_BLAS_LIBRARY})
 
+#Optional ScaLAPACK:
+option(EnableScaLAPACK "Enable ScaLAPACK support (currently used only by the dense diagonalization in lindbladLinear)")
+if(EnableScaLAPACK)
+	add_definitions("-DSCALAPACK_ENABLED")
+	include_directories(/opt/intel/mkl/include ${MKL_PATH}/include) #needed for c function definitions
+	#JDFTx must be built with scalapack support for this to work (not tested in this cmake script)
+endif()
+
 #Optional lindbladian linear dynamics and spectrum that requires SLEPc
 option(EnableSLEPc "Enable lindbladian linear dynamics and spectrum using SLEPc" OFF)
 if(EnableSLEPc)
@@ -137,4 +145,3 @@ if(EnableSLEPc)
 	add_FeynWann_executable(lindbladLinear)
 	target_link_libraries(lindbladLinear ${GSL_BLAS_LIBRARY} ${PETSC_LIBRARY} ${SLEPC_LIBRARY})
 endif()
-

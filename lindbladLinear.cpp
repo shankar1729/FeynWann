@@ -28,8 +28,9 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 #include "InputMap.h"
 #include "LindbladFile.h"
 #include "Integrator.h"
+#include "BlockCyclicMatrix.h"
 #include <core/Units.h>
-#include <slepceps.h>
+#include <petsc.h>
 
 //Slightly more graceful wrapper to CHKERRQ() macro from Petsc:
 PetscInt iErr = 0;
@@ -42,23 +43,11 @@ inline matrix dot(const matrix* P, vector3<complex> pol)
 }
 
 //Construct identity - X:
-inline matrix bar(const matrix& X)
-{	matrix Xbar(X);
-	complex* XbarData = Xbar.data();
-	for(int j=0; j<X.nCols(); j++)
-		for(int i=0; i<X.nRows(); i++)
-		{	(*XbarData) = (i==j ? 1. : 0.) - (*XbarData);
-			XbarData++;
-		}
-	return Xbar;
-}
 inline diagMatrix bar(const diagMatrix& X)
 {	diagMatrix Xbar(X);
 	for(double& x: Xbar) x = 1. - x;
 	return Xbar;
 }
-
-static const double degeneracyThreshold = 1e-5; //!< currently used only for spin-density calculation in report()
 
 //Lindblad initialization, time evolution and measurement operators using FeynWann callback
 struct LindbladLinear : public Integrator<DM1>
@@ -66,7 +55,8 @@ struct LindbladLinear : public Integrator<DM1>
 	int stepID; //current time and reporting step number
 	
 	const double dmu, T, invT; //!< Fermi level position relative to neutral value / VBM, and temperature
-	const bool spectrumMode; //!< if yes (diagonalization), evolveMat includes coherent part and preconditioner is initialized
+	const bool spectrumMode; //!< ScaLAPACK diagonalization if yes, linearized real-time dynamics using PETSc otherwise
+	const int blockSize; //!< block size in ScaLAPACK matrix distribution
 	const double pumpOmega, pumpA0, pumpTau; const vector3<complex> pumpPol; //!< pump parameters
 	const bool pumpBfield; const vector3<> pumpB; //pump parameters for Bfield mode
 	const double omegaMin, domega, omegaMax; const int nomega; //!< probe frequency grid
@@ -95,12 +85,12 @@ struct LindbladLinear : public Integrator<DM1>
 	std::vector<int> nInnerAll; //!< nInner for all k-points on all processes
 	double Emin, Emax; //!< energy range of active space across all k (for spin and number density output)
 	
-	LindbladLinear(double dmu, double T, bool spectrumMode,
+	LindbladLinear(double dmu, double T, bool spectrumMode, int blockSize,
 		double pumpOmega, double pumpA0, double pumpTau, vector3<complex> pumpPol, bool pumpBfield, vector3<> pumpB,
 		double omegaMin, double omegaMax, double domega, double tau, std::vector<vector3<complex>> pol, double dE,
 		bool ePhEnabled, bool verbose, string checkpointFile)
 	: stepID(0),
-		dmu(dmu), T(T), invT(1./T), spectrumMode(spectrumMode),
+		dmu(dmu), T(T), invT(1./T), spectrumMode(spectrumMode), blockSize(blockSize),
 		pumpOmega(pumpOmega), pumpA0(pumpA0), pumpTau(pumpTau), pumpPol(pumpPol), pumpBfield(pumpBfield), pumpB(pumpB),
 		omegaMin(omegaMin), domega(domega), omegaMax(omegaMax), nomega(1+int(round((omegaMax-omegaMin)/domega))),
 		tau(tau), pol(pol), dE(dE), ePhEnabled(ePhEnabled), verbose(verbose), checkpointFile(checkpointFile),
@@ -159,17 +149,17 @@ struct LindbladLinear : public Integrator<DM1>
 	
 	//--------- Time evolution sparse matrix and SLEPc conversion -----------
 	
-	struct Triplet { int i, j; double val; bool local; }; //entry in triplet format matrix (along with tage for process locality)for initial construction
+	struct Triplet { int i, j; double val; bool local; }; //entry in triplet format matrix (along with tag for process locality) for initial construction
 	Mat evolveMat; //Time evolution operator
-	//Mat precondMat; //Preconditioning matrix
 	Vec vRho, vRhoDot; //!< temporary copies of drho and rdhoDot data in Petsc format
 	
 	//Clean up Petsc quantities
 	PetscErrorCode cleanup()
-	{	CHECKERR(MatDestroy(&evolveMat));
-		CHECKERR(VecDestroy(&vRho));
-		CHECKERR(VecDestroy(&vRhoDot));
-		//if(spectrumMode) CHECKERR(MatDestroy(&precondMat));
+	{	if(not spectrumMode)
+		{	CHECKERR(MatDestroy(&evolveMat));
+			CHECKERR(VecDestroy(&vRho));
+			CHECKERR(VecDestroy(&vRhoDot));
+		}
 		return 0;
 	}
 	
@@ -197,51 +187,11 @@ struct LindbladLinear : public Integrator<DM1>
 		return 0;
 	}
 	
-	//Initialize a block-diagonal-inverse preconditioner:
-	PetscErrorCode blockDiagonalInvert(const Mat& M, Mat& K)
-	{	//Determine non-zero sizes and allocate matrix:
-		int N = rhoSizeTot;
-		int Nmine = rhoSize[mpiWorld->iProcess()];
-		std::vector<int> nnzD(Nmine, 0), nnzO(Nmine, 0);
-		for(size_t ik=ikStart; ik<ikStop; ik++)
-		{	size_t nRhoCur = nRhoPrev[ik+1]-nRhoPrev[ik];
-			for(size_t iRho=nRhoPrev[ik]; iRho<nRhoPrev[ik+1]; iRho++)
-				nnzD[iRho-rhoOffsetGlobal] = nRhoCur; //all diagonal; nnzO = 0
-		}
-		CHECKERR(MatCreateAIJ(PETSC_COMM_WORLD, Nmine, Nmine, N, N, 0, nnzD.data(), 0, nnzO.data(), &K));
-		//Create index sets to extract diagonal blocks:
-		std::vector<IS> isArr(nkMine);
-		for(size_t ik=ikStart; ik<ikStop; ik++)
-			CHECKERR(ISCreateStride(PETSC_COMM_SELF, nRhoPrev[ik+1]-nRhoPrev[ik], nRhoPrev[ik], 1, &isArr[ik-ikStart]));
-		//Get diagonal blocks:
-		Mat* blocks;
-		CHECKERR(MatCreateSubMatrices(M, nkMine, isArr.data(), isArr.data(), MAT_INITIAL_MATRIX, &blocks));
-		for(IS& is: isArr) CHECKERR(ISDestroy(&is));
-		//Invert each diagonal block:
-		for(size_t ik=ikStart; ik<ikStop; ik++)
-		{	Mat& block = blocks[ik-ikStart];
-			size_t nRhoCur = nRhoPrev[ik+1]-nRhoPrev[ik];
-			//Get data as a dense block:
-			matrix blockInv = zeroes(nRhoCur, nRhoCur);
-			CHECKERR(MatConvert(block, MATDENSE, MAT_INPLACE_MATRIX, &block));
-			const double* pBlock; CHECKERR(MatDenseGetArrayRead(block, &pBlock));
-			eblas_daxpy(blockInv.nData(), 1., pBlock,1, (double*)blockInv.data(),2); //copy to real parts in complex matrix
-			CHECKERR(MatDenseRestoreArrayRead(block, &pBlock));
-			//Invert block and set it in K:
-			blockInv = inv(blockInv);
-			std::vector<double> blockInvRe(nRhoCur*nRhoCur, 0.); //real part of the inverse
-			eblas_daxpy(blockInv.nData(), 1., (const double*)blockInv.data(),2, blockInvRe.data(),1); //extract real part
-			std::vector<int> indices(nRhoCur);
-			for(size_t iRhoCur=0; iRhoCur<nRhoCur; iRhoCur++)
-				indices[iRhoCur] = nRhoPrev[ik] + iRhoCur; //global index for each row/column
-			CHECKERR(MatSetValues(K, nRhoCur,indices.data(), nRhoCur,indices.data(), blockInvRe.data(), INSERT_VALUES));
-		}
-		CHECKERR(MatDestroySubMatrices(nkMine, &blocks));
-		//Assemble matrix:
-		CHECKERR(MatAssemblyBegin(K, MAT_FINAL_ASSEMBLY));
-		CHECKERR(MatAssemblyEnd(K, MAT_FINAL_ASSEMBLY));
-		return 0;
-	}
+	//--------- Blacs / ScaLAPACK interface for dense diagonalization -----------
+	#ifdef SCALAPACK_ENABLED
+	std::shared_ptr<BlockCyclicMatrix> bcm;
+	BlockCyclicMatrix::Buffer evolveMatDense, spinMatDense, spinPertDense;
+	#endif
 	
 	//--------- Initialize -------------
 	PetscErrorCode initialize(string inFile)
@@ -364,9 +314,13 @@ struct LindbladLinear : public Integrator<DM1>
 				mpiWorld->bcast(&Eall[iEstart], iEstop-iEstart, jProc);
 			}
 			//Collect matrix elements in triplet format:
-			std::vector<Triplet> evolveEntries;
+			std::vector<Triplet> evolveEntries; //list of all entries initialized on this process; used in sparse PETSc dynamics mode
+			#ifdef SCALAPACK_ENABLED
+			std::vector<std::vector<std::pair<double,int>>> evolveEntriesProc(mpiWorld->nProcesses()); //list of entries by destination process; used in ScaLAPACK mode
+			if(spectrumMode) bcm = std::make_shared<BlockCyclicMatrix>(rhoSizeTot, blockSize, mpiWorld); //ScaLAPACK wrapper object
+			#endif
 			State* sPtr = state.data();
-			logPrintf("Initialing time evolution operator ... "); logFlush();
+			logPrintf("Initializing time evolution operator ... "); logFlush();
 			for(size_t ik1=ikStart; ik1<ikStop; ik1++)
 			{	State& s = *(sPtr++);
 				const double* E1 = &(s.E[s.innerStart]);
@@ -381,8 +335,11 @@ struct LindbladLinear : public Integrator<DM1>
 				{	for(int a=0; a<nInner1; a++)
 						for(int b=0; b<nInner1; b++)
 							if(a != b)
-							{	evolveEntries.push_back(Triplet{nRhoPrev1+a+b*nInner1, nRhoPrev1+b+a*nInner1, E1[b]-E1[a]});
-								//diagVals[i*n+j] = complex(0, eps(i)-eps(j));
+							{	int iRow = nRhoPrev1+a+b*nInner1;
+								int iCol = nRhoPrev1+b+a*nInner1;
+								double Ediff = E1[b]-E1[a];
+								int localIndex, whose = bcm->globalIndex(iRow, iCol, localIndex);
+								evolveEntriesProc[whose].push_back(std::make_pair(Ediff,localIndex));
 							}
 				}
 				//Electron-phonon part:
@@ -464,31 +421,162 @@ struct LindbladLinear : public Integrator<DM1>
 							} \
 						} \
 					}
-					EXTRACT_NNZ(1,2)
-					EXTRACT_NNZ(2,1)
-					EXTRACT_NNZ(1,1)
-					EXTRACT_NNZ(2,2)
+					#define EXTRACT_NNZ_DENSE(i,j) \
+					{	const complex* data = L##i##j.data(); \
+						for(int col=0; col<L##i##j.nCols(); col++) \
+						{	for(int row=0; row<L##i##j.nRows(); row++) \
+							{	double M = (data++)->real(); \
+								if(M) \
+								{	int iRow = row+nRhoPrev##i; \
+									int iCol = col+nRhoPrev##j; \
+									int localIndex, whose = bcm->globalIndex(iRow, iCol, localIndex); \
+									evolveEntriesProc[whose].push_back(std::make_pair(M,localIndex)); \
+								} \
+							} \
+						} /* TODO */ \
+					}
+					if(spectrumMode)
+					{
+						#ifdef SCALAPACK_ENABLED
+						EXTRACT_NNZ_DENSE(1,2)
+						EXTRACT_NNZ_DENSE(2,1)
+						EXTRACT_NNZ_DENSE(1,1)
+						EXTRACT_NNZ_DENSE(2,2)
+						#endif
+					}
+					else
+					{	EXTRACT_NNZ(1,2)
+						EXTRACT_NNZ(2,1)
+						EXTRACT_NNZ(1,1)
+						EXTRACT_NNZ(2,2)
+					}
 					#undef EXTRACT_NNZ
+					#undef EXTRACT_NNZ_DENSE
 				}
 			}
-			logPrintf("done.\n");
-			//Convert to Petsc matrix:
-			logPrintf("Converting to PETSc sparse matrix ... "); logFlush();
-			matInit(evolveMat, evolveEntries);
-			MatInfo info; CHECKERR(MatGetInfo(evolveMat, MAT_GLOBAL_SUM, &info));
-			logPrintf("done. Net sparsity: %.0lf non-zero in %lu x %lu matrix (%.1lf%% fill)\n",
-				info.nz_used, rhoSizeTot, rhoSizeTot, info.nz_used*100./(rhoSizeTot*rhoSizeTot));
-			logFlush();
-			CHECKERR(MatCreateVecs(evolveMat, &vRho, &vRhoDot));
+			logPrintf("done.\n"); 
+			
+			//Convert from triplet to appropriate format:
 			if(spectrumMode)
-			{	/*
-				logPrintf("Initializing block-diagonal-inverse preconditioner ... "); logFlush();
-				CHECKERR(blockDiagonalInvert(evolveMat, precondMat));
-				CHECKERR(MatGetInfo(precondMat, MAT_GLOBAL_SUM, &info));
+			{	//Convert to dense matrix for ScaLAPACK:
+				#ifdef SCALAPACK_ENABLED
+				logPrintf("Converting to block-cyclic distributed dense matrix ... "); logFlush();
+				//--- sync sizes of remote pieces:
+				std::vector<size_t> nEntriesFromProc(mpiWorld->nProcesses());
+				{	std::vector<size_t> nEntriesToProc(mpiWorld->nProcesses());
+					std::vector<MPIUtil::Request> requests(2*(mpiWorld->nProcesses()-1));
+					int iRequest = 0;
+					for(int jProc=0; jProc<mpiWorld->nProcesses(); jProc++)
+						if(jProc != mpiWorld->iProcess())
+						{	nEntriesToProc[jProc] = evolveEntriesProc[jProc].size();
+							mpiWorld->send(&nEntriesToProc[jProc], 1, jProc, 0, &requests[iRequest++]);
+							mpiWorld->recv(&nEntriesFromProc[jProc], 1, jProc, 0, &requests[iRequest++]);
+							
+						}
+					mpiWorld->waitAll(requests);
+				}
+				//--- transfer remote pieces:
+				std::vector<std::vector<std::pair<double,int>>> evolveEntriesMine(mpiWorld->nProcesses());
+				{	std::vector<MPIUtil::Request> requests(2*(mpiWorld->nProcesses()-1));
+					int iRequest = 0;
+					for(int jProc=0; jProc<mpiWorld->nProcesses(); jProc++)
+						if(jProc == mpiWorld->iProcess())
+							std::swap(evolveEntriesProc[jProc], evolveEntriesMine[jProc]);
+						else
+						{	evolveEntriesMine[jProc].resize(nEntriesFromProc[jProc]);
+							MPI_Irecv(evolveEntriesMine[jProc].data(), evolveEntriesMine[jProc].size(), MPI_DOUBLE_INT, jProc, 1, MPI_COMM_WORLD, &requests[iRequest++]);
+							MPI_Isend(evolveEntriesProc[jProc].data(), evolveEntriesProc[jProc].size(), MPI_DOUBLE_INT, jProc, 1, MPI_COMM_WORLD, &requests[iRequest++]);
+						}
+					mpiWorld->waitAll(requests);
+					evolveEntriesProc.clear();
+				}
+				//--- set to dense matrix:
+				size_t nNZ = 0;
+				evolveMatDense.assign(bcm->nDataMine, 0.);
+				for(const auto& entries: evolveEntriesMine)
+				{	for(const std::pair<double,int>& entry: entries)
+						evolveMatDense[entry.second] += entry.first;
+					nNZ += entries.size();
+				}
+				mpiWorld->allReduce(nNZ, MPIUtil::ReduceSum);
+				logPrintf("done. Total terms: %lu in %lu x %lu matrix (%.1lf%% fill)\n",
+					nNZ, rhoSizeTot, rhoSizeTot, nNZ*100./(rhoSizeTot*rhoSizeTot));
+				logFlush();
+				
+				//Compute spin and magnetic field vectors:
+				double Bmag = pumpB.length(); //perturbation strength set by input, but all components calculated
+				if(not Bmag)
+				{	const double Tesla = Joule/(Ampere*meter*meter);
+					Bmag = 1.*Tesla;
+					logPrintf("Setting test |B| = 1 Tesla for B-field perturbation matrix. (Use pumpB to override if needed.)\n");
+				}
+				logPrintf("Initializing spin matrix elements ... "); logFlush();
+				size_t rhoSizeMine = drho.size();
+				DM1 spinMat(rhoSizeMine*6); //6 columns: Sx Sy Sz dRho(Bx) dRho(By) dRho(Bz)
+				const State* sPtr = state.data();
+				const double prefac = spinWeight*(1./nkTot); //BZ integration weight
+				for(size_t ik=ikStart; ik<ikStop; ik++)
+				{	const State& s = *(sPtr++);
+					for(int iDir=0; iDir<3; iDir++)
+					{	//Spin matrix element to column iDir:
+						accumRhoHC((0.5*prefac)*s.S[iDir], spinMat.data()+(rhoOffset[ik]+iDir*rhoSizeMine));
+						//Magnetic field perturbation to column 3+iDir:
+						matrix Htot(s.E(s.innerStart, s.innerStart+s.nInner));
+						Htot -= Bmag * s.S[iDir];
+						//--- compute Fermi function perturbation:
+						diagMatrix Epert; matrix Vpert;
+						Htot.diagonalize(Vpert, Epert);
+						diagMatrix fPert(s.nInner);
+						for(int b=0; b<s.nInner; b++)
+							fPert[b] = fermi((Epert[b]-dmu)*invT);
+						matrix rhoPert = Vpert * fPert * dagger(Vpert);
+						accumRhoHC(0.5*(rhoPert-s.rho0), spinMat.data()+(rhoOffset[ik]+(iDir+3)*rhoSizeMine));
+					}
+				}
+				
+				//Redistribute to match ScaLAPACK matrices:
+				spinMatDense.resize(bcm->nRowsMine*3); //spin matrix
+				spinPertDense.resize(bcm->nRowsMine*3); //B-field perturbation
+				int jProc = mpiWorld->iProcess();
+				int iProcPrev = positiveRemainder(mpiWorld->iProcess()-1, mpiWorld->nProcesses());
+				int iProcNext = positiveRemainder(mpiWorld->iProcess()+1, mpiWorld->nProcesses());
+				for(int iProcShift=0; iProcShift<mpiWorld->nProcesses(); iProcShift++)
+				{	//Set local matrix elements from spinMat to spinMatDense:
+					int iRowStart = nRhoPrev[kDivision.start(jProc)]; //global start row of current data block
+					int iRowStop = nRhoPrev[kDivision.stop(jProc)]; //global stop row of current data block
+					int nRowsCur = rhoSize[jProc];
+					assert(iRowStop - iRowStart == nRowsCur);
+					int iRowMineStart, iRowMineStop; //local row indices that match
+					bcm->getRange(bcm->iRowsMine, iRowStart, iRowStop, iRowMineStart, iRowMineStop);
+					for(int iRowMine=iRowMineStart; iRowMine<iRowMineStop; iRowMine++)
+					{	int iRow = bcm->iRowsMine[iRowMine];
+						for(int iCol=0; iCol<3; iCol++)
+						{	spinMatDense[iRowMine+iCol*bcm->nRowsMine] = spinMat[(iRow-iRowStart)+iCol*nRowsCur];
+							spinPertDense[iRowMine+iCol*bcm->nRowsMine] = spinMat[(iRow-iRowStart)+(iCol+3)*nRowsCur];
+						}
+					}
+					//Circulate spinMat in communication ring:
+					int jProcNext = (jProc + 1) % mpiWorld->nProcesses();
+					DM1 spinMatNext(rhoSize[jProcNext]*6);
+					std::vector<MPIUtil::Request> request(2);
+					mpiWorld->sendData(spinMat, iProcPrev, iProcShift, &request[0]);
+					mpiWorld->recvData(spinMatNext, iProcNext, iProcShift, &request[1]);
+					mpiWorld->waitAll(request);
+					std::swap(spinMat, spinMatNext);
+					jProc = jProcNext;
+				}
+				logPrintf("done.\n");
+				#endif
+			}
+			else
+			{	//Convert to Petsc matrix:
+				logPrintf("Converting to PETSc sparse matrix ... "); logFlush();
+				matInit(evolveMat, evolveEntries);
+				MatInfo info; CHECKERR(MatGetInfo(evolveMat, MAT_GLOBAL_SUM, &info));
 				logPrintf("done. Net sparsity: %.0lf non-zero in %lu x %lu matrix (%.1lf%% fill)\n",
 					info.nz_used, rhoSizeTot, rhoSizeTot, info.nz_used*100./(rhoSizeTot*rhoSizeTot));
 				logFlush();
-				*/
+				CHECKERR(MatCreateVecs(evolveMat, &vRho, &vRhoDot));
 			}
 		}
 		logPrintf("\n"); logFlush();
@@ -683,7 +771,7 @@ struct LindbladLinear : public Integrator<DM1>
 	}
 	
 	//Print / dump quantities at each checkpointed step / eigenmode
-	void report(double t, const DM1& drho, complex eig, double eigErr) const
+	void report(double t, const DM1& drho) const
 	{	static StopWatch watch("Lindblad::report"); watch.start();
 		ostringstream ossID; ossID << stepID;
 		//Compute total energy and distributions:
@@ -736,13 +824,7 @@ struct LindbladLinear : public Integrator<DM1>
 		for(Histogram& h: dist) h.reduce(MPIUtil::ReduceSum);
 		if(mpiWorld->isHead())
 		{	//Report step ID and energy:
-			if(spectrumMode)
-			{	double decayTime = -1./eig.real();
-				double period = (2*M_PI)/fabs(eig.imag());
-				logPrintf("Mode: %2d  DecayTime[fs]: %11.5lg  Period[fs]: %11.5lg  RelErr: %11.5lg",
-					stepID, decayTime/fs, period/fs, eigErr);
-			}
-			else logPrintf("Integrate: Step: %4d   t[fs]: %6.1lf   Etot[eV]: %.6lf", stepID, t/fs, Etot/eV);
+			logPrintf("Integrate: Step: %4d   t[fs]: %6.1lf   Etot[eV]: %.6lf", stepID, t/fs, Etot/eV);
 			logPrintf("   dfMax: %6.4lf", dfMax);
 			if(spinorial) logPrintf("   S: [ %16.15lg %16.15lg %16.15lg ]", Stot[0],  Stot[1],  Stot[2]);
 			logPrintf("\n"); logFlush();
@@ -805,7 +887,6 @@ struct LindbladLinear : public Integrator<DM1>
 		//Increment stepID:
 		((LindbladLinear*)this)->stepID++;
 	}
-	void report(double t, const DM1& drho) const { report(t, drho, complex(), 0.); }
 };
 
 inline void print(FILE* fp, const vector3<complex>& v, const char* format="%lg ")
@@ -817,22 +898,22 @@ inline vector3<complex> normalize(const vector3<complex>& v) { return v * (1./sq
 int main(int argc, char** argv)
 {	
 	InitParams ip = FeynWann::initialize(argc, argv, "Lindblad linearized dynamics or spectrum in an ab initio Wannier basis");
-	int argcSlepc=1; CHECKERR(SlepcInitialize(&argcSlepc, &argv, (char*)0, "")); //don't let slepc see the actual command line (too many conflicts)
 	
 	//Get the system parameters:
 	InputMap inputMap(ip.inputFilename);
 	//--- doping / temperature
 	const double dmu = inputMap.get("dmu", 0.) * eV; //optional: shift in fermi level from neutral value / VBM in eV (default: 0)
 	const double T = inputMap.get("T") * Kelvin; //temperature in Kelvin (ambient phonon T = initial electron T)
-	const string mode = inputMap.getString("mode"); //RealTime or Spectrum
-	if(mode!="RealTime" and mode!="Spectrum")
-		die("\nmode must be 'RealTime' or 'Spectrum''\n");
+	const string mode = inputMap.getString("mode"); //RealTime or Spectrum or SpectrumSparse
+	if((mode!="RealTime") and (mode!="Spectrum"))
+		die("\nmode must be 'RealTime' or 'Spectrum'\n");
 	const bool spectrumMode = (mode == "Spectrum");
+	#ifndef SCALAPACK_ENABLED
+	if(spectrumMode)
+		die("\nSpectrum (dense diagonalization) mode requires linking with ScaLAPACK.\n");
+	#endif
 	//--- eiegen-decomposition parameters (required and used only in spectrum mode)
-	const int nEigs = int(inputMap.get("nEigs", spectrumMode ? NAN : 0.)); //number of eigenvectors to compute
-	const double eigTol = inputMap.get("eigTol", 1e-7); //convergence threshold on eigenvalues
-	const int innerIter = int(inputMap.get("innerIter", 10)); //number of iterations for inner linear-solve inversion
-	const double innerTol = inputMap.get("innerTol", 1e-3); //convergence threshold for inner linear-solve inversion
+	const int blockSize = int(inputMap.get("blockSize", 64));
 	//--- time evolution parameters (required and used only in real time mode)
 	const double dt = inputMap.get("dt", spectrumMode ? 0. : NAN) * fs; //time interval between reports
 	const double tStop = inputMap.get("tStop", spectrumMode ? 0. : NAN) * fs; //stopping time for simulation
@@ -879,16 +960,15 @@ int main(int argc, char** argv)
 	const bool verbose = (verboseMode=="yes");
 	const string inFile = inputMap.has("inFile") ? inputMap.getString("inFile") : "ldbd.dat"; //input file name
 	const string checkpointFile = (inputMap.has("checkpointFile") and (not spectrumMode)) ? inputMap.getString("checkpointFile") : ""; //checkpoint file name
+	const string evecFile = inputMap.has("evecFile") ? inputMap.getString("evecFile") : "ldbd.evecs"; //eigenvector file name
 	
 	logPrintf("\nInputs after conversion to atomic units:\n");
 	logPrintf("dmu = %lg\n", dmu);
 	logPrintf("T = %lg\n", T);
 	logPrintf("mode = %s\n", mode.c_str());
 	if(spectrumMode)
-	{	logPrintf("nEigs = %d\n", nEigs);
-		logPrintf("eigTol = %lg\n", eigTol);
-		logPrintf("innerIter = %d\n", innerIter);
-		logPrintf("innerTol = %lg\n", innerTol);
+	{	logPrintf("blockSize = %d\n", blockSize);
+		logPrintf("pumpB = "); pumpB.print(globalLog, " %lg "); //sets magnitude of perturbation
 	}
 	else
 	{	logPrintf("dt = %lg\n", dt);
@@ -923,8 +1003,14 @@ int main(int argc, char** argv)
 	if(not spectrumMode) logPrintf("checkpointFile = %s\n", checkpointFile.c_str());
 	logPrintf("\n");
 	
+	//Initialize PETSc if necessary:
+	if(not spectrumMode)
+	{	int argcSlepc=1;
+		CHECKERR(PetscInitialize(&argcSlepc, &argv, (char*)0, "")); //don't let petsc see the actual command line (too many conflicts)
+	}
+	
 	//Create and initialize lindblad calculator:
-	LindbladLinear lbl(dmu, T, spectrumMode,
+	LindbladLinear lbl(dmu, T, spectrumMode, blockSize,
 		pumpOmega, pumpA0, pumpTau, pumpPol, (pumpMode=="Bfield"), pumpB,
 		omegaMin, omegaMax, domega, tau, pol, dE,
 		ePhEnabled, verbose, checkpointFile);
@@ -932,10 +1018,10 @@ int main(int argc, char** argv)
 	logPrintf("Initialization completed successfully at t[s]: %9.2lf\n\n", clock_sec());
 	logFlush();
 	
-	logPrintf("%lu active k-points parallelized over %d processes.\n", lbl.nk, mpiWorld->nProcesses());
+	if(not spectrumMode) logPrintf("%lu active k-points parallelized over %d processes.\n", lbl.nk, mpiWorld->nProcesses());
 	if(ip.dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
-		CHECKERR(SlepcFinalize());
+		if(not spectrumMode) CHECKERR(PetscFinalize());
 		FeynWann::finalize();
 		return 0;
 	}
@@ -943,71 +1029,49 @@ int main(int argc, char** argv)
 	
 	if(spectrumMode)
 	{
-		//Create the eigensolver and set various options:
-		EPS eps; CHECKERR(EPSCreate(PETSC_COMM_WORLD, &eps));
-		CHECKERR(EPSSetDimensions(eps, nEigs, PETSC_DEFAULT, PETSC_DEFAULT));
-		CHECKERR(EPSSetTolerances(eps, eigTol, PETSC_DEFAULT));
-		CHECKERR(EPSSetOperators(eps, lbl.evolveMat, NULL));
-		CHECKERR(EPSSetProblemType(eps, EPS_NHEP)); //Non-Hermitian
-		CHECKERR(EPSSetType(eps, EPSJD)); //Jacobi-Davidson algorithm
-		CHECKERR(EPSSetTarget(eps, 0)); //Target eigenvalues closes to 0. using spectral transformation below
-		CHECKERR(EPSSetWhichEigenpairs(eps, EPS_TARGET_REAL));
-		CHECKERR(EPSSetExtraction(eps, EPS_HARMONIC));
-		typedef PetscErrorCode (*SlepcMonitor)(EPS,PetscInt,PetscInt,PetscScalar*,PetscScalar*,PetscReal*,PetscInt,void*);
-		typedef PetscErrorCode (*SlepcContextDestroy)(void**);
-		PetscViewerAndFormat* vf; CHECKERR(PetscViewerAndFormatCreate(PETSC_VIEWER_STDOUT_WORLD, PETSC_VIEWER_DEFAULT, &vf));
-		CHECKERR(EPSMonitorSet(eps, (SlepcMonitor)EPSMonitorFirst, (void*)vf, (SlepcContextDestroy)PetscViewerAndFormatDestroy));
-		
-		//--- Spectral transformation to get to smallest eigenvalues:
-		ST st; CHECKERR(EPSGetST(eps, &st));
-		CHECKERR(STSetType(st, STPRECOND));
-		KSP ksp; CHECKERR(STGetKSP(st, &ksp)); //Krylov method that acts as preconditioner for JD
-		CHECKERR(KSPSetType(ksp, KSPGMRES)); //Select Krylov method eg. BCGSL, GMRES etc.
-		CHECKERR(KSPSetTolerances(ksp, innerTol, PETSC_DEFAULT, PETSC_DEFAULT, innerIter));
-		//--- Set custom preconditioner for inner solve:
-		PC pc; CHECKERR(KSPGetPC(ksp, &pc));
-		CHECKERR(PCSetType(pc, PCGAMG)); //eg. SOR, GAMG (Multigrid)
-		/* //Custom block-diagonal preconditioner (does not seem to be working well)
-		CHECKERR(PCSetType(pc, PCMAT));
-		CHECKERR(PCSetOperators(pc, lbl.precondMat, NULL));
-		CHECKERR(STPrecondSetMatForPC(st, lbl.precondMat));
-		*/
-
-		//Set deflation space (trace of density matrix conserved):
-		Vec nullVec; CHECKERR(MatCreateVecs(lbl.evolveMat, &nullVec, NULL));
-		double* nullVecPtr;  CHECKERR(VecGetArray(nullVec, &nullVecPtr));
-		{	for(const LindbladLinear::State& s: lbl.state)
-				for(int col=0; col<s.nInner; col++)
-					for(int row=0; row<s.nInner; row++)
-						*(nullVecPtr++) = (row==col ? 1. : 0.);
+		//----------- Dense diagonalization using ScaLAPACK ---------------
+		#ifdef SCALAPACK_ENABLED
+		BlockCyclicMatrix::Buffer VL, VR, spinPert, spinMat;
+		std::vector<complex> evals = lbl.bcm->diagonalize(lbl.evolveMatDense, VR, VL, false); //diagonalize
+		lbl.bcm->checkDiagonalization(lbl.evolveMatDense, VR, VL, evals); //check diagonalization
+		lbl.bcm->matMultVec(1., VL, lbl.spinPertDense, spinPert); //weight of each eigenmode in each B-field perturbation
+		lbl.bcm->matMultVec(1., VR, lbl.spinMatDense, spinMat); //spin matrix elements of each eigenmode
+		logPrintf("\n%19s %19s %19s %19s %19s %19s %19s %19s\n", "Re(eig)", "Im(eig)",
+			"rho1(Bx)", "rho1(By)", "rho1(Bz)", "Sx", "Sy", "Sz");
+		int nBlocks = ceildiv(lbl.bcm->N, blockSize);
+		for(int iBlock=0; iBlock<nBlocks; iBlock++)
+		{	//Make block of eigenvector overlaps on all processes:
+			int whose = iBlock % lbl.bcm->nProcsCol;
+			int iEigStart = iBlock*blockSize;
+			int iEigStop = std::min((iBlock+1)*blockSize, lbl.bcm->N);
+			int blockSizeCur = iEigStop-iEigStart;
+			BlockCyclicMatrix::Buffer spinMatBlock(blockSizeCur*3), spinPertBlock(blockSizeCur*3);
+			if(whose == lbl.bcm->iProcCol)
+			{	int eigStartLocal = (iBlock / lbl.bcm->nProcsCol) * blockSize;
+				for(int j=0; j<3; j++)
+					for(int i=0; i<blockSizeCur; i++)
+					{	spinPertBlock[i+j*blockSizeCur] = spinPert[eigStartLocal+i+j*lbl.bcm->nColsMine];
+						spinMatBlock[i+j*blockSizeCur] = spinMat[eigStartLocal+i+j*lbl.bcm->nColsMine];
+					}
+			}
+			lbl.bcm->mpiRow->bcastData(spinPertBlock, whose);
+			lbl.bcm->mpiRow->bcastData(spinMatBlock, whose);
+			for(int i=0; i<blockSizeCur; i++)
+			{	int iEig = iEigStart+i;
+				logPrintf("%19.12le %19.12le %19.12le %19.12le %19.12le %19.12le %19.12le %19.12le\n",
+					evals[iEig].real(), evals[iEig].imag(),
+					spinPertBlock[i], spinPertBlock[i+blockSizeCur], spinPertBlock[i+2*blockSizeCur],
+					spinMatBlock[i], spinMatBlock[i+blockSizeCur], spinMatBlock[i+2*blockSizeCur] );
+			}
 		}
-		CHECKERR(VecRestoreArray(nullVec, &nullVecPtr));
-		CHECKERR(EPSSetDeflationSpace(eps, 1, &nullVec));
-		CHECKERR(VecDestroy(&nullVec));
-		
-		//Solve the eigensystem:
-		CHECKERR(EPSSolve(eps));
-		
-		//Display solution:
-		logPrintf("\n"); logFlush();
-		int nConverged; CHECKERR(EPSGetConverged(eps, &nConverged));
-		for(int iEig=0; iEig<nConverged; iEig++)
-		{	complex eig; CHECKERR(EPSGetEigenpair(eps, iEig, &eig.real(), &eig.imag(), lbl.vRho, lbl.vRhoDot));
-			double err; CHECKERR(EPSGetErrorEstimate(eps, iEig, &err));
-			//Convert eigenvector:
-			DM1& evec =  lbl.drho;
-			const Vec& vEvec = eig.imag()>=0 ? lbl.vRho : lbl.vRhoDot;
-			const double* vEvecData; CHECKERR(VecGetArrayRead(vEvec, &vEvecData));
-			eblas_copy(evec.data(), vEvecData, evec.size());
-			CHECKERR(VecRestoreArrayRead(vEvec, &vEvecData));
-			//Report:
-			lbl.stepID = iEig;
-			lbl.report(0., evec, eig, err);
+		logPrintf("\n");
+		//Eigenvector output:
+		if(evecFile != "None")
+		{	logPrintf("Writing eigenvectors (VR) to '%s' ... ", evecFile.c_str()); logFlush();
+			lbl.bcm->writeMatrix(VR, evecFile.c_str());
+			logPrintf("done.\n");
 		}
-		logPrintf("\n"); logFlush();
-		
-		//Clean up:
-		CHECKERR(EPSDestroy(&eps));
+		#endif
 	}
 	else if(not ePhEnabled)
 	{	//Simple probe-pump-probe with no relaxation:
@@ -1057,7 +1121,7 @@ int main(int argc, char** argv)
 	
 	//Cleanup:
 	CHECKERR(lbl.cleanup());
-	CHECKERR(SlepcFinalize());
+	if(not spectrumMode) CHECKERR(PetscFinalize());
 	FeynWann::finalize();
 	return 0;
 }
