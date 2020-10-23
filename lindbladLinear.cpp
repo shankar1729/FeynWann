@@ -917,6 +917,14 @@ int main(int argc, char** argv)
 	#endif
 	//--- eiegen-decomposition parameters (required and used only in spectrum mode)
 	const int blockSize = int(inputMap.get("blockSize", 64));
+	const string diagMethodName = inputMap.has("diagMethod") ? inputMap.getString("diagMethod") : "PDHSEQR";
+	BlockCyclicMatrix::DiagMethod diagMethod;
+	EnumStringMap<BlockCyclicMatrix::DiagMethod> diagMethodMap(
+		BlockCyclicMatrix::UsePDGEEVX, "PDGEEVX",
+		BlockCyclicMatrix::UsePDHSEQR, "PDHSEQR"
+	);
+	if(not diagMethodMap.getEnum(diagMethodName.c_str(), diagMethod))
+		die("diagMethod must be one of %s\n", diagMethodMap.optionList().c_str());
 	//--- time evolution parameters (required and used only in real time mode)
 	const double dt = inputMap.get("dt", spectrumMode ? 0. : NAN) * fs; //time interval between reports
 	const double tStop = inputMap.get("tStop", spectrumMode ? 0. : NAN) * fs; //stopping time for simulation
@@ -971,6 +979,7 @@ int main(int argc, char** argv)
 	logPrintf("mode = %s\n", mode.c_str());
 	if(spectrumMode)
 	{	logPrintf("blockSize = %d\n", blockSize);
+		logPrintf("diagMethod = %s\n", diagMethodName.c_str());
 		logPrintf("pumpB = "); pumpB.print(globalLog, " %lg "); //sets magnitude of perturbation
 	}
 	else
@@ -1035,7 +1044,7 @@ int main(int argc, char** argv)
 		//----------- Dense diagonalization using ScaLAPACK ---------------
 		#ifdef SCALAPACK_ENABLED
 		BlockCyclicMatrix::Buffer VL, VR, spinPert, spinMat;
-		std::vector<complex> evals = lbl.bcm->diagonalize(lbl.evolveMatDense, VR, VL, BlockCyclicMatrix::UsePDGEEVX, false); //diagonalize
+		std::vector<complex> evals = lbl.bcm->diagonalize(lbl.evolveMatDense, VR, VL, diagMethod, false); //diagonalize
 		lbl.bcm->checkDiagonalization(lbl.evolveMatDense, VR, VL, evals); //check diagonalization
 		lbl.bcm->matMultVec(1., VL, lbl.spinPertDense, spinPert); //weight of each eigenmode in each B-field perturbation
 		lbl.bcm->matMultVec(1., VR, lbl.spinMatDense, spinMat); //spin matrix elements of each eigenmode
