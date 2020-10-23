@@ -942,12 +942,13 @@ int main(int argc, char** argv)
 	#endif
 	//--- eiegen-decomposition parameters (required and used only in spectrum mode)
 	const int blockSize = int(inputMap.get("blockSize", 64));
-	const string diagMethodName = inputMap.has("diagMethod") ? inputMap.getString("diagMethod") : "PDHSEQR";
+	const string diagMethodName = inputMap.has("diagMethod") ? inputMap.getString("diagMethod") : "PDHSEQRm";
 	#ifdef SCALAPACK_ENABLED
 	BlockCyclicMatrix::DiagMethod diagMethod;
 	EnumStringMap<BlockCyclicMatrix::DiagMethod> diagMethodMap(
 		BlockCyclicMatrix::UsePDGEEVX, "PDGEEVX",
-		BlockCyclicMatrix::UsePDHSEQR, "PDHSEQR"
+		BlockCyclicMatrix::UsePDHSEQR, "PDHSEQR",
+		BlockCyclicMatrix::UsePDHSEQRm, "PDHSEQRm"
 	);
 	if(not diagMethodMap.getEnum(diagMethodName.c_str(), diagMethod))
 		die("diagMethod must be one of %s\n", diagMethodMap.optionList().c_str());

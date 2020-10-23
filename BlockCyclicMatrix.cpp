@@ -288,10 +288,11 @@ std::vector<complex> BlockCyclicMatrix::diagonalize(const Buffer& A, Buffer& VR,
 			break;
 		}
 		case UsePDHSEQR:
+		case UsePDHSEQRm:
 		{	Buffer scale; //optional scale factors
 			if(shouldBalance) scale = balance(H); //Balance matrix
 			Buffer Q = hessenberg(H); //Hessenberg reduction
-			evals = schur(H, Q); //Schur decomposition and eigenvalues
+			evals = schur(H, Q, diagMethod); //Schur decomposition and eigenvalues
 			getEvecs(H, Q, VR, VL, shouldBalance ? &scale : NULL); //Transform Schur vectors to eigenvectors
 			break;
 		}
@@ -380,23 +381,25 @@ BlockCyclicMatrix::Buffer BlockCyclicMatrix::hessenberg(Buffer& H) const
 }
 
 extern "C" {
-	//Tweaked version of pdhseqr to fix some workspace bugs implemented in PDHSEQRf.f
-	void pdhseqrf_(const char* job, const char* compz, const int* n, const int* ilo, const int* ihi, double* h, const int* desch,
+	//Tweaked version of pdhseqr to include intermediate progress (implemented in scalapack/PDHSEQRm.f)
+	void pdhseqrm_(const char* job, const char* compz, const int* n, const int* ilo, const int* ihi, double* h, const int* desch,
 		double* wr, double* wi, double* z, const int* descz, double* work, const int* lwork, int* iwork, const int* liwork, int* info);
 }
 
 //Schur decomposition and eigenvalues:
-std::vector<complex> BlockCyclicMatrix::schur(Buffer& H, Buffer& Q) const
+std::vector<complex> BlockCyclicMatrix::schur(Buffer& H, Buffer& Q, DiagMethod diagMethod) const
 {	static StopWatch watch("BlockCyclicMatrix::schur"); watch.start();
 	assert(H.size()==nDataMine);
 	assert(Q.size()==nDataMine);
+	assert((diagMethod==UsePDHSEQR) or (diagMethod==UsePDHSEQRm));
+	auto pdhseqrFunc = (diagMethod==UsePDHSEQR) ? pdhseqr_ : pdhseqrm_;
 	int iLo = 1, iHi = N;
 	Buffer wr(N), wi(N); //real and imaginary parts of eigenvalues
 	Buffer work(1); int lwork = -1, info = 0; //for workspace query
 	std::vector<int> iwork(N); int liwork = -1; //for workspace query
 	logPrintf("Schur decomposition ... "); logFlush();
 	for(int pass=0; pass<2; pass++) //first pass is workspace query, next pass is actual calculation
-	{	pdhseqr_("Schur", "Vectors", &N, &iLo, &iHi, H.data(), desc, wr.data(), wi.data(),
+	{	pdhseqrFunc("Schur", "Vectors", &N, &iLo, &iHi, H.data(), desc, wr.data(), wi.data(),
 			Q.data(), desc, work.data(), &lwork, iwork.data(), &liwork, &info);
 		if(info < 0)
 		{	int errCode = -info;

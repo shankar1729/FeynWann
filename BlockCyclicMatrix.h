@@ -50,8 +50,9 @@ public:
 	
 	//! Switch between multiple options for diagonalizing
 	enum DiagMethod
-	{	UsePDGEEVX, //!< Call pdgeevx available in recent versions of MKL ScaLAPACK only
-		UsePDHSEQR //!< Call pdhseqr along with Hessenberg and custom eigenvector extraction calls
+	{	UsePDGEEVX, //!< Call pdgeevx available in recent versions of MKL ScaLAPACK only (broken in MKL so far)
+		UsePDHSEQR, //!< Call pdhseqr along with Hessenberg and custom eigenvector extraction calls
+		UsePDHSEQRm //!< Use a modified version of pdhseqr that reports intermediate progress
 	};
 	//! Diagonalize non-symmetric matrix A, returning eigenvalues and setting right and left eigenvectors in VR and VL.
 	//! Balance the matrix for numerical stability if shouldBalance=true.
@@ -76,7 +77,8 @@ public:
 	//! At exit, H is replaced with a quasi-upper triangular matrix T
 	//! and the rotations Q are updated such that A = Q T Q^T,
 	//! where A = Q H Q^T is the original matrix that was converted to Hessenberg form.
-	std::vector<complex> schur(Buffer& H, Buffer& Q) const;
+	//! Use modified or original pdhseqr depending on diagMethod
+	std::vector<complex> schur(Buffer& H, Buffer& Q, DiagMethod diagMethod) const;
 	
 	//! Compute right and left eigenvectors given Shur decomposition of a non-symmetric matrix (equivalent to LAPACK dtrevc)
 	//! Input: upper quasi-triangular matrix T and orthogonal matrix Q, such that matrix A = Q T Q^T
