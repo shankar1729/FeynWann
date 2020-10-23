@@ -167,7 +167,7 @@ void BlockCyclicMatrix::writeMatrix(const Buffer& mat, const char* fname) const
 }
 
 //Test with a random matrix:
-void BlockCyclicMatrix::testRandom(double fillFactor) const
+void BlockCyclicMatrix::testRandom(DiagMethod diagMethod, double fillFactor) const
 {
 	//Create and diagonalize test matrix:
 	Buffer A(nDataMine), VR, VL; 
@@ -181,7 +181,7 @@ void BlockCyclicMatrix::testRandom(double fillFactor) const
 			*(Adata++) = (f < fillFactor) ? val : 0.;
 		}
 	Buffer Acopy(A); //run diagonalization on a destructible copy
-	std::vector<complex> E = diagonalize(Acopy, VR, VL);
+	std::vector<complex> E = diagonalize(Acopy, VR, VL, diagMethod);
 	
 	//Determine error in eigen-decomposition:
 	checkDiagonalization(A, VR, VL, E);
@@ -244,14 +244,58 @@ void BlockCyclicMatrix::checkDiagonalization(const Buffer& A, const Buffer& VR, 
 }
 
 
-std::vector<complex> BlockCyclicMatrix::diagonalize(const Buffer& A, Buffer& VR, Buffer& VL, bool shouldBalance) const
+std::vector<complex> BlockCyclicMatrix::diagonalize(const Buffer& A, Buffer& VR, Buffer& VL, DiagMethod diagMethod, bool shouldBalance) const
 {	static StopWatch watch("BlockCyclicMatrix::diagonalize"); watch.start();
-	Buffer scale; std::vector<int> evalSort; //optional scale factors and eigenvalue sorting
 	Buffer H(A); //modifiable copy that is balanced, Hessenberg'd and Schur'd
-	if(shouldBalance) scale = balance(H); //Balance matrix
-	Buffer Q = hessenberg(H); //Hessenberg reduction
-	std::vector<complex> evals = schur(H, Q); //Schur decomposition and eigenvalues
-	getEvecs(H, Q, VR, VL, shouldBalance ? &scale : NULL); //Transform Schur vectors to eigenvectors
+	std::vector<complex> evals; //resulting eigenvalues
+	switch(diagMethod)
+	{	case UsePDGEEVX:
+		{	die("\nMKL pdgeevx is currently broken (version 2020.2) and always segfaults when computing eigenvectors.\n"
+			"Try uncommenting the following code with the next MKL release, and complete implementation if it does.\n\n");
+			/*
+			VR.resize(nDataMine);
+			VL.resize(nDataMine);
+			int iLo = 1, iHi = N;
+			Buffer scale(N, 1.), rconde(N), wr(N), wi(N); //scale factors, condition numbers, eigenvalue components
+			double abnrm = 0.; //norm of matrix returned below
+			Buffer work(1); int lwork = -1, info = 0;
+			logPrintf("Diagonalizing matrix ... "); logFlush();
+			for(int pass=0; pass<2; pass++) //first pass is workspace query, next pass is actual calculation
+			{	pdgeevx_(shouldBalance ? "B" : "N", "V", "V", "N", &N,
+					H.data(), desc, wr.data(), wi.data(), VL.data(), desc, VR.data(), desc,
+					&iLo, &iHi, scale.data(), &abnrm,  rconde.data(), NULL,
+					work.data(), &lwork, &info);
+				if(info < 0)
+				{	int errCode = -info;
+					if(errCode < 100) die("Error in argument# %d to pdgeevx.\n", errCode)
+					else die("Error in entry %d of argument# %d to pdgeevx.\n", errCode%100, errCode/100)
+				}
+				if(pass) break; //done
+				//After first-pass, use results of work-space query to allocate:
+				lwork = int(work.data()[0]);
+				work.resize(lwork);
+			}
+			logPrintf("done at t[s]: %.2lf.\n", clock_sec());
+			//Normalize eigenvectors:
+			logPrintf("Normalizing eigenvectors ... "); logFlush();
+			//TODO: implement eigenvector normalization if this call ever succeeds
+			logPrintf("done at t[s]: %.2lf.\n", clock_sec());
+			//Collect eigenvalues into complex array:
+			evals.resize(N);
+			for(int i=0; i<N; i++)
+				evals[i] = complex(wr[i], wi[i]);
+			*/
+			break;
+		}
+		case UsePDHSEQR:
+		{	Buffer scale; //optional scale factors
+			if(shouldBalance) scale = balance(H); //Balance matrix
+			Buffer Q = hessenberg(H); //Hessenberg reduction
+			evals = schur(H, Q); //Schur decomposition and eigenvalues
+			getEvecs(H, Q, VR, VL, shouldBalance ? &scale : NULL); //Transform Schur vectors to eigenvectors
+			break;
+		}
+	}
 	watch.stop();
 	return evals;
 }

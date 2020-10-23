@@ -48,6 +48,11 @@ public:
 	
 	//---- Diagonalization and helper routines ----
 	
+	//! Switch between multiple options for diagonalizing
+	enum DiagMethod
+	{	UsePDGEEVX, //!< Call pdgeevx available in recent versions of MKL ScaLAPACK only
+		UsePDHSEQR //!< Call pdhseqr along with Hessenberg and custom eigenvector extraction calls
+	};
 	//! Diagonalize non-symmetric matrix A, returning eigenvalues and setting right and left eigenvectors in VR and VL.
 	//! Balance the matrix for numerical stability if shouldBalance=true.
 	//! The eigenvectors VR and VL are distributed the same way as A, and contain
@@ -56,7 +61,7 @@ public:
 	//! The eigenvectors are normalized so that inv(VR) = dagger(VL), when interpreted as a complex matrix.
 	//! (Correspondingly, VL^T * VR is a scalar matrix with 1 on the diagonals for real eigenvectors
 	//! and 1/2 on the diagonals for the real and imaginary part columns of complex eigenvectors.)
-	std::vector<complex> diagonalize(const Buffer& A, Buffer& VR, Buffer& VL, bool shouldBalance=true) const;
+	std::vector<complex> diagonalize(const Buffer& A, Buffer& VR, Buffer& VL, DiagMethod diagMethod, bool shouldBalance=true) const;
 	
 	//! Calculate and report errors in the computed eigenvalue decomposition
 	void checkDiagonalization(const Buffer& A, const Buffer& VR, const Buffer& VL, const std::vector<complex>& E) const;
@@ -94,7 +99,7 @@ public:
 	double identityErr(const Buffer& A, double* offDiag=0) const; //!< Calculate error between a distributed matrix and identity (offDiag contains error in off-diagonal parts)
 	void printMatrix(const Buffer& mat, const char* name="") const; //!< Synchronized print of all pieces of a distributed matrix
 	void writeMatrix(const Buffer& mat, const char* fname) const; //!< Binary-write matrix to file
-	void testRandom(double fillFactor) const; //!< Test diagonalization with a random matrix with specified fill factor
+	void testRandom(DiagMethod diagMethod, double fillFactor) const; //!< Test specified diagonalization method with a random matrix with specified fill factor
 	
 	//---- Indexing utilties ----
 	
