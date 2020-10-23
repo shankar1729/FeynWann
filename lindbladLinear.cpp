@@ -30,13 +30,18 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 #include "Integrator.h"
 #include "BlockCyclicMatrix.h"
 #include <core/Units.h>
-#include <petsc.h>
 
-//Slightly more graceful wrapper to CHKERRQ() macro from Petsc:
-PetscInt iErr = 0;
-#define CHECKERR(codeLine) \
-	iErr = codeLine; \
-	CHKERRQ(iErr);
+#ifdef PETSC_ENABLED
+	#include <petsc.h>
+	//Slightly more graceful wrapper to CHKERRQ() macro from Petsc:
+	PetscInt iErr = 0;
+	#define CHECKERR(codeLine) \
+		iErr = codeLine; \
+		CHKERRQ(iErr);
+#else
+	#define PetscErrorCode int
+	#define CHECKERR(codeLine) codeLine;
+#endif
 
 inline matrix dot(const matrix* P, vector3<complex> pol)
 {	return pol[0]*P[0] + pol[1]*P[1] + pol[2]*P[2];
@@ -50,7 +55,10 @@ inline diagMatrix bar(const diagMatrix& X)
 }
 
 //Lindblad initialization, time evolution and measurement operators using FeynWann callback
-struct LindbladLinear : public Integrator<DM1>
+struct LindbladLinear
+#ifdef PETSC_ENABLED
+: public Integrator<DM1>
+#endif
 {	
 	int stepID; //current time and reporting step number
 	
@@ -147,9 +155,11 @@ struct LindbladLinear : public Integrator<DM1>
 			}
 	}
 	
-	//--------- Time evolution sparse matrix and SLEPc conversion -----------
+	//--------- PETSc  fo rlinearized time evolution sparse matrix and conversion -----------
+	#ifdef PETSC_ENABLED
 	
 	struct Triplet { int i, j; double val; bool local; }; //entry in triplet format matrix (along with tag for process locality) for initial construction
+	
 	Mat evolveMat; //Time evolution operator
 	Vec vRho, vRhoDot; //!< temporary copies of drho and rdhoDot data in Petsc format
 	
@@ -186,6 +196,7 @@ struct LindbladLinear : public Integrator<DM1>
 		CHECKERR(MatAssemblyEnd(M, MAT_FINAL_ASSEMBLY));
 		return 0;
 	}
+	#endif
 	
 	//--------- Blacs / ScaLAPACK interface for dense diagonalization -----------
 	#ifdef SCALAPACK_ENABLED
@@ -314,9 +325,11 @@ struct LindbladLinear : public Integrator<DM1>
 				mpiWorld->bcast(&Eall[iEstart], iEstop-iEstart, jProc);
 			}
 			//Collect matrix elements in triplet format:
-			std::vector<Triplet> evolveEntries; //list of all entries initialized on this process; used in sparse PETSc dynamics mode
+			#ifdef PETSC_ENABLED
+			std::vector<Triplet> evolveEntries; //list of all entries initialized on this process
+			#endif
 			#ifdef SCALAPACK_ENABLED
-			std::vector<std::vector<std::pair<double,int>>> evolveEntriesProc(mpiWorld->nProcesses()); //list of entries by destination process; used in ScaLAPACK mode
+			std::vector<std::vector<std::pair<double,int>>> evolveEntriesProc(mpiWorld->nProcesses()); //list of entries by destination process
 			if(spectrumMode) bcm = std::make_shared<BlockCyclicMatrix>(rhoSizeTot, blockSize, mpiWorld); //ScaLAPACK wrapper object
 			#endif
 			State* sPtr = state.data();
@@ -324,9 +337,9 @@ struct LindbladLinear : public Integrator<DM1>
 			for(size_t ik1=ikStart; ik1<ikStop; ik1++)
 			{	State& s = *(sPtr++);
 				const double* E1 = &(s.E[s.innerStart]);
+				const int& nRhoPrev1 = nRhoPrev[ik1];
 				const int& nInner1 = nInnerAll[ik1];
 				const int N1 = nInner1*nInner1; //number of density matrix entries
-				const int& nRhoPrev1 = nRhoPrev[ik1];
 				const int whose1 = mpiWorld->iProcess();
 				const diagMatrix& f1 = s.rho0;
 				const diagMatrix f1bar = bar(f1);
@@ -447,10 +460,13 @@ struct LindbladLinear : public Integrator<DM1>
 						#endif
 					}
 					else
-					{	EXTRACT_NNZ(1,2)
+					{
+						#ifdef PETSC_ENABLED
+						EXTRACT_NNZ(1,2)
 						EXTRACT_NNZ(2,1)
 						EXTRACT_NNZ(1,1)
 						EXTRACT_NNZ(2,2)
+						#endif
 					}
 					#undef EXTRACT_NNZ
 					#undef EXTRACT_NNZ_DENSE
@@ -573,6 +589,7 @@ struct LindbladLinear : public Integrator<DM1>
 			}
 			else
 			{	//Convert to Petsc matrix:
+				#ifdef PETSC_ENABLED
 				logPrintf("Converting to PETSc sparse matrix ... "); logFlush();
 				matInit(evolveMat, evolveEntries);
 				MatInfo info; CHECKERR(MatGetInfo(evolveMat, MAT_GLOBAL_SUM, &info));
@@ -580,11 +597,14 @@ struct LindbladLinear : public Integrator<DM1>
 					info.nz_used, rhoSizeTot, rhoSizeTot, info.nz_used*100./(rhoSizeTot*rhoSizeTot));
 				logFlush();
 				CHECKERR(MatCreateVecs(evolveMat, &vRho, &vRhoDot));
+				#endif
 			}
 		}
 		logPrintf("\n"); logFlush();
 		return 0;
 	}
+	
+#ifdef PETSC_ENABLED
 	
 	//Calculate change in probe response due to current drho:
 	diagMatrix calcDeltaImEps(double t, const DM1& drho) const
@@ -890,6 +910,7 @@ struct LindbladLinear : public Integrator<DM1>
 		//Increment stepID:
 		((LindbladLinear*)this)->stepID++;
 	}
+#endif
 };
 
 inline void print(FILE* fp, const vector3<complex>& v, const char* format="%lg ")
@@ -915,9 +936,14 @@ int main(int argc, char** argv)
 	if(spectrumMode)
 		die("\nSpectrum (dense diagonalization) mode requires linking with ScaLAPACK.\n");
 	#endif
+	#ifndef PETSC_ENABLED
+	if(not spectrumMode)
+		die("\nRealTime (linearized time evolution) mode requires linking with PETSc.\n");
+	#endif
 	//--- eiegen-decomposition parameters (required and used only in spectrum mode)
 	const int blockSize = int(inputMap.get("blockSize", 64));
 	const string diagMethodName = inputMap.has("diagMethod") ? inputMap.getString("diagMethod") : "PDHSEQR";
+	#ifdef SCALAPACK_ENABLED
 	BlockCyclicMatrix::DiagMethod diagMethod;
 	EnumStringMap<BlockCyclicMatrix::DiagMethod> diagMethodMap(
 		BlockCyclicMatrix::UsePDGEEVX, "PDGEEVX",
@@ -925,6 +951,7 @@ int main(int argc, char** argv)
 	);
 	if(not diagMethodMap.getEnum(diagMethodName.c_str(), diagMethod))
 		die("diagMethod must be one of %s\n", diagMethodMap.optionList().c_str());
+	#endif
 	//--- time evolution parameters (required and used only in real time mode)
 	const double dt = inputMap.get("dt", spectrumMode ? 0. : NAN) * fs; //time interval between reports
 	const double tStop = inputMap.get("tStop", spectrumMode ? 0. : NAN) * fs; //stopping time for simulation
@@ -1016,10 +1043,12 @@ int main(int argc, char** argv)
 	logPrintf("\n");
 	
 	//Initialize PETSc if necessary:
+	#ifdef PETSC_ENABLED
 	if(not spectrumMode)
 	{	int argcSlepc=1;
 		CHECKERR(PetscInitialize(&argcSlepc, &argv, (char*)0, "")); //don't let petsc see the actual command line (too many conflicts)
 	}
+	#endif
 	
 	//Create and initialize lindblad calculator:
 	LindbladLinear lbl(dmu, T, spectrumMode, blockSize,
@@ -1033,7 +1062,9 @@ int main(int argc, char** argv)
 	if(not spectrumMode) logPrintf("%lu active k-points parallelized over %d processes.\n", lbl.nk, mpiWorld->nProcesses());
 	if(ip.dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
+		#ifdef PETSC_ENABLED
 		if(not spectrumMode) CHECKERR(PetscFinalize());
+		#endif
 		FeynWann::finalize();
 		return 0;
 	}
@@ -1087,12 +1118,16 @@ int main(int argc, char** argv)
 	}
 	else if(not ePhEnabled)
 	{	//Simple probe-pump-probe with no relaxation:
+		#ifdef PETSC_ENABLED
 		lbl.report(-dt, lbl.drho);
 		lbl.applyPump(); //takes care of optical pump or B-field excitation
 		lbl.report(0., lbl.drho);
+		#endif
 	}
 	else
-	{	double tStart = 0.;
+	{	//Pump - time evolve - probe:
+		#ifdef PETSC_ENABLED
+		double tStart = 0.;
 		bool checkpointExists = false;
 		if(mpiWorld->isHead())
 			checkpointExists = (checkpointFile.length()>0) and (fileSize(checkpointFile.c_str())>0);
@@ -1129,11 +1164,14 @@ int main(int argc, char** argv)
 			lbl.integrateFixed(lbl.drho, tStart, tStop, tStep, dt);
 		else //Adaptive integrator:
 			lbl.integrateAdaptive(lbl.drho, tStart, tStop, tolAdaptive, dt);
+		#endif
 	}
 	
 	//Cleanup:
+	#ifdef PETSC_ENABLED
 	CHECKERR(lbl.cleanup());
 	if(not spectrumMode) CHECKERR(PetscFinalize());
+	#endif
 	FeynWann::finalize();
 	return 0;
 }

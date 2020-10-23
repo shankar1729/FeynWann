@@ -121,11 +121,13 @@ add_FeynWann_executable(circularDichroism)
 add_FeynWann_executable(phononElectronLinewidth)
 add_FeynWann_executable(lindblad)
 add_FeynWann_executable(lindbladInit)
+add_FeynWann_executable(lindbladLinear)
 add_FeynWann_executable(ePhRelax)
 add_FeynWann_executable(ePhSpinRelax)
 add_FeynWann_executable(debugEph)
 
 target_link_libraries(lindblad ${GSL_BLAS_LIBRARY})
+target_link_libraries(lindbladLinear ${GSL_BLAS_LIBRARY} ${PETSC_LIBRARY})
 
 #Optional ScaLAPACK:
 option(EnableScaLAPACK "Enable ScaLAPACK support (currently used only by the dense diagonalization in lindbladLinear)")
@@ -135,13 +137,10 @@ if(EnableScaLAPACK)
 	#JDFTx must be built with scalapack support for this to work (not tested in this cmake script)
 endif()
 
-#Optional lindbladian linear dynamics and spectrum that requires SLEPc
-option(EnableSLEPc "Enable lindbladian linear dynamics and spectrum using SLEPc" OFF)
-if(EnableSLEPc)
+#Optional PETSc to enable linear dynamics in lindbladLinear
+option(EnablePETSc "Enable lindbladian linear dynamics using PETSc" OFF)
+if(EnablePETSc)
 	find_package(PETSc REQUIRED)
-	find_package(SLEPc REQUIRED)
 	include_directories("${PETSC_INCLUDE_DIR}")
-	include_directories("${SLEPC_INCLUDE_DIR}")
-	add_FeynWann_executable(lindbladLinear)
-	target_link_libraries(lindbladLinear ${GSL_BLAS_LIBRARY} ${PETSC_LIBRARY} ${SLEPC_LIBRARY})
+	add_definitions("-DPETSC_ENABLED")
 endif()
