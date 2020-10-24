@@ -155,11 +155,8 @@ struct LindbladLinear
 			}
 	}
 	
-	//--------- PETSc  fo rlinearized time evolution sparse matrix and conversion -----------
+	//--------- PETSc for linearized time evolution sparse matrix and conversion -----------
 	#ifdef PETSC_ENABLED
-	
-	struct Triplet { int i, j; double val; bool local; }; //entry in triplet format matrix (along with tag for process locality) for initial construction
-	
 	Mat evolveMat; //Time evolution operator
 	Vec vRho, vRhoDot; //!< temporary copies of drho and rdhoDot data in Petsc format
 	
@@ -170,30 +167,6 @@ struct LindbladLinear
 			CHECKERR(VecDestroy(&vRho));
 			CHECKERR(VecDestroy(&vRhoDot));
 		}
-		return 0;
-	}
-	
-	//Initialize a distributed square matrix M from (distributed) triplet format in entries:
-	PetscErrorCode matInit(Mat& M, const std::vector<Triplet> entries)
-	{	int N = rhoSizeTot;
-		int Nmine = rhoSize[mpiWorld->iProcess()];
-		//Determine non-zero sizes:
-		std::vector<int> nnzD(N), nnzO(N); //number of process-diagonal and process off-diagonal entries by row
-		for(const Triplet& entry: entries)
-			(entry.local ? nnzD : nnzO)[entry.i]++;
-		MPI_Allreduce(MPI_IN_PLACE, nnzD.data(), N, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
-		MPI_Allreduce(MPI_IN_PLACE, nnzO.data(), N, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
-		for(size_t i=rhoOffsetGlobal; i<rhoOffsetGlobal+Nmine; i++)
-		{	nnzD[i] = std::min(nnzD[i], Nmine);
-			nnzO[i] = std::min(nnzO[i], N - Nmine);
-		}
-		CHECKERR(MatCreateAIJ(PETSC_COMM_WORLD, Nmine, Nmine, N, N,
-			0, nnzD.data()+rhoOffsetGlobal, 0, nnzO.data()+rhoOffsetGlobal, &M));
-		CHECKERR(MatSetOption(M, MAT_NEW_NONZERO_ALLOCATION_ERR, PETSC_FALSE));
-		for(const Triplet& entry: entries)
-			CHECKERR(MatSetValue(M, entry.i, entry.j, entry.val, ADD_VALUES));
-		CHECKERR(MatAssemblyBegin(M, MAT_FINAL_ASSEMBLY));
-		CHECKERR(MatAssemblyEnd(M, MAT_FINAL_ASSEMBLY));
 		return 0;
 	}
 	#endif
@@ -326,153 +299,207 @@ struct LindbladLinear
 			}
 			//Collect matrix elements in triplet format:
 			#ifdef PETSC_ENABLED
-			std::vector<Triplet> evolveEntries; //list of all entries initialized on this process
+			std::vector<int> nnzD, nnzO; //number of process-diagonal and process off-diagonal entries by row
+			if(not spectrumMode) { nnzD.resize(rhoSizeTot); nnzO.resize(rhoSizeTot); }
 			#endif
 			#ifdef SCALAPACK_ENABLED
-			std::vector<std::vector<std::pair<double,int>>> evolveEntriesProc(mpiWorld->nProcesses()); //list of entries by destination process
+			std::vector<std::vector<std::pair<double,int>>> evolveEntries(mpiWorld->nProcesses()); //list of entries by destination process
 			if(spectrumMode) bcm = std::make_shared<BlockCyclicMatrix>(rhoSizeTot, blockSize, mpiWorld); //ScaLAPACK wrapper object
 			#endif
-			State* sPtr = state.data();
-			logPrintf("Initializing time evolution operator ... "); logFlush();
-			for(size_t ik1=ikStart; ik1<ikStop; ik1++)
-			{	State& s = *(sPtr++);
-				const double* E1 = &(s.E[s.innerStart]);
-				const int& nRhoPrev1 = nRhoPrev[ik1];
-				const int& nInner1 = nInnerAll[ik1];
-				const int N1 = nInner1*nInner1; //number of density matrix entries
-				const int whose1 = mpiWorld->iProcess();
-				const diagMatrix& f1 = s.rho0;
-				const diagMatrix f1bar = bar(f1);
-				#ifdef SCALAPACK_ENABLED
-				//Coherent evolution (only in spectrum mode):
-				if(spectrumMode)
-				{	for(int a=0; a<nInner1; a++)
-						for(int b=0; b<nInner1; b++)
-							if(a != b)
-							{	int iRow = nRhoPrev1+a+b*nInner1;
-								int iCol = nRhoPrev1+b+a*nInner1;
-								double Ediff = E1[b]-E1[a];
-								int localIndex, whose = bcm->globalIndex(iRow, iCol, localIndex);
-								evolveEntriesProc[whose].push_back(std::make_pair(Ediff,localIndex));
-							}
-				}
-				#endif
-				//Electron-phonon part:
-				const double prefacEph = 2*M_PI/nkTot; //factor of 2 from the +h.c. contribution
-				std::vector<LindbladFile::GePhEntry>::iterator g = s.GePh.begin();
-				while(g != s.GePh.end())
-				{	const size_t& ik2 = g->jk;
-					const int& nInner2 = nInnerAll[ik2];
-					const int N2 = nInner2*nInner2; //number of density matrix entries
-					const int& nRhoPrev2 = nRhoPrev[ik2];
-					const int whose2 = whose(ik2);
-					const double* E2 = &(Eall[nInnerPrev[ik2]]);
-					diagMatrix f2(nInner2); for(int b2=0; b2<nInner2; b2++) f2[b2] = fermi(invT*(E2[b2]-dmu));
-					const diagMatrix f2bar = bar(f2);
-					//Store results in dense complex blocks of the superoperator first:
-					matrix L12 = zeroes(N1,N2); complex* L12data = L12.data();
-					matrix L21 = zeroes(N2,N1); complex* L21data = L21.data();
-					matrix L11 = zeroes(N1,N1); complex* L11data = L11.data();
-					matrix L22 = zeroes(N2,N2); complex* L22data = L22.data();
-					#define L(i,a,b, j,c,d) L##i##j##data[L##i##j.index(a+b*nInner##i, c+d*nInner##j)] //access superoperator block element
-					//Loop over all connections to the same ik2:
-					while((g != s.GePh.end()) and (g->jk == ik2))
-					{	g->G.init(nInner1, nInner2);
-						g->initA(T);
-						//Loop over A- and A+
-						for(int pm=0; pm<2; pm++) 
-						{	const SparseMatrix& Acur = pm ? g->Ap : g->Am;
-							const diagMatrix& f1cur = pm ? f1 : f1bar;
-							const diagMatrix& f2cur = pm ? f2bar : f2;
-							//Loop oover all pairs of non-zero entries:
-							for(const SparseEntry& s1: Acur)
-							{	int a = s1.i, b = s1.j; //to match derivation's notation
-								for(const SparseEntry& s2: Acur)
-								{	int c = s2.i, d = s2.j; //to match derivation's notation
-									complex M = prefacEph * (s1.val * s2.val.conj());
-									L(1,a,c, 2,b,d) += f1cur[a] * M;
-									L(2,d,b, 1,c,a) += f2cur[d] * M;
-									if(b == d) for(int e=0; e<nInner1; e++) L(1,e,c, 1,e,a) -= f2cur[b] * M;
-									if(a == c) for(int e=0; e<nInner2; e++) L(2,e,b, 2,e,d) -= f1cur[c] * M;
+			int nPasses = spectrumMode ? 1 : 2; //run two passes for PETSc: first for size determination, second to set the entries
+			logPrintf(spectrumMode
+				? "Initializing time evolution operator ... "
+				: "Determining sparsity structure of time evolution operator ... "); logFlush();
+			for(int iPass=0; iPass<nPasses; iPass++)
+			{	State* sPtr = state.data();
+				for(size_t ik1=ikStart; ik1<ikStop; ik1++)
+				{	State& s = *(sPtr++);
+					const double* E1 = &(s.E[s.innerStart]);
+					const int& nRhoPrev1 = nRhoPrev[ik1];
+					const int& nInner1 = nInnerAll[ik1];
+					const int N1 = nInner1*nInner1; //number of density matrix entries
+					const int whose1 = mpiWorld->iProcess();
+					const diagMatrix& f1 = s.rho0;
+					const diagMatrix f1bar = bar(f1);
+					#ifdef SCALAPACK_ENABLED
+					//Coherent evolution (only in spectrum mode):
+					if(spectrumMode)
+					{	for(int a=0; a<nInner1; a++)
+							for(int b=0; b<nInner1; b++)
+								if(a != b)
+								{	int iRow = nRhoPrev1+a+b*nInner1;
+									int iCol = nRhoPrev1+b+a*nInner1;
+									double Ediff = E1[b]-E1[a];
+									int localIndex, whose = bcm->globalIndex(iRow, iCol, localIndex);
+									evolveEntries[whose].push_back(std::make_pair(Ediff,localIndex));
+								}
+					}
+					#endif
+					//Electron-phonon part:
+					const double prefacEph = 2*M_PI/nkTot; //factor of 2 from the +h.c. contribution
+					std::vector<LindbladFile::GePhEntry>::iterator g = s.GePh.begin();
+					while(g != s.GePh.end())
+					{	const size_t& ik2 = g->jk;
+						const int& nInner2 = nInnerAll[ik2];
+						const int N2 = nInner2*nInner2; //number of density matrix entries
+						const int& nRhoPrev2 = nRhoPrev[ik2];
+						const int whose2 = whose(ik2);
+						const double* E2 = &(Eall[nInnerPrev[ik2]]);
+						diagMatrix f2(nInner2); for(int b2=0; b2<nInner2; b2++) f2[b2] = fermi(invT*(E2[b2]-dmu));
+						const diagMatrix f2bar = bar(f2);
+						//Store results in dense complex blocks of the superoperator first:
+						matrix L12 = zeroes(N1,N2); complex* L12data = L12.data();
+						matrix L21 = zeroes(N2,N1); complex* L21data = L21.data();
+						matrix L11 = zeroes(N1,N1); complex* L11data = L11.data();
+						matrix L22 = zeroes(N2,N2); complex* L22data = L22.data();
+						#define L(i,a,b, j,c,d) L##i##j##data[L##i##j.index(a+b*nInner##i, c+d*nInner##j)] //access superoperator block element
+						//Loop over all connections to the same ik2:
+						while((g != s.GePh.end()) and (g->jk == ik2))
+						{	g->G.init(nInner1, nInner2);
+							g->initA(T);
+							//Loop over A- and A+
+							for(int pm=0; pm<2; pm++) 
+							{	const SparseMatrix& Acur = pm ? g->Ap : g->Am;
+								const diagMatrix& f1cur = pm ? f1 : f1bar;
+								const diagMatrix& f2cur = pm ? f2bar : f2;
+								//Loop oover all pairs of non-zero entries:
+								for(const SparseEntry& s1: Acur)
+								{	int a = s1.i, b = s1.j; //to match derivation's notation
+									for(const SparseEntry& s2: Acur)
+									{	int c = s2.i, d = s2.j; //to match derivation's notation
+										complex M = prefacEph * (s1.val * s2.val.conj());
+										L(1,a,c, 2,b,d) += f1cur[a] * M;
+										L(2,d,b, 1,c,a) += f2cur[d] * M;
+										if(b == d) for(int e=0; e<nInner1; e++) L(1,e,c, 1,e,a) -= f2cur[b] * M;
+										if(a == c) for(int e=0; e<nInner2; e++) L(2,e,b, 2,e,d) -= f1cur[c] * M;
+									}
 								}
 							}
+							//Move to next element:
+							g++;
 						}
-						//Move to next element:
-						g++;
-					}
-					#undef L
-					//Convert from complex to real input and real outputs (based on h.c. symmetry):
-					#define CreateRandInv(i) \
-						SparseMatrix R##i(N##i,N##i,2*N##i), Rinv##i(N##i,N##i,2*N##i); \
-						for(int a=0; a<nInner##i; a++) \
-						{	for(int b=0; b<a; b++) \
-							{	int ab = a+b*nInner##i, ba = b+a*nInner##i; \
-								R##i.push_back(SparseEntry{ab,ab,complex(1,0)}); R##i.push_back(SparseEntry{ab,ba,complex(0,+1)}); \
-								R##i.push_back(SparseEntry{ba,ab,complex(1,0)}); R##i.push_back(SparseEntry{ba,ba,complex(0,-1)}); \
-								Rinv##i.push_back(SparseEntry{ab,ab,complex(+0.5,0)}); Rinv##i.push_back(SparseEntry{ab,ba,complex(+0.5,0)}); \
-								Rinv##i.push_back(SparseEntry{ba,ab,complex(0,-0.5)}); Rinv##i.push_back(SparseEntry{ba,ba,complex(0,+0.5)}); \
-							} \
-							int aa = a+a*nInner##i; \
-							R##i.push_back(SparseEntry{aa,aa,1.}); \
-							Rinv##i.push_back(SparseEntry{aa,aa,1.}); \
+						#undef L
+						//Convert from complex to real input and real outputs (based on h.c. symmetry):
+						#define CreateRandInv(i) \
+							SparseMatrix R##i(N##i,N##i,2*N##i), Rinv##i(N##i,N##i,2*N##i); \
+							for(int a=0; a<nInner##i; a++) \
+							{	for(int b=0; b<a; b++) \
+								{	int ab = a+b*nInner##i, ba = b+a*nInner##i; \
+									R##i.push_back(SparseEntry{ab,ab,complex(1,0)}); R##i.push_back(SparseEntry{ab,ba,complex(0,+1)}); \
+									R##i.push_back(SparseEntry{ba,ab,complex(1,0)}); R##i.push_back(SparseEntry{ba,ba,complex(0,-1)}); \
+									Rinv##i.push_back(SparseEntry{ab,ab,complex(+0.5,0)}); Rinv##i.push_back(SparseEntry{ab,ba,complex(+0.5,0)}); \
+									Rinv##i.push_back(SparseEntry{ba,ab,complex(0,-0.5)}); Rinv##i.push_back(SparseEntry{ba,ba,complex(0,+0.5)}); \
+								} \
+								int aa = a+a*nInner##i; \
+								R##i.push_back(SparseEntry{aa,aa,1.}); \
+								Rinv##i.push_back(SparseEntry{aa,aa,1.}); \
+							}
+						CreateRandInv(1)
+						CreateRandInv(2)
+						#undef CreateRandInv
+						L12 = Rinv1 * (L12 * R2);
+						L21 = Rinv2 * (L21 * R1);
+						L11 = Rinv1 * (L11 * R1);
+						L22 = Rinv2 * (L22 * R2);
+						//Extract / count / set non-zero entries depending on the mode and pass:
+						if(spectrumMode)
+						{
+							#ifdef SCALAPACK_ENABLED
+							#define EXTRACT_NNZ(i,j) \
+							{	const complex* data = L##i##j.data(); \
+								for(int col=0; col<L##i##j.nCols(); col++) \
+								{	for(int row=0; row<L##i##j.nRows(); row++) \
+									{	double M = (data++)->real(); \
+										if(M) \
+										{	int iRow = row+nRhoPrev##i; \
+											int iCol = col+nRhoPrev##j; \
+											int localIndex, whose = bcm->globalIndex(iRow, iCol, localIndex); \
+											evolveEntries[whose].push_back(std::make_pair(M,localIndex)); \
+										} \
+									} \
+								} /* TODO */ \
+							}
+							EXTRACT_NNZ(1,2)
+							EXTRACT_NNZ(2,1)
+							EXTRACT_NNZ(1,1)
+							EXTRACT_NNZ(2,2)
+							#undef EXTRACT_NNZ
+							#endif
 						}
-					CreateRandInv(1)
-					CreateRandInv(2)
-					#undef CreateRandInv
-					L12 = Rinv1 * (L12 * R2);
-					L21 = Rinv2 * (L21 * R1);
-					L11 = Rinv1 * (L11 * R1);
-					L22 = Rinv2 * (L22 * R2);
-					//Extract non-zero entries in triplet:
-					#define EXTRACT_NNZ(i,j) \
-					{	bool isLocal = (whose##i == whose##j); \
-						const complex* data = L##i##j.data(); \
-						for(int col=0; col<L##i##j.nCols(); col++) \
-						{	for(int row=0; row<L##i##j.nRows(); row++) \
-							{	double M = (data++)->real(); \
-								if(M) \
-								{	evolveEntries.push_back(Triplet{row+nRhoPrev##i, col+nRhoPrev##j, M, isLocal}); \
-								} \
-							} \
-						} \
+						else
+						{
+							#ifdef PETSC_ENABLED
+							if(iPass == 0)
+							{	//Count non-zero matrix elements:
+								#define COUNT_NNZ(i,j) \
+								{	std::vector<int>& nnz = (whose##i == whose##j) ? nnzD : nnzO; \
+									const complex* data = L##i##j.data(); \
+									for(int col=0; col<L##i##j.nCols(); col++) \
+									{	for(int row=0; row<L##i##j.nRows(); row++) \
+										{	double M = (data++)->real(); \
+											if(M) nnz[row+nRhoPrev##i]++; \
+										} \
+									} \
+								}
+								COUNT_NNZ(1,2)
+								COUNT_NNZ(2,1)
+								COUNT_NNZ(1,1)
+								COUNT_NNZ(2,2)
+								#undef COUNT_NNZ
+							}
+							else
+							{	//Set matrix elements in PETSc matrix:
+								#define SET_NNZ(i,j) \
+								{	const complex* data = L##i##j.data(); \
+									for(int col=0; col<L##i##j.nCols(); col++) \
+									{	for(int row=0; row<L##i##j.nRows(); row++) \
+										{	double M = (data++)->real(); \
+											if(M) CHECKERR(MatSetValue(evolveMat, row+nRhoPrev##i, col+nRhoPrev##j, M, ADD_VALUES)); \
+										} \
+									} \
+								}
+								SET_NNZ(1,2)
+								SET_NNZ(2,1)
+								SET_NNZ(1,1)
+								SET_NNZ(2,2)
+								#undef SET_NNZ
+							}
+							#endif
+						}
 					}
-					#define EXTRACT_NNZ_DENSE(i,j) \
-					{	const complex* data = L##i##j.data(); \
-						for(int col=0; col<L##i##j.nCols(); col++) \
-						{	for(int row=0; row<L##i##j.nRows(); row++) \
-							{	double M = (data++)->real(); \
-								if(M) \
-								{	int iRow = row+nRhoPrev##i; \
-									int iCol = col+nRhoPrev##j; \
-									int localIndex, whose = bcm->globalIndex(iRow, iCol, localIndex); \
-									evolveEntriesProc[whose].push_back(std::make_pair(M,localIndex)); \
-								} \
-							} \
-						} /* TODO */ \
-					}
-					if(spectrumMode)
-					{
-						#ifdef SCALAPACK_ENABLED
-						EXTRACT_NNZ_DENSE(1,2)
-						EXTRACT_NNZ_DENSE(2,1)
-						EXTRACT_NNZ_DENSE(1,1)
-						EXTRACT_NNZ_DENSE(2,2)
-						#endif
+					if(iPass+1 == nPasses) s.GePh.clear(); //no longer needed; optimize memory
+				}
+				if(spectrumMode) logPrintf("done.\n"); 
+				#ifdef PETSC_ENABLED
+				else
+				{	if(iPass == 0)
+					{	//Allocate matrix knowing sparsity structure at the end of the first pass
+						int N = rhoSizeTot;
+						int Nmine = rhoSize[mpiWorld->iProcess()];
+						MPI_Allreduce(MPI_IN_PLACE, nnzD.data(), N, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+						MPI_Allreduce(MPI_IN_PLACE, nnzO.data(), N, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+						for(size_t i=rhoOffsetGlobal; i<rhoOffsetGlobal+Nmine; i++)
+						{	nnzD[i] = std::min(nnzD[i], Nmine);
+							nnzO[i] = std::min(nnzO[i], N - Nmine);
+						}
+						logPrintf("done.\nInitializing PETSc sparse matrix for time evolution ... "); logFlush();
+						CHECKERR(MatCreateAIJ(PETSC_COMM_WORLD, Nmine, Nmine, N, N,
+							0, nnzD.data()+rhoOffsetGlobal, 0, nnzO.data()+rhoOffsetGlobal, &evolveMat));
+						CHECKERR(MatSetOption(evolveMat, MAT_NEW_NONZERO_ALLOCATION_ERR, PETSC_FALSE));
 					}
 					else
-					{
-						#ifdef PETSC_ENABLED
-						EXTRACT_NNZ(1,2)
-						EXTRACT_NNZ(2,1)
-						EXTRACT_NNZ(1,1)
-						EXTRACT_NNZ(2,2)
-						#endif
+					{	//Finalize matrix assembly at end of second pass:
+						CHECKERR(MatAssemblyBegin(evolveMat, MAT_FINAL_ASSEMBLY));
+						CHECKERR(MatAssemblyEnd(evolveMat, MAT_FINAL_ASSEMBLY));
+						MatInfo info; CHECKERR(MatGetInfo(evolveMat, MAT_GLOBAL_SUM, &info));
+						logPrintf("done. Net sparsity: %.0lf non-zero in %lu x %lu matrix (%.1lf%% fill)\n",
+							info.nz_used, rhoSizeTot, rhoSizeTot, info.nz_used*100./(rhoSizeTot*rhoSizeTot));
+						logFlush();
+						CHECKERR(MatCreateVecs(evolveMat, &vRho, &vRhoDot));
 					}
-					#undef EXTRACT_NNZ
-					#undef EXTRACT_NNZ_DENSE
 				}
+				#endif
 			}
-			logPrintf("done.\n"); 
 			
 			//Convert from triplet to appropriate format:
 			if(spectrumMode)
@@ -486,7 +513,7 @@ struct LindbladLinear
 					int iRequest = 0;
 					for(int jProc=0; jProc<mpiWorld->nProcesses(); jProc++)
 						if(jProc != mpiWorld->iProcess())
-						{	nEntriesToProc[jProc] = evolveEntriesProc[jProc].size();
+						{	nEntriesToProc[jProc] = evolveEntries[jProc].size();
 							mpiWorld->send(&nEntriesToProc[jProc], 1, jProc, 0, &requests[iRequest++]);
 							mpiWorld->recv(&nEntriesFromProc[jProc], 1, jProc, 0, &requests[iRequest++]);
 							
@@ -499,14 +526,14 @@ struct LindbladLinear
 					int iRequest = 0;
 					for(int jProc=0; jProc<mpiWorld->nProcesses(); jProc++)
 						if(jProc == mpiWorld->iProcess())
-							std::swap(evolveEntriesProc[jProc], evolveEntriesMine[jProc]);
+							std::swap(evolveEntries[jProc], evolveEntriesMine[jProc]);
 						else
 						{	evolveEntriesMine[jProc].resize(nEntriesFromProc[jProc]);
 							MPI_Irecv(evolveEntriesMine[jProc].data(), evolveEntriesMine[jProc].size(), MPI_DOUBLE_INT, jProc, 1, MPI_COMM_WORLD, &requests[iRequest++]);
-							MPI_Isend(evolveEntriesProc[jProc].data(), evolveEntriesProc[jProc].size(), MPI_DOUBLE_INT, jProc, 1, MPI_COMM_WORLD, &requests[iRequest++]);
+							MPI_Isend(evolveEntries[jProc].data(), evolveEntries[jProc].size(), MPI_DOUBLE_INT, jProc, 1, MPI_COMM_WORLD, &requests[iRequest++]);
 						}
 					mpiWorld->waitAll(requests);
-					evolveEntriesProc.clear();
+					evolveEntries.clear();
 				}
 				//--- set to dense matrix:
 				size_t nNZ = 0;
@@ -586,18 +613,6 @@ struct LindbladLinear
 					jProc = jProcNext;
 				}
 				logPrintf("done.\n");
-				#endif
-			}
-			else
-			{	//Convert to Petsc matrix:
-				#ifdef PETSC_ENABLED
-				logPrintf("Converting to PETSc sparse matrix ... "); logFlush();
-				matInit(evolveMat, evolveEntries);
-				MatInfo info; CHECKERR(MatGetInfo(evolveMat, MAT_GLOBAL_SUM, &info));
-				logPrintf("done. Net sparsity: %.0lf non-zero in %lu x %lu matrix (%.1lf%% fill)\n",
-					info.nz_used, rhoSizeTot, rhoSizeTot, info.nz_used*100./(rhoSizeTot*rhoSizeTot));
-				logFlush();
-				CHECKERR(MatCreateVecs(evolveMat, &vRho, &vRhoDot));
 				#endif
 			}
 		}
