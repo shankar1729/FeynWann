@@ -448,8 +448,8 @@
      $        DESCH(RSRC_).NE.0 .OR. DESCH(CSRC_).NE.0 ) THEN
      
             CALL logPrint(
-     $        "   Selecting PDLAQR0 for Schur decomposition.@",
-     $        0., .TRUE.)
+     $        "   Selecting PDLAQR0 for Schur decomposition" //
+     $          " at t[s]: %.2lf.@", 0., .TRUE.)
      
             CALL PDLAQR0( WANTT, WANTZ, N, ILO, IHI, H, DESCH, WR, WI,
      $           ILO, IHI, Z, DESCZ, WORK, LWORK, IWORK, LIWORK, INFO,
@@ -461,8 +461,8 @@
 *              when PDLAQR0 fails.
 *
                CALL logPrint(
-     $           "   PDLAQR0 failed; trying PDLAQR1 instead.@",
-     $           0., .TRUE.)
+     $           "   PDLAQR0 failed; trying PDLAQR1 instead" //
+     $              " at t[s]: %.2lf.@", 0., .TRUE.)
      
                KBOT = INFO
                CALL PDLAQR1( WANTT, WANTZ, N, ILO, IHI, H, DESCH, WR,
@@ -475,8 +475,8 @@
 *           Small matrix.
 *
             CALL logPrint(
-     $        "   Selecting PDLAQR1 for Schur decomposition.@",
-     $        0., .TRUE.)
+     $        "   Selecting PDLAQR1 for Schur decomposition" //
+     $          " at t[s]: %.2lf.@", 0., .TRUE.)
      
             CALL PDLAQR1( WANTT, WANTZ, N, ILO, IHI, H, DESCH, WR, WI,
      $           ILO, IHI, Z, DESCZ, WORK, LWORK, IWORK, LIWORK, INFO )
@@ -487,8 +487,8 @@
 *              when PDLAQR1 fails.
 *
                CALL logPrint(
-     $           "   PDLAQR1 failed; trying PDLAQR0 instead.@",
-     $           0., .TRUE.)
+     $           "   PDLAQR1 failed; trying PDLAQR0 instead" //
+     $             " at t[s]: %.2lf.@", 0., .TRUE.)
      
                KBOT = INFO
 *
