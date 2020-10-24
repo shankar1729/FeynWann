@@ -384,6 +384,43 @@ extern "C" {
 	//Tweaked version of pdhseqr to include intermediate progress (implemented in scalapack/PDHSEQRm.f)
 	void pdhseqrm_(const char* job, const char* compz, const int* n, const int* ilo, const int* ihi, double* h, const int* desch,
 		double* wr, double* wi, double* z, const int* descz, double* work, const int* lwork, int* iwork, const int* liwork, int* info);
+	
+	//For printing within the Fortran code: only use double precision printf formats (eg. %lf, %le, %lg)
+	//and all required arguments in an array. If a format string is preceded by "t[s]: ", it will
+	//be automatically susbtituted with the current execution time instead of an entry from args.
+	//A newline will be added to the end of the print only if *endl is true.
+	//IMPORTANT: the string fmt must end with a @ in Fortran since they are not null-terminated by default
+	void logprint_(const char* fmt, double* args, bool* endl)
+	{	const char* fmtEnd = fmt; while(*fmtEnd != '@') fmtEnd++;
+		string buf(fmt, fmtEnd);
+		int iArg = 0;
+		while(buf.length())
+		{	//Search till the next format specifier:
+			auto iStart = buf.find_first_of("%");
+			if(iStart == string::npos)
+			{	//No more formatting required
+				logPrintf(buf.c_str());
+				buf.clear();
+			}
+			else
+			{	//Find end of format string
+				auto iStop = buf.find_first_of("aefg"); //match any floating point format (case-insensitive)
+				string token; //current piece to be processed
+				if(iStop == string::npos)
+					std::swap(token, buf); //last segment
+				else
+				{	token = buf.substr(0, iStop+1); //current segment
+					buf = buf.substr(iStop+1, string::npos); //rest to be processed in next iteration
+					double curArg = (token.find("t[s]:") == string::npos)
+						? args[iArg++] //take next entry from args
+						: clock_sec(); //substitute current time
+					logPrintf(token.c_str(), curArg);
+				}
+			}
+		}
+		if(*endl) logPrintf("\n");
+		logFlush();
+	} 
 }
 
 //Schur decomposition and eigenvalues:
