@@ -575,6 +575,7 @@ struct LindbladLinear
 						}
 					}
 					//Circulate spinMat in communication ring:
+					if((iProcShift+1) == mpiWorld->nProcesses()) break;
 					int jProcNext = (jProc + 1) % mpiWorld->nProcesses();
 					DM1 spinMatNext(rhoSize[jProcNext]*6);
 					std::vector<MPIUtil::Request> request(2);

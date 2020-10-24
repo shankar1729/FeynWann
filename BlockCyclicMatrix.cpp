@@ -390,7 +390,7 @@ extern "C" {
 	//be automatically susbtituted with the current execution time instead of an entry from args.
 	//A newline will be added to the end of the print only if *endl is true.
 	//IMPORTANT: the string fmt must end with a @ in Fortran since they are not null-terminated by default
-	void logprint_(const char* fmt, double* args, bool* endl)
+	void logprint_(const char* fmt, const double* args, const bool* endl)
 	{	const char* fmtEnd = fmt; while(*fmtEnd != '@') fmtEnd++;
 		string buf(fmt, fmtEnd);
 		int iArg = 0;
@@ -404,7 +404,7 @@ extern "C" {
 			}
 			else
 			{	//Find end of format string
-				auto iStop = buf.find_first_of("aefg"); //match any floating point format (case-insensitive)
+				auto iStop = buf.find_first_of("aefg", iStart); //match any floating point format (case-insensitive)
 				string token; //current piece to be processed
 				if(iStop == string::npos)
 					std::swap(token, buf); //last segment

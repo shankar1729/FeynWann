@@ -273,11 +273,10 @@
 *     .. External Functions ..
       INTEGER            PILAENVX, NUMROC, ICEIL
       LOGICAL            LSAME
-      DOUBLE PRECISION   clock_sec
-      EXTERNAL           PILAENVX, LSAME, NUMROC, ICEIL, clock_sec
+      EXTERNAL           PILAENVX, LSAME, NUMROC, ICEIL
 *     ..
 *     .. External Subroutines ..
-      EXTERNAL           PDLACPY, PDLAQR1, PDLAQR0, PDLASET, PXERBLA
+      EXTERNAL           PDLACPY, PDLAQR1m, PDLAQR0, PDLASET, PXERBLA
 *     ..
 *     .. Intrinsic Functions ..
       INTRINSIC          DBLE, MAX, MIN
@@ -338,7 +337,7 @@
 *
 *     Compute required workspace.
 *
-      CALL PDLAQR1( WANTT, WANTZ, N, ILO, IHI, H, DESCH, WR, WI,
+      CALL PDLAQR1m( WANTT, WANTZ, N, ILO, IHI, H, DESCH, WR, WI,
      $     ILO, IHI, Z, DESCZ, WORK, -1, IWORK, -1, INFO )
       LWKOPT = WORK(1)
       LIWKOPT = IWORK(1)
@@ -383,7 +382,6 @@
 *
 *        Copy eigenvalues isolated by PDGEBAL.
 *
-         IF( HEAD ) PRINT *, ""
          DO 10 I = 1, ILO - 1
             CALL INFOG2L( I, I, DESCH, NPROW, NPCOL, MYROW, MYCOL, II,
      $           JJ, HRSRC, HCSRC )
@@ -441,6 +439,7 @@
          NMIN = PILAENVX( ICTXT, 12, 'PDHSEQR',
      $        JOB( : 1 ) // COMPZ( : 1 ), N, ILO, IHI, LWORK )
          NMIN = MAX( NTINY, NMIN )
+         CALL logPrint("@", 0., .TRUE.)
 *
 *        PDLAQR0 for big matrices; PDLAQR1 for small ones.
 *
@@ -451,7 +450,7 @@
      $        "   Selecting PDLAQR0 for Schur decomposition" //
      $          " at t[s]: %.2lf.@", 0., .TRUE.)
      
-            CALL PDLAQR0( WANTT, WANTZ, N, ILO, IHI, H, DESCH, WR, WI,
+            CALL PDLAQR0m( WANTT, WANTZ, N, ILO, IHI, H, DESCH, WR, WI,
      $           ILO, IHI, Z, DESCZ, WORK, LWORK, IWORK, LIWORK, INFO,
      $           0 )
             IF( INFO.GT.0 .AND. ( DESCH(RSRC_).NE.0 .OR.
@@ -465,8 +464,8 @@
      $              " at t[s]: %.2lf.@", 0., .TRUE.)
      
                KBOT = INFO
-               CALL PDLAQR1( WANTT, WANTZ, N, ILO, IHI, H, DESCH, WR,
-     $              WI, ILO, IHI, Z, DESCZ, WORK, LWORK, IWORK,
+               CALL PDLAQR1m( WANTT, WANTZ, N, ILO, IHI, H, DESCH,
+     $              WR, WI, ILO, IHI, Z, DESCZ, WORK, LWORK, IWORK,
      $              LIWORK, INFO )
                INFO = -7777
             END IF
@@ -478,7 +477,7 @@
      $        "   Selecting PDLAQR1 for Schur decomposition" //
      $          " at t[s]: %.2lf.@", 0., .TRUE.)
      
-            CALL PDLAQR1( WANTT, WANTZ, N, ILO, IHI, H, DESCH, WR, WI,
+            CALL PDLAQR1m( WANTT, WANTZ, N, ILO, IHI, H, DESCH, WR, WI,
      $           ILO, IHI, Z, DESCZ, WORK, LWORK, IWORK, LIWORK, INFO )
 *
             IF( INFO.GT.0 ) THEN
@@ -497,7 +496,7 @@
 *                 Larger matrices have enough subdiagonal scratch
 *                 space to call PDLAQR0 directly.
 *
-                  CALL PDLAQR0( WANTT, WANTZ, N, ILO, KBOT, H, DESCH,
+                  CALL PDLAQR0m( WANTT, WANTZ, N, ILO, KBOT, H, DESCH,
      $                 WR, WI, ILO, IHI, Z, DESCZ, WORK, LWORK,
      $                 IWORK, LIWORK, INFO, 0 )
                ELSE
