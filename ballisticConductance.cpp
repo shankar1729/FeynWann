@@ -33,13 +33,14 @@ struct CollectBallisticConductance
 	const double prefac; //prefactor to total ballistic conductance
 	double wOffsetCur;
 	matrix3<> G; //net ballistic conductance
-	std::vector<double> Gzz; //Gzz at specific kx and ky
+	vector3<> GL; //net Landauer conductance
+	std::vector<double> Gzz, GLz; //G_zz and GL_z at specific kx and ky
 	
 	CollectBallisticConductance(const FeynWann& fw, vector3<int> NkFine, double dmu, double smearWidth, std::vector<int> invertList)
 	: fw(fw), NkFine(NkFine), dmu(dmu), invSmearWidth(1./smearWidth), invertList(invertList),
 		prefacZZ(fw.spinWeight/(fw.Omega*fw.sym.size()*invertList.size()*NkFine[2])),
 		prefac(prefacZZ/(NkFine[0]*NkFine[1])),
-		Gzz(NkFine[0]*NkFine[1])
+		Gzz(NkFine[0]*NkFine[1]), GLz(NkFine[0]*NkFine[1])
 	{
 		for(const SpaceGroupOp& op: fw.sym)
 			symCart.push_back(fw.R * op.rot * inv(fw.R));
@@ -65,12 +66,17 @@ struct CollectBallisticConductance
 			{	const vector3<>& vCur = state.vVec[b];
 				double mfPrime = 0.25*invSmearWidth * std::pow(cosh(0.5*Ediff), -2); //-df/dE
 				double weight = wOffsetCur * mfPrime / std::max(1e-6, vCur.length());
+				double weightL = wOffsetCur * mfPrime * 0.5; //weight for Landauer version
 				int* kIndexPtr = kIndex.data();
 				for(size_t iSym=0; iSym<symCart.size(); iSym++)
 					for(int invert: invertList)
 					{	vector3<> v = symCart[iSym] * vCur * invert;
+						vector3<> vAbs(fabs(v[0]), fabs(v[1]), fabs(v[2]));
 						G += prefac * weight * outer(v,v);
-						Gzz[*(kIndexPtr++)] += prefacZZ * weight * v[2]*v[2];
+						GL += prefac * weightL * vAbs;
+						Gzz[*kIndexPtr] += prefacZZ * weight * v[2]*v[2];
+						GLz[*kIndexPtr] += prefacZZ * weightL * vAbs[2];
+						kIndexPtr++;
 					}
 			}
 		}
@@ -80,6 +86,15 @@ struct CollectBallisticConductance
 	}
 };
 
+inline void writeProfile(const std::vector<double>& G, double scale, vector3<int> Nk, string fname)
+{	FILE* fp = fopen(fname.c_str(), "w");
+	const double* Gdata = G.data();
+	for(int ik0=0; ik0<Nk[0]; ik0++)
+	{	for(int ik1=0; ik1<Nk[1]; ik1++) fprintf(fp, "%lg ", *(Gdata++) * scale);
+		fprintf(fp, "\n");
+	}
+	fclose(fp);
+}
 
 int main(int argc, char** argv)
 {   InitParams ip =  FeynWann::initialize(argc, argv, "Electron-phonon scattering contribution to electron linewidth.");
@@ -213,7 +228,9 @@ int main(int argc, char** argv)
 	}
 	logPrintf("done.\n"); logFlush();
 	mpiWorld->allReduce(cbc.G, MPIUtil::ReduceSum);
+	mpiWorld->allReduce(cbc.GL, MPIUtil::ReduceSum);
 	mpiWorld->allReduceData(cbc.Gzz, MPIUtil::ReduceSum);
+	mpiWorld->allReduceData(cbc.GLz, MPIUtil::ReduceSum);
 	
 	//Report ballistic resistance:
 	double rhoLambdaUnit = 1E-16 * Ohm * pow(meter,2);
@@ -221,15 +238,16 @@ int main(int argc, char** argv)
 	logPrintf("\nrho*lambda [10^-16 Ohm-m^2]:\n");
 	(rhoLambda*(1./rhoLambdaUnit)).print(globalLog, " %lg ", true, 1e-12);
 	
+	//Report landauer resistance:
+	vector3<> Rlandauer(1./cbc.GL[0], 1./cbc.GL[1], 1./cbc.GL[2]);
+	logPrintf("\nRlandauer [10^-16 Ohm-m^2]: ");
+	(Rlandauer*(1./rhoLambdaUnit)).print(globalLog, " %lg ");
+	logPrintf("\n");
+	
 	//Save ballistic conductance contributions:
 	if(mpiWorld->isHead())
-	{	FILE* fp = fopen("ballisticConductance.dat", "w");
-		const double* GzzData = cbc.Gzz.data();
-		for(int ik0=0; ik0<NkFine[0]; ik0++)
-		{	for(int ik1=0; ik1<NkFine[1]; ik1++) fprintf(fp, "%lg ", *(GzzData++) * rhoLambdaUnit);
-			fprintf(fp, "\n");
-		}
-		fclose(fp);
+	{	writeProfile(cbc.Gzz, rhoLambdaUnit, NkFine, "ballisticConductance.dat");
+		writeProfile(cbc.GLz, rhoLambdaUnit, NkFine, "ballisticConductanceL.dat");
 	}
 	
 	//Cleanup:
