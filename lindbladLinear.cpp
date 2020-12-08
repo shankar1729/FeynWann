@@ -54,6 +54,12 @@ inline diagMatrix bar(const diagMatrix& X)
 	return Xbar;
 }
 
+enum ValleyMode
+{	ValleyNone,
+	ValleyInter,
+	ValleyIntra
+};
+
 //Lindblad initialization, time evolution and measurement operators using FeynWann callback
 struct LindbladLinear
 #ifdef PETSC_ENABLED
@@ -93,16 +99,22 @@ struct LindbladLinear
 	std::vector<int> nInnerAll; //!< nInner for all k-points on all processes
 	double Emin, Emax; //!< energy range of active space across all k (for spin and number density output)
 	
+	ValleyMode valleyMode; //!< whether all k-pairs (None) or only those corresponding to Intra/Inter-valley scattering are included
+	const vector3<> K, Kp; //!< K and K' valley in reciprocal lattice coordinates
+	static inline vector3<> wrap(const vector3<>& x) { vector3<> result = x;  for(int dir=0; dir<3; dir++) result[dir] -= floor(0.5 + result[dir]); return result; }
+	inline bool isKvalley(vector3<> k) const { return (wrap(K-k)).length_squared() < (wrap(Kp-k)).length_squared(); }
+	
 	LindbladLinear(double dmu, double T, bool spectrumMode, int blockSize,
 		double pumpOmega, double pumpA0, double pumpTau, vector3<complex> pumpPol, bool pumpBfield, vector3<> pumpB,
 		double omegaMin, double omegaMax, double domega, double tau, std::vector<vector3<complex>> pol, double dE,
-		bool ePhEnabled, bool verbose, string checkpointFile)
+		bool ePhEnabled, bool verbose, string checkpointFile, ValleyMode valleyMode)
 	: stepID(0),
 		dmu(dmu), T(T), invT(1./T), spectrumMode(spectrumMode), blockSize(blockSize),
 		pumpOmega(pumpOmega), pumpA0(pumpA0), pumpTau(pumpTau), pumpPol(pumpPol), pumpBfield(pumpBfield), pumpB(pumpB),
 		omegaMin(omegaMin), domega(domega), omegaMax(omegaMax), nomega(1+int(round((omegaMax-omegaMin)/domega))),
 		tau(tau), pol(pol), dE(dE), ePhEnabled(ePhEnabled), verbose(verbose), checkpointFile(checkpointFile),
-		Emin(+DBL_MAX), Emax(-DBL_MAX)
+		Emin(+DBL_MAX), Emax(-DBL_MAX),
+		valleyMode(valleyMode), K(1./3, 1./3, 0), Kp(-1./3, -1./3, 0)
 	{
 	}
 	
@@ -212,6 +224,7 @@ struct LindbladLinear
 		nkMine = ikStop-ikStart;
 		state.resize(nkMine);
 		nInnerAll.resize(nk);
+		std::vector<int> isKall(valleyMode==ValleyNone ? 0 : nk, 0); //whether each k-point is closer to K or K'
 		
 		//Read k-point info and initialize states:
 		mpiWorld->fseek(fp, byteOffsets[ikStart], SEEK_SET);
@@ -239,6 +252,7 @@ struct LindbladLinear
 						*(PDdata++) *= normFac * exp(-0.5*tauDeltaE*tauDeltaE);
 					}
 			}
+			if(valleyMode != ValleyNone) isKall[ikStart+ikMine] = isKvalley(s.k);
 			
 			//Set initial occupations:
 			s.rho0.resize(s.nInner);
@@ -246,7 +260,8 @@ struct LindbladLinear
 				s.rho0[b] = fermi((s.E[b+s.innerStart]-dmu)*invT);
 		}
 		mpiWorld->fclose(fp);
-		
+		if(valleyMode != ValleyNone) mpiWorld->allReduceData(isKall, MPIUtil::ReduceMax);
+			
 		//Synchronize energy range:
 		mpiWorld->allReduce(Emin, MPIUtil::ReduceMin);
 		mpiWorld->allReduce(Emax, MPIUtil::ReduceMax);
@@ -347,6 +362,10 @@ struct LindbladLinear
 						const double* E2 = &(Eall[nInnerPrev[ik2]]);
 						diagMatrix f2(nInner2); for(int b2=0; b2<nInner2; b2++) f2[b2] = fermi(invT*(E2[b2]-dmu));
 						const diagMatrix f2bar = bar(f2);
+						//Skip combinations if necessary based on valleyMode:
+						bool shouldSkip = false; //must skip after iterating over all matching k2 below (else endless loop!)
+						if((valleyMode==ValleyIntra) and (isKall[ik1]!=isKall[ik2])) shouldSkip=true; //skip intervalley scattering
+						if((valleyMode==ValleyInter) and (isKall[ik1]==isKall[ik2])) shouldSkip=true; //skip intravalley scattering
 						//Store results in dense complex blocks of the superoperator first:
 						matrix L12 = zeroes(N1,N2); complex* L12data = L12.data();
 						matrix L21 = zeroes(N2,N1); complex* L21data = L21.data();
@@ -378,6 +397,7 @@ struct LindbladLinear
 							//Move to next element:
 							g++;
 						}
+						if(shouldSkip) continue;
 						#undef L
 						//Convert from complex to real input and real outputs (based on h.c. symmetry):
 						#define CreateRandInv(i) \
@@ -977,7 +997,7 @@ int main(int argc, char** argv)
 	//--- pump / Bfield (required and used only in real time mode)
 	const string pumpMode = spectrumMode ? "Bfield" : inputMap.getString("pumpMode"); //must be Perturb or Bfield (Evolve not allowed)
 	if(pumpMode!="Perturb" and pumpMode!="Bfield")
-		die("\npumpMode must be 'Perturb' or 'Bfield' (Evolve not supported by lindbladLinear)'\n");
+		die("\npumpMode must be 'Perturb' or 'Bfield' (Evolve not yet supported by lindbladLinear)\n");
 	const double Tesla = Joule/(Ampere*meter*meter);
 	const vector3<> pumpB = inputMap.getVector("pumpB", vector3<>()) * Tesla; //perturbing initial magnetic field in Tesla (used only in Bfield mode)
 	const double pumpOmega = inputMap.get("pumpOmega", (spectrumMode or pumpMode=="Bfield") ? 0. : NAN) * eV; //pump frequency in eV (used only in Evolve or Perturb modes)
@@ -1016,6 +1036,11 @@ int main(int argc, char** argv)
 	const string inFile = inputMap.has("inFile") ? inputMap.getString("inFile") : "ldbd.dat"; //input file name
 	const string checkpointFile = (inputMap.has("checkpointFile") and (not spectrumMode)) ? inputMap.getString("checkpointFile") : ""; //checkpoint file name
 	const string evecFile = inputMap.has("evecFile") ? inputMap.getString("evecFile") : "ldbd.evecs"; //eigenvector file name
+	const string valleyModeStr = inputMap.has("valleyMode") ? inputMap.getString("valleyMode") : "None";
+	EnumStringMap<ValleyMode> valleyModeMap(ValleyNone, "None", ValleyInter, "Inter", ValleyIntra, "Intra");
+	ValleyMode valleyMode;
+	if(not valleyModeMap.getEnum(valleyModeStr.c_str(), valleyMode))
+		die("\nvalleyMode must be 'None' or 'Intra' or 'Inter'\n");
 	
 	logPrintf("\nInputs after conversion to atomic units:\n");
 	logPrintf("dmu = %lg\n", dmu);
@@ -1057,6 +1082,8 @@ int main(int argc, char** argv)
 	logPrintf("verbose = %s\n", verboseMode.c_str());
 	logPrintf("inFile = %s\n", inFile.c_str());
 	if(not spectrumMode) logPrintf("checkpointFile = %s\n", checkpointFile.c_str());
+	if(spectrumMode) logPrintf("evecFile = %s\n", evecFile.c_str());
+	logPrintf("valleyMode = %s\n", valleyModeMap.getString(valleyMode));
 	logPrintf("\n");
 	
 	//Initialize PETSc if necessary:
@@ -1071,7 +1098,7 @@ int main(int argc, char** argv)
 	LindbladLinear lbl(dmu, T, spectrumMode, blockSize,
 		pumpOmega, pumpA0, pumpTau, pumpPol, (pumpMode=="Bfield"), pumpB,
 		omegaMin, omegaMax, domega, tau, pol, dE,
-		ePhEnabled, verbose, checkpointFile);
+		ePhEnabled, verbose, checkpointFile, valleyMode);
 	CHECKERR(lbl.initialize(inFile));
 	logPrintf("Initialization completed successfully at t[s]: %9.2lf\n\n", clock_sec());
 	logFlush();
