@@ -97,14 +97,14 @@ inline void writeProfile(const std::vector<double>& G, double scale, vector3<int
 }
 
 int main(int argc, char** argv)
-{   InitParams ip =  FeynWann::initialize(argc, argv, "Electron-phonon scattering contribution to electron linewidth.");
+{   InitParams ip =  FeynWann::initialize(argc, argv, "Ballistic and Landauer conductance calculator.");
 
 	//Read input file:
 	InputMap inputMap(ip.inputFilename);
 	const double dmu = inputMap.get("dmu", 0.) * eV; //optional shift in chemical potential from neutral value
 	const double smearWidth = inputMap.get("smearWidth") * eV;
 	const int iSpin = inputMap.get("iSpin", 0); //spin channel (default 0)
-	const int NkMultAll = int(round(inputMap.get("NkMult"))); //increase in number of k-points for phonon mesh
+	const int NkMultAll = int(round(inputMap.get("NkMult"))); //increase in number of k-points for electron k-mesh
 	FeynWannParams fwp(&inputMap);
 	
 	vector3<int> NkMult;

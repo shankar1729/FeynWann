@@ -42,8 +42,9 @@ struct FeynWannParams
 	vector3<> Bext; //!< external magentic field (added as a Zeeman perturbation to hamiltonian in FeynWann:setState)
 	double EzExt; //!< external electric field (added as a Stark perturbation to hamiltonian in FeynWann:setState)
 	double scissor; //!< scissor operator to move conduction band states up in energy to fix band gap in post-processing
+	double EshiftWeight; //!< if non-zero, apply this energy shift to the region of space selected by wannier slab weight (in mlwfW)
 	
-	FeynWannParams(class InputMap* inputMap=0); //!< If specified, look for optional parameters Bext (in Tesla), EzExt (in eV/nm) and scissor (in eV) from in inputMap
+	FeynWannParams(class InputMap* inputMap=0); //!< If specified, look for optional parameters Bext (in Tesla), EzExt (in eV/nm), scissor (in eV) and EshiftWeight (in eV) from in inputMap
 	void printParams() const; //!< Print the parameters read from inputMap (in atomic units)
 };
 

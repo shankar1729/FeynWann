@@ -67,6 +67,7 @@ public:
 		//!< optionally at an offset index ik (default 0) and stored at a specific process (default head). Note: ik should be local on iProc.
 	
 private:
+	friend class FeynWann;
 	ManagedArray<complex> mat; //!< input matrix elements
 	ManagedArray<complex> buf; //!< buffer in which transformations happen and result is produced
 	std::shared_ptr<struct PlanSet> planSet; //!< opaque pointer to required set of FFT plans

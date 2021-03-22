@@ -37,6 +37,7 @@ ePhHeadOnly(false), maskOptimize(false), EzExt(0.), scissor(0.)
 		Bext = inputMap->getVector("Bext", vector3<>(0.,0.,0.)) * Tesla;
 		EzExt = inputMap->get("EzExt", 0.) * eV/nm;
 		scissor = inputMap->get("scissor", 0.) * eV;
+		EshiftWeight = inputMap->get("EshiftWeight", 0.) * eV;
 	}
 }
 
@@ -44,6 +45,7 @@ void FeynWannParams::printParams() const
 {	logPrintf("Bext = "); Bext.print(globalLog, " %lg ");
 	logPrintf("EzExt = %lg\n", EzExt);
 	logPrintf("scissor = %lg\n", scissor);
+	logPrintf("EshiftWeight = %lg\n", EshiftWeight);
 }
 
 
@@ -497,6 +499,12 @@ FeynWann::FeynWann(FeynWannParams& fwp)
 	fname = fwp.wannierPrefix + ".mlwfH" + spinSuffix;
 	Hw = std::make_shared<DistributedMatrix>(fname, realPartOnly,
 		mpiGroup, nBands*nBands, cellMap, offsetDim, false, mpiInterGroup, &cellWeightsVec, &kfold);
+	//--- optional offset by slab weights:
+	if(fwp.EshiftWeight)
+	{	DistributedMatrix Ww(fwp.wannierPrefix + ".mlwfW" + spinSuffix, realPartOnly,
+			mpiGroup, nBands*nBands, cellMap, offsetDim, false, mpiInterGroup, &cellWeightsVec, &kfold);
+		axpy(fwp.EshiftWeight, Ww.mat, Hw->mat);
+	}
 	
 	//Velocity matrix elements
 	if(fwp.needVelocity)
