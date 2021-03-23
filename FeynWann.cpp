@@ -611,6 +611,18 @@ FeynWann::FeynWann(FeynWannParams& fwp)
 		ImSigmaP_ePhW = std::make_shared<DistributedMatrix>(fname, realPartOnly,
 			mpiGroup, nBands*nBands*FeynWannParams::fGrid_ePh.size(), cellMap, offsetDim, false, mpiInterGroup, &cellWeightsVec, &kfold);
 	}
+	if(fwp.needLinewidth_D.length())
+	{	//e-ph:
+		fname = fwp.wannierPrefix + ".mlwfImSigma_D_" + fwp.needLinewidth_D + spinSuffix;
+		ImSigma_DW = std::make_shared<DistributedMatrix>(fname, realPartOnly,
+			mpiGroup, nBands*nBands, cellMap, offsetDim, false, mpiInterGroup, &cellWeightsVec, &kfold);
+	}
+	if(fwp.needLinewidthP_D.length())
+	{	//e-ph:
+		fname = fwp.wannierPrefix + ".mlwfImSigmaP_D_" + fwp.needLinewidth_D + spinSuffix;
+		ImSigmaP_DW = std::make_shared<DistributedMatrix>(fname, realPartOnly,
+			mpiGroup, nBands*nBands, cellMap, offsetDim, false, mpiInterGroup, &cellWeightsVec, &kfold);
+	}
 	
 	logPrintf("\n");
 	
@@ -695,6 +707,8 @@ void FeynWann::eLoop(const vector3<>& k0, FeynWann::eProcessFunc eProcess, void*
 	if(fwp.needLinewidth_ee) ImSigma_eeW->transform(k0);
 	if(fwp.needLinewidth_ePh) ImSigma_ePhW->transform(k0);
 	if(fwp.needLinewidthP_ePh) ImSigmaP_ePhW->transform(k0);
+	if(fwp.needLinewidth_D.length()) ImSigma_DW->transform(k0);
+	if(fwp.needLinewidthP_D.length()) ImSigmaP_DW->transform(k0);
 	//Call eProcess for k-points on present process:
 	int ik = Hw->ikStart;
 	int ikStop = ik + Hw->nk;
@@ -719,6 +733,8 @@ void FeynWann::eCalc(const vector3<>& k, FeynWann::StateE& e)
 	if(fwp.needLinewidth_ee) ImSigma_eeW->compute(k);
 	if(fwp.needLinewidth_ePh) ImSigma_ePhW->compute(k);
 	if(fwp.needLinewidthP_ePh) ImSigmaP_ePhW->compute(k);
+	if(fwp.needLinewidth_D.length()) ImSigma_DW->compute(k);
+	if(fwp.needLinewidthP_D.length()) ImSigmaP_DW->compute(k);
 	if(fwp.needPhonons) //prepare sum rule quantities
 	{	inEphLoop = true;
 		Dw->compute(k);
@@ -783,6 +799,8 @@ void FeynWann::ePhLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::ePh
 			if(fwp.needLinewidth_ee) ImSigma_eeW->transform(k0##i); \
 			if(fwp.needLinewidth_ePh) ImSigma_ePhW->transform(k0##i); \
 			if(fwp.needLinewidthP_ePh) ImSigmaP_ePhW->transform(k0##i); \
+			if(fwp.needLinewidth_D.length()) ImSigma_DW->transform(k0##i); \
+			if(fwp.needLinewidthP_D.length()) ImSigmaP_DW->transform(k0##i); \
 			HePhSumW->transform(k0##i); \
 			Dw->transform(k0##i); \
 			int ik = Hw->ikStart; \
@@ -923,6 +941,8 @@ void FeynWann::defectLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::
 			if(fwp.needLinewidth_ee) ImSigma_eeW->transform(k0##i); \
 			if(fwp.needLinewidth_ePh) ImSigma_ePhW->transform(k0##i); \
 			if(fwp.needLinewidthP_ePh) ImSigmaP_ePhW->transform(k0##i); \
+			if(fwp.needLinewidth_D.length()) ImSigma_DW->transform(k0##i); \
+			if(fwp.needLinewidthP_D.length()) ImSigmaP_DW->transform(k0##i); \
 			int ik = Hw->ikStart; \
 			int ikStop = ik + Hw->nk; \
 			PartialLoop3D(offsetDim, ik, ikStop, e##i[ik].k, k0##i, \
@@ -1105,6 +1125,15 @@ void FeynWann::setState(FeynWann::StateE& state)
 		for(unsigned iMat=0; iMat<state.logImSigmaP_ePhArr.size(); iMat++)
 			state.logImSigmaP_ePhArr[iMat] = diag(dagger(state.U) * getMatrix(ImSigmaP_ePhW->getResult(state.ik), nBands, nBands, iMat) * state.U);
 	}
+	if(fwp.needLinewidth_D.length())
+	{	state.ImSigma_D = diag(dagger(state.U) * getMatrix(ImSigma_DW->getResult(state.ik), nBands, nBands) * state.U);
+		for(double& ImSigma: state.ImSigma_D) ImSigma = exp(ImSigma); //ImSigma_D is interpolated logarithmically
+	}
+	if(fwp.needLinewidthP_D.length())
+	{	state.ImSigmaP_D = diag(dagger(state.U) * getMatrix(ImSigmaP_DW->getResult(state.ik), nBands, nBands) * state.U);
+		for(double& ImSigma: state.ImSigmaP_D) ImSigma = exp(ImSigma); //ImSigmaP_D is interpolated logarithmically
+	}
+	
 	//e-ph sum rule if needed:
 	if(inEphLoop)
 	{	state.dHePhSum.init(nBands*nBands, 3);
@@ -1166,6 +1195,8 @@ void FeynWann::bcastState(FeynWann::StateE& state, MPIUtil* mpiUtil, int root)
 	{	state.logImSigmaP_ePhArr.resize(FeynWannParams::fGrid_ePh.size());
 		for(diagMatrix& d: state.logImSigmaP_ePhArr) bcast(d, nBands, mpiUtil, root);
 	}
+	if(fwp.needLinewidth_D.length()) bcast(state.ImSigma_D, nBands, mpiUtil, root);
+	if(fwp.needLinewidthP_D.length()) bcast(state.ImSigmaP_D, nBands, mpiUtil, root);
 	//e-ph sum rule if needed
 	if(inEphLoop)
 		bcast(state.dHePhSum, nBands*nBands, 3, mpiUtil, root);

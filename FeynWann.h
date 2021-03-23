@@ -40,6 +40,8 @@ struct FeynWannParams
 	static const std::vector<double> fGrid_ePh; //!< fillings grid used for e-ph linewidths
 	
 	string needDefect; //!< if non-null, read matrix elements for defect with name specified by this string
+	string needLinewidth_D; //!< if non-null, provide e-defect line-width for defect with name specified by this string
+	string needLinewidthP_D; //!< if non-null, provide e-defect momentum-relaxation line-width for defect with name specified by this string
 	
 	vector3<> Bext; //!< external magentic field (added as a Zeeman perturbation to hamiltonian in FeynWann:setState)
 	double EzExt; //!< external electric field (added as a Stark perturbation to hamiltonian in FeynWann:setState)
@@ -76,6 +78,8 @@ public:
 		diagMatrix ImSigma_ee; //!< e-e linewidth, available if needLinewidth_ee = true
 		double ImSigma_ePh(int n, double f) const; //!< get e-ph linewidth for band n given its occupation f, available if needLinewidth_ePh = true
 		double ImSigmaP_ePh(int n, double f) const; //!< get e-ph linewidth for band n given its occupation f, available if needLinewidthP_ePh = true
+		diagMatrix ImSigma_D; //!< e-defect linewidth, available if needLinewidth_D is set
+		diagMatrix ImSigmaP_D; //!< e-defect momentum-relaxing linewidth, available if needLinewidthP_D is set
 	private:
 		std::vector<diagMatrix> logImSigma_ePhArr; //!< e-ph linewidth for each f in fGrid_ePh
 		std::vector<diagMatrix> logImSigmaP_ePhArr; //!< e-ph momentum-relaxation linewidth for each f in fGrid_ePh
@@ -173,7 +177,7 @@ public:
 	std::vector< vector3<int> > cellMap; //electron Wannier cell map
 	matrix cellWeights; //corresponding weights (nBands*nBands x nCells)
 	std::shared_ptr<DistributedMatrix> Hw, Pw, Sw, Zw; //Wannier hamiltonian, momentum, spin and z matrix elements
-	std::shared_ptr<DistributedMatrix> ImSigma_eeW, ImSigma_ePhW, ImSigmaP_ePhW; //linewidths in wannier basis
+	std::shared_ptr<DistributedMatrix> ImSigma_eeW, ImSigma_ePhW, ImSigmaP_ePhW, ImSigma_DW, ImSigmaP_DW; //linewidths in wannier basis
 	void setState(StateE& state); //!< set requested properties for ik in state
 	void bcastState(StateE& state, MPIUtil* mpiUtil, int root); //!< broadcast specified state on specified MPI instance
 	

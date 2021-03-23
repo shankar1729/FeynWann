@@ -25,10 +25,12 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 struct ResistivityCollect
 {	std::vector<double> dmu; //doping levels
 	double T; //temperature
+	double defectFraction; //defect concentration: number/unit cell (dimensionless)
 	std::vector<double> n, g, vSq, tau; //carrier number, density of states, |v|^2 and e-ph life time
 	std::vector<matrix3<>> vvTau; //scattering time * velocity outer product
 
-	ResistivityCollect(const std::vector<double>& dmu, double T) : dmu(dmu), T(T),
+	ResistivityCollect(const std::vector<double>& dmu, double T, double defectFraction)
+		: dmu(dmu), T(T), defectFraction(defectFraction),
 		n(dmu.size()), g(dmu.size()), vSq(dmu.size()), tau(dmu.size()), vvTau(dmu.size())
 	{
 	}
@@ -45,10 +47,17 @@ struct ResistivityCollect
 				double dfdE = -f*(1.-f)*invT;
 				n[iMu] += f;
 				if(!dfdE) continue;
+				double ImSigma = state.ImSigma_ePh(b,f);
+				double ImSigmaP = state.ImSigmaP_ePh(b,f);
+				if(defectFraction)
+				{	//Add defect contributions:
+					ImSigma += defectFraction * state.ImSigma_D[b];
+					ImSigmaP += defectFraction * state.ImSigmaP_D[b];
+				}
 				g[iMu] += (-dfdE);
 				vSq[iMu] += (-dfdE) * v.length_squared();
-				tau[iMu] += (-dfdE) / (2*state.ImSigma_ePh(b,f));
-				vvTau[iMu] += ((-dfdE) / (2*state.ImSigmaP_ePh(b,f))) * vdotv;
+				tau[iMu] += (-dfdE) / (2*ImSigma);
+				vvTau[iMu] += ((-dfdE) / (2*ImSigmaP)) * vdotv;
 			}
 		}
 	}
@@ -91,6 +100,12 @@ int main(int argc, char** argv)
 	const double dmuMax = inputMap.get("dmuMax", 0.) * eV; //optional shift in chemical potential from neutral value; end of range (default to 0)
 	const int dmuCount = inputMap.get("dmuCount", 1); assert(dmuCount>0); //number of chemical potential shifts
 	const int slabDir = inputMap.get("slabDir", -1); assert(slabDir<3); //0-based index of direction to eliminate; default -1 => don't eliminate any (keep 3D)
+	string defectName;
+	double defectFraction = 0.; //concentration of defects specified as number per unit cell (dimensionless)
+	if(inputMap.has("defectName"))
+	{	defectName = inputMap.getString("defectName");
+		defectFraction = inputMap.get("defectFraction");
+	}
 	FeynWannParams fwp(&inputMap);
 	
 	logPrintf("\nInputs after conversion to atomic units:\n");
@@ -102,6 +117,8 @@ int main(int argc, char** argv)
 	logPrintf("dmuMax = %lg\n", dmuMax);
 	logPrintf("dmuCount = %d\n", dmuCount);
 	logPrintf("slabDir = %d\n", slabDir);
+	logPrintf("defectName = %s\n", defectName.c_str());
+	logPrintf("defectFraction = %lg\n", defectFraction);
 	fwp.printParams();
 	
 	//Initialize FeynWann:
@@ -109,6 +126,8 @@ int main(int argc, char** argv)
 	fwp.needVelocity = true;
 	fwp.needLinewidth_ePh = true;
 	fwp.needLinewidthP_ePh = true;
+	fwp.needLinewidth_D = defectName;
+	fwp.needLinewidthP_D = defectName;
 	std::shared_ptr<FeynWann> fw = std::make_shared<FeynWann>(fwp);
 	
 	//dmu array:
@@ -170,7 +189,7 @@ int main(int argc, char** argv)
 		rcArr[iSpin].resize(nBlocks);
 		for(int block=0; block<nBlocks; block++)
 		{	logPrintf("Working on block %d of %d: ", block+1, nBlocks); logFlush();
-			rcArr[iSpin][block] = std::make_shared<ResistivityCollect>(dmu, T);
+			rcArr[iSpin][block] = std::make_shared<ResistivityCollect>(dmu, T, defectFraction);
 			ResistivityCollect& rc = *rcArr[iSpin][block];
 			for(int o=0; o<noMine; o++)
 			{	Random::seed(block*nOffsetsPerBlock+o+oStart); //to make results independent of MPI division
@@ -207,7 +226,7 @@ int main(int argc, char** argv)
 		rcArr.resize(fw->nSpins+1);
 		rcArr.back().resize(nBlocks);
 		for(int block=0; block<nBlocks; block++)
-		{	rcArr.back()[block] = std::make_shared<ResistivityCollect>(dmu, T);
+		{	rcArr.back()[block] = std::make_shared<ResistivityCollect>(dmu, T, defectFraction);
 			ResistivityCollect& rcTot = *rcArr.back()[block];
 			for(int iSpin=0; iSpin<fw->nSpins; iSpin++)
 				for(int iMu=0; iMu<dmuCount; iMu++)
