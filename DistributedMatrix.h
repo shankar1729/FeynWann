@@ -82,7 +82,7 @@ private:
 		bool operator<(const Cell& other) const { return indexIn < other.indexIn; } //!< to sort by indexIn for efficient memory access
 	};
 	std::vector<std::vector<Cell>> uniqueCells;
-	int nAtoms, nBands;
+	int nAtoms, nBands, nModesPerAtom;
 	void collectProc(complex* bufSrc=0, int ik=0, int iProc=0); //!< collect buf results, optionally from a different source bufSrc
 		//!< at offset ik (default 0) on process iProc of mpiUtil (default head) for compute (single k-point versions of transform)
 };

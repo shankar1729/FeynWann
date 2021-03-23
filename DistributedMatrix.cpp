@@ -168,6 +168,7 @@ DistributedMatrix::DistributedMatrix(string fname, bool realOnly, const MPIUtil*
 		for(std::vector<Cell>& cells: uniqueCells)
 			if(cells.size() > 1)
 				std::sort(cells.begin(), cells.end());
+		nModesPerAtom = squared ? (nElemsTot/(nBands*nBands*nAtoms)) : 0;
 	}
 	else
 	{	cellIndex.resize(nCellsTot);
@@ -262,14 +263,14 @@ void DistributedMatrix::transform(vector3<> k01, vector3<> k02)
 	//Copy mat to buf:
 	callPref(eblas_copy)(buf.data(), mat.data(), mat.nData());
 	//Apply cell weights and offset phases:
-	int atomStride = 3*nBands*nBands; //number of elements per atom
+	int atomStride = nModesPerAtom*nBands*nBands; //number of elements per atom
 	int iAtomStart = iElemStart / atomStride;
 	int iAtomStop = ceildiv(iElemStart+nElems, atomStride);
 	int nBandsSq = nBands*nBands;
 	complex* bufData = buf.data();
 	for(int iAtom=iAtomStart; iAtom<iAtomStop; iAtom++)
-		for(int iVector=0; iVector<3; iVector++)
-		{	int iElemOffset = (3*iAtom+iVector)*nBandsSq - iElemStart;
+		for(int iVector=0; iVector<nModesPerAtom; iVector++)
+		{	int iElemOffset = (nModesPerAtom*iAtom+iVector)*nBandsSq - iElemStart;
 			int iwStart = std::max(-iElemOffset, 0);
 			int iwStop = std::min(nElems-iElemOffset, nBandsSq);
 			if(iwStop <= iwStart) continue; //nothing on current process
@@ -395,13 +396,13 @@ void DistributedMatrix::compute(vector3<> k1, vector3<> k2, int ik, int iProc)
 	ManagedArray<complex> bufTmp; bufTmp.init(std::max(1, nElems));
 	const complex* matData = mat.data();
 	complex* bufData = bufTmp.data(); //work with a temporary buffer before collecting on one process
-	int atomStride = 3*nBands*nBands; //number of elements per atom
+	int atomStride = nModesPerAtom*nBands*nBands; //number of elements per atom
 	int iAtomStart = iElemStart / atomStride;
 	int iAtomStop = ceildiv(iElemStart+nElems, atomStride);
 	int nBandsSq = nBands*nBands;
 	for(int iAtom=iAtomStart; iAtom<iAtomStop; iAtom++)
-		for(int iVector=0; iVector<3; iVector++)
-		{	int iElemOffset = (3*iAtom+iVector)*nBandsSq - iElemStart;
+		for(int iVector=0; iVector<nModesPerAtom; iVector++)
+		{	int iElemOffset = (nModesPerAtom*iAtom+iVector)*nBandsSq - iElemStart;
 			int iwStart = std::max(-iElemOffset, 0);
 			int iwStop = std::min(nElems-iElemOffset, nBandsSq);
 			if(iwStop <= iwStart) continue; //nothing on current process

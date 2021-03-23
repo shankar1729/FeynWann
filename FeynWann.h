@@ -39,6 +39,8 @@ struct FeynWannParams
 	bool maskOptimize; //!< if true, optimize for heavily masked loops by switching between transform and compute based on a benchmark performed at startup
 	static const std::vector<double> fGrid_ePh; //!< fillings grid used for e-ph linewidths
 	
+	string needDefect; //!< if non-null, read matrix elements for defect with name specified by this string
+	
 	vector3<> Bext; //!< external magentic field (added as a Zeeman perturbation to hamiltonian in FeynWann:setState)
 	double EzExt; //!< external electric field (added as a Stark perturbation to hamiltonian in FeynWann:setState)
 	double scissor; //!< scissor operator to move conduction band states up in energy to fix band gap in post-processing
@@ -98,9 +100,17 @@ public:
 		std::vector<matrix> M; //!< nModes matrices of nBands x nBands matrix elements
 	};
 	
+	//! Electron-defect matrix elements
+	struct MatrixDefect
+	{	const StateE* e1; //!< corresponding first electronic state
+		const StateE* e2; //!< corresponding second electronic state
+		matrix M; //!< nBands x nBands matrix elements
+	};
+	
 	typedef void (*eProcessFunc)(const StateE& state, void* params); //!< Callback function pointer for eLoop()
 	typedef void (*phProcessFunc)(const StatePh& state, void* params); //!< Callback function pointer for phLoop()
 	typedef void (*ePhProcessFunc)(const MatrixEph& mat, void* params); //!< Callback function pointer for ePhLoop()
+	typedef void (*defectProcessFunc)(const MatrixDefect& mat, void* params); //!< Callback function pointer for defectLoop()
 	
 	//! Calculate electronic properties for each k-point in a mesh offset by k0
 	//! Calls provided callback function eProcess on each of them, along with provided params
@@ -127,6 +137,13 @@ public:
 		const std::vector<bool>* eMask1=0, const std::vector<bool>* eMask2=0, const std::vector<bool>* ePhMask=0);
 	void ePhCalc(const StateE& e1, const StateE& e2, const StatePh& ph, MatrixEph& m); //!< Calculate e-ph matrix elements coupling e1, e2 and ph and store it in m on group head
 	size_t ePhCountPerOffset() const { return size_t(Hw->nkTot) * size_t(Hw->nkTot); } //!< number of k-pairs sampled per offset = prod(offsetDim)^2
+	
+	//Similar functions for defects:
+	void defectLoop(const vector3<>& k01, const vector3<>& k02, defectProcessFunc defectProcess, void* params,
+		eProcessFunc eProcess1=0, eProcessFunc eProcess2=0,
+		const std::vector<bool>* eMask1=0, const std::vector<bool>* eMask2=0, const std::vector<bool>* defectMask=0);
+	void defectCalc(const StateE& e1, const StateE& e2, MatrixDefect& m); //!< Calculate e-defect matrix elements coupling e1 and e2, and store it in m on group head
+	size_t defectCountPerOffset() const { return size_t(Hw->nkTot) * size_t(Hw->nkTot); } //!< number of k-pairs sampled per offset = prod(offsetDim)^2
 	
 	void symmetrize(matrix3<>& m) const; //!< symmetrize a tensor in Cartesian coordinates (available if needSymmetries = true)
 	
@@ -185,6 +202,13 @@ public:
 	double ePhEstart, ePhEstop; //energy range restriction of ePhloop, enabled if ePhEstart < ePhEstop
 	int tTransformByCompute; //benchmark ratio of transform time to compute time used to switch between transform and compute in ePhLoop (if maskOptimize = true)
 	void setMatrix(const StateE& e1, const StateE& e2, const StatePh& ph, int ikPair, MatrixEph& m); //set e-ph properties for e1.ik, e2.ik and ph.iq in m
+	
+	//Electron-defect interaction:
+	vector3<int> defectSup; //supercell size of exported e-defect matrix elements
+	std::vector<vector3<int>> defectCellMap; //cell map for e-defect matrix elements
+	std::shared_ptr<DistributedMatrix> HdefectW; //electron-defect matrix elements in Wannier basis
+	int tTransformByComputeD; //benchmark ratio of transform time to compute time used to switch between transform and compute in ePhLoop (if maskOptimize = true)
+	void setMatrix(const StateE& e1, const StateE& e2, int ikPair, MatrixDefect& m); //set defect properties for e1.ik and e2.ik in m
 	
 private:
 	bool inEphLoop; //flag used internally by setState etc. for special handling of sum rule quantities within an ePhLoop

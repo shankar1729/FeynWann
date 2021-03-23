@@ -21,21 +21,18 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 #include "InputMap.h"
 #include <core/Units.h>
 #include <core/LatticeUtils.h>
-#include <electronic/TetrahedralDOS.h>
 #include <algorithm>
 
 template<typename T> T prod(const vector3<T>& v) { return v[0]*v[1]*v[2]; }
 
-struct CollectEph
+struct CollectDefect
 {	
 	const FeynWann& fw;
-	const double T;
 	const double prefacImSigma;
 	const double EconserveExpFac, EconservePrefac; //energy conserving Gaussian exponential and pre-factor
 	const bool valley; //whether to add valley contributions
 	const unsigned nP; //number of ImSigma's calculated (linewidth, momentum-relaxation, and if available, valley-relaxation)
-	const std::vector<double>& f1grid; //grid of fillings ofr which e-ph linewidth is calculated
-	std::vector<std::vector<diagMatrix>> ImSigma; //e-ph linewidth for various f1, without and with momentum/valley factors
+	std::vector<std::vector<diagMatrix>> ImSigma; //e-ph linewidth without and with momentum/valley factors
 	std::vector<diagMatrix> E; //save electron energies on DFT mesh for final outputs
 	std::vector<vector3<>> kmesh; //DFT k-point mesh (full version i.e. unreduced)
 	double wOffsetCur; //weight factor of current offset (due to symmetry reduction)
@@ -43,15 +40,14 @@ struct CollectEph
 	const matrix3<> G, GGT; 
 	const vector3<> K, Kp; //For computing valley weights
 	
-	CollectEph(const FeynWann& fw, double T, double EconserveWidth, const vector3<int>& NkMult, bool valley)
-	: fw(fw), T(T),
+	CollectDefect(const FeynWann& fw, double EconserveWidth, const vector3<int>& NkMult, bool valley)
+	: fw(fw),
 		prefacImSigma(0.5 * 2*M_PI/(prod(fw.kfold)*prod(NkMult))), //Factor of 0.5 in ImSigma because of psi^2 -> n
 		EconserveExpFac(-0.5/std::pow(EconserveWidth,2)),
 		EconservePrefac(1./(sqrt(2.*M_PI)*EconserveWidth)),
 		valley(valley),
 		nP(valley ? 3 : 2),
-		f1grid(FeynWannParams::fGrid_ePh),
-		ImSigma(nP*f1grid.size(), std::vector<diagMatrix>(prod(fw.kfold), diagMatrix(fw.nBands))),
+		ImSigma(nP, std::vector<diagMatrix>(prod(fw.kfold), diagMatrix(fw.nBands))),
 		E(prod(fw.kfold)), kmesh(prod(fw.kfold)),
 		G(2*M_PI * inv(fw.R)), GGT(G * (~G)),
 		K(1./3, 1./3, 0), Kp(-1./3, -1./3, 0)
@@ -83,20 +79,18 @@ struct CollectEph
 	
 	//---- Collect energies and kmesh ----
 	static void collectE(const FeynWann::StateE& state, void* params)
-	{	CollectEph& cEph = *((CollectEph*)params);
-		int ik = calculateIndex(round(Diag(state.k)*cEph.fw.kfold), cEph.fw.kfold);
-		cEph.E[ik] = state.E;
-		cEph.kmesh[ik] = state.k;
+	{	CollectDefect& cD = *((CollectDefect*)params);
+		int ik = calculateIndex(round(Diag(state.k)*cD.fw.kfold), cD.fw.kfold);
+		cD.E[ik] = state.E;
+		cD.kmesh[ik] = state.k;
 	}
 	
-	//---- Main e-ph scattering linewidth kernel ----
-	void process(const FeynWann::MatrixEph& mEph)
-	{	const FeynWann::StateE& e1 = *(mEph.e1);
-		const FeynWann::StateE& e2 = *(mEph.e2);
-		const FeynWann::StatePh& ph = *(mEph.ph);
+	//---- Main e-defect scattering linewidth kernel ----
+	void process(const FeynWann::MatrixDefect& mD)
+	{	const FeynWann::StateE& e1 = *(mD.e1);
+		const FeynWann::StateE& e2 = *(mD.e2);
 		const int ik1 = calculateIndex(round(Diag(e1.k)*fw.kfold), fw.kfold);
 		const int nBands = e1.E.nRows();
-		const int nModes = ph.omega.nRows();
 		
 		//Weight for valley contrib
 		double wValley = (valley and (isKvalley(e1.k) xor isKvalley(e2.k))) ? 1. : 0.;
@@ -110,35 +104,19 @@ struct CollectEph
 			{	const double& E2 = e2.E[b2];
 				const vector3<>& v2 = e2.vVec[b2];
 				double cosThetaScatter = dot(v1, v2) / sqrt(std::max(1e-16, v1.length_squared() * v2.length_squared()));
-				//Loop over phonon modes:
-				for(int alpha=0; alpha<nModes; alpha++)
-				{	const double& omegaPh = ph.omega[alpha];
-					double omegaPhByT = omegaPh/T;
-					if(omegaPhByT < 1e-3) continue; //avoid 0./0. below
-					double nPh = bose(omegaPhByT);
-					if(!nPh) continue; //no contribution below
-					//Loop over absorption and emission:
-					for(int ae=-1; ae<=+1; ae+=2)
-					{	double EconserveExponent = EconserveExpFac * std::pow((E2-E1 - ae*omegaPh),2);
-						if(EconserveExponent < -15.) continue; //the exponential below will be negligible
-						double delta = EconservePrefac * exp(EconserveExponent);
-						double contribNum = wOffsetCur * prefacImSigma * delta * mEph.M[alpha](b2,b1).norm()
-							* nPh*(nPh+1); //contribution numerator before f1-dependent denominator
-						for(unsigned if1=0; if1<f1grid.size(); if1++)
-						{	unsigned if1p = if1 + f1grid.size(); //index for scattering version
-							unsigned if1v = if1p + f1grid.size(); //index for valley version (if present)
-							double contrib = contribNum / (nPh+0.5 + ae*(0.5-f1grid[if1])); //net f1-dependent contribution
-							ImSigma[if1][ik1][b1] += contrib;
-							ImSigma[if1p][ik1][b1] += contrib * (1.-cosThetaScatter); //scattering version with angle factors
-							if(valley) ImSigma[if1v][ik1][b1] += contrib * wValley; //scattering intervalley contribution
-						}
-					}
-				}
+				//Compute defect contributions:
+				double EconserveExponent = EconserveExpFac * std::pow((E2-E1),2);
+				if(EconserveExponent < -15.) continue; //the exponential below will be negligible
+				double delta = EconservePrefac * exp(EconserveExponent);
+				double contrib = wOffsetCur * prefacImSigma * delta * mD.M(b2,b1).norm();
+				ImSigma[0][ik1][b1] += contrib; //lifetime version
+				ImSigma[1][ik1][b1] += contrib * (1.-cosThetaScatter); //scattering version with angle factors
+				if(valley) ImSigma[2][ik1][b1] += contrib * wValley; //scattering intervalley contribution
 			}
 		}
 	}
-	static void ePhProcess(const FeynWann::MatrixEph& mEph, void* params)
-	{	((CollectEph*)params)->process(mEph);
+	static void defectProcess(const FeynWann::MatrixDefect& mD, void* params)
+	{	((CollectDefect*)params)->process(mD);
 	}
 	
 	//---- Wannierization ----
@@ -152,21 +130,19 @@ struct CollectEph
 			phase.set(iCol, c-cStart, cis(-2*M_PI*dot(state.k, uniqueCells[c])));
 		//For each matrix:
 		for(unsigned iP=0; iP<nP; iP++) //without or with P factors
-		{	for(unsigned if1=0; if1<f1grid.size(); if1++)
-			{	//Convert to log for the interpolation:
-				diagMatrix logImSigma(ImSigma[if1+iP*f1grid.size()][ik]);
-				for(double& x: logImSigma) x = log(x);
-				//Switch to Wannier basis:
-				matrix logImSigmaW = state.U * logImSigma * dagger(state.U);
-				//Save as a column in a matrix containing all k:
-				unsigned colLength = fw.nBands * fw.nBands;
-				eblas_copy(mlwfImSigma[iP].data()+colLength*(iCol*f1grid.size()+if1), logImSigmaW.data(), colLength);
-			}
+		{	//Convert to log for the interpolation:
+			diagMatrix logImSigma(ImSigma[iP][ik]);
+			for(double& x: logImSigma) x = log(x);
+			//Switch to Wannier basis:
+			matrix logImSigmaW = state.U * logImSigma * dagger(state.U);
+			//Save as a column in a matrix containing all k:
+			unsigned colLength = fw.nBands * fw.nBands;
+			eblas_copy(mlwfImSigma[iP].data()+colLength*iCol, logImSigmaW.data(), colLength);
 		}
 		iCol++;
 	}
 	static void eProcess(const FeynWann::StateE& state, void* params)
-	{	((CollectEph*)params)->wannierize(state);
+	{	((CollectDefect*)params)->wannierize(state);
 	}
 	
 	void dumpWannierized(matrix& m, string fname) const
@@ -213,12 +189,14 @@ public:
 	}
 };
 
+
+
 int main(int argc, char** argv)
-{   InitParams ip =  FeynWann::initialize(argc, argv, "Electron-phonon scattering contribution to electron linewidth.");
+{   InitParams ip =  FeynWann::initialize(argc, argv, "Electron-defect scattering contribution to electron linewidth.");
 
 	//Read input file:
 	InputMap inputMap(ip.inputFilename);
-	const double T = inputMap.get("T") * Kelvin;
+	const string defectName = inputMap.getString("defectName");
 	const double EconserveWidth = inputMap.get("EconserveWidth") * eV;
 	const int iSpin = inputMap.get("iSpin", 0); //spin channel (default 0)
 	const int NkMultAll = int(round(inputMap.get("NkMult"))); //increase in number of k-points for phonon mesh
@@ -233,7 +211,7 @@ int main(int argc, char** argv)
 	NkMult[2] = inputMap.get("NkzMult", NkMultAll); //override increase in z direction
 	
 	logPrintf("\nInputs after conversion to atomic units:\n");
-	logPrintf("T = %lg\n", T);
+	logPrintf("defectName = %s\n", defectName.c_str());
 	logPrintf("EconserveWidth = %lg\n", EconserveWidth);
 	logPrintf("iSpin = %d\n", iSpin);
 	logPrintf("NkMult = "); NkMult.print(globalLog, " %d ");
@@ -243,11 +221,10 @@ int main(int argc, char** argv)
 	//Initialize FeynWann:
 	fwp.iSpin = iSpin;
 	fwp.needSymmetries = true;
-	fwp.needPhonons = true;
+	fwp.needDefect = defectName;
 	fwp.needVelocity = true;
-	fwp.needSpin = true;
 	FeynWann fw(fwp);
-
+	
 	//Check NkMult compatibility with symmetries:
 	for(const SpaceGroupOp& op: fw.sym)
 	{	//Similar to Symmetries::checkFFTbox in JDFTx
@@ -286,52 +263,16 @@ int main(int argc, char** argv)
 	NkFine.print(globalLog, " %d ");
 	
 	//Collect energies and k-point  mesh:
-	CollectEph cEph(fw, T, EconserveWidth, NkMult, valley);
-	for(vector3<> qOff: fw.qOffset) fw.eLoop(qOff, CollectEph::collectE, &cEph);
+	CollectDefect cD(fw, EconserveWidth, NkMult, valley);
+	for(vector3<> qOff: fw.qOffset) fw.eLoop(qOff, CollectDefect::collectE, &cD);
 	//--- make available on all processes:
-	for(unsigned i=0; i<cEph.E.size(); i++)
-	{	int root = cEph.E[i].size() ? mpiGroup->iProcess() : mpiGroup->nProcesses(); //my process ID or N, depending on whether I have E[i]
+	for(unsigned i=0; i<cD.E.size(); i++)
+	{	int root = cD.E[i].size() ? mpiGroup->iProcess() : mpiGroup->nProcesses(); //my process ID or N, depending on whether I have E[i]
 		mpiGroup->allReduce(root, MPIUtil::ReduceMin); //lowest process number which has E[i] available
-		cEph.E[i].resize(fw.nBands);
-		mpiGroup->bcast(cEph.E[i].data(), fw.nBands, root);
+		cD.E[i].resize(fw.nBands);
+		mpiGroup->bcast(cD.E[i].data(), fw.nBands, root);
 	}
-	mpiGroup->allReduce(&cEph.kmesh[0][0], 3*cEph.kmesh.size(), MPIUtil::ReduceSum);
-	
-	//Estimate minimum NkMult:
-	{	//--- Get density of states:
-		TetrahedralDOS dosEval(cEph.kmesh, std::vector<int>(), fw.R, Diag(fw.kfold), 1, fw.nBands, 1);
-		double Etol = 1e-4;
-		dosEval.setEigs(cEph.E);
-		dosEval.weldEigenvalues(Etol);
-		TetrahedralDOS::Lspline dos = dosEval.gaussSmooth(dosEval.getDOS(0, Etol), EconserveWidth); //dos within EconserveWidth of each energy
-		//--- Find minimum DOS at each DFT eigenvalue
-		double Ecut = 5*eV; //only include states ~ 5 eV from fermi level / VBM
-		double dosMin = DBL_MAX;
-		double E0 = dos[0].first;
-		double dEinv = 1./(dos[1].first-E0);
-		int ikStart, ikStop; TaskDivision(cEph.E.size(), mpiWorld).myRange(ikStart, ikStop);
-		for(int ik=ikStart; ik<ikStop; ik++)
-			for(double E: cEph.E[ik])
-				if(fabs(E) < Ecut)
-				{	double t = dEinv*(E-E0);
-					int i = floor(t); t -= i;
-					double dosCur = dos[i].second[0]*(1.-t) + dos[i+1].second[0]*t;
-					dosMin = std::min(dosMin, dosCur);
-				}
-		mpiWorld->allReduce(dosMin, MPIUtil::ReduceMin);
-		//--- Calculate minimum folding such that minimum average states per EconserveWidth
-		double prodNkFineMin = 100./(dosMin * EconserveWidth);
-		int nDim = 0;
-		for(int iDir=0; iDir<3; iDir++)
-			if(NkFine[iDir]>1)
-				nDim++; //only count directions which have more than one k-point
-		int NkMultDim = round(std::pow(prodNkFineMin/cEph.kmesh.size(), 1./nDim));
-		vector3<int> NkMultMin;
-		for(int iDir=0; iDir<3; iDir++)
-			NkMultMin[iDir] = (NkFine[iDir]>1) ? NkMultDim : 1;
-		logPrintf("\nFor 100 states within EconserveWidth, NkMult ~ ");
-		NkMultMin.print(globalLog, " %d ");
-	}
+	mpiGroup->allReduce(&cD.kmesh[0][0], 3*cD.kmesh.size(), MPIUtil::ReduceSum);
 	
 	//Reduce under symmetries (simplified version of Symmetries::reduceKmesh from JDFTx):
 	std::vector<vector3<>> k02; //array of k2-mesh offsets
@@ -375,7 +316,7 @@ int main(int argc, char** argv)
 	int nqOffset = fw.qOffset.size();
 	int nqOffsetSq = nqOffset * nqOffset;
 	int nOffsetPairs = nOffsets * nqOffsetSq;
-	if(mpiWorld->isHead()) logPrintf("%d phonon q-mesh offset pairs parallelized over %d process groups.\n", nOffsetPairs, mpiGroupHead->nProcesses());
+	if(mpiWorld->isHead()) logPrintf("%d defect q-mesh offset pairs parallelized over %d process groups.\n", nOffsetPairs, mpiGroupHead->nProcesses());
 	
 	logPrintf("\n");
 	if(ip.dryRun)
@@ -395,66 +336,66 @@ int main(int argc, char** argv)
 	int oPairInterval = std::max(1, int(round(noPairsMine/50.))); //interval for reporting progress
 
 	//Collect results for each offset
-	logPrintf("Collecting ImSigma_ePh: "); logFlush();
+	logPrintf("Collecting ImSigma_D_%s: ", defectName.c_str()); logFlush();
 	for(int oPair=oPairStart; oPair<oPairStop; oPair++)
 	{	int o = oPair / nqOffsetSq;
 		int iqOff1 = (oPair - o * nqOffsetSq) / nqOffset;
 		int iqOff2 = oPair % nqOffset;
 		//Process with selected offset:
-		cEph.wOffsetCur = wk02[o];
-		fw.ePhLoop(fw.qOffset[iqOff1], fw.qOffset[iqOff2] + k02[o], CollectEph::ePhProcess, &cEph);
+		cD.wOffsetCur = wk02[o];
+		fw.defectLoop(fw.qOffset[iqOff1], fw.qOffset[iqOff2] + k02[o], CollectDefect::defectProcess, &cD);
 		//Print progress:
 		if((oPair-oPairStart+1)%oPairInterval==0) { logPrintf("%d%% ", int(round((oPair-oPairStart+1)*100./noPairsMine))); logFlush(); }
 	}
 	logPrintf("done.\n"); logFlush();
 	
 	//Collect results from all processes:
-	for(std::vector<diagMatrix>& dArr: cEph.ImSigma)
+	for(std::vector<diagMatrix>& dArr: cD.ImSigma)
 		for(diagMatrix& d: dArr)
 			mpiWorld->allReduceData(d, MPIUtil::ReduceSum);
 	
 	//Symmetrize:
-	PeriodicLookup<vector3<>> plook(cEph.kmesh, GGT);
-	std::vector<bool> kDone(cEph.kmesh.size(), false);
+	PeriodicLookup<vector3<>> plook(cD.kmesh, GGT);
+	std::vector<bool> kDone(cD.kmesh.size(), false);
 	std::vector<int> iReduced;
-	for(size_t i0=0; i0<cEph.kmesh.size(); i0++)
+	for(size_t i0=0; i0<cD.kmesh.size(); i0++)
 		if(!kDone[i0])
 		{	//Find orbit of this k-points under symmetries:
 			std::vector<int> iEquiv;
-			std::vector<diagMatrix> ImSigmaMean(cEph.ImSigma.size(), diagMatrix(fw.nBands));
+			std::vector<diagMatrix> ImSigmaMean(cD.ImSigma.size(), diagMatrix(fw.nBands));
 			for(int invert: invertList)
 				for(const SpaceGroupOp& op: fw.sym)
-				{	size_t i = plook.find(invert * cEph.kmesh[i0] * op.rot);
+				{	size_t i = plook.find(invert * cD.kmesh[i0] * op.rot);
 					if(i!=string::npos && (!kDone[i]))
 					{	kDone[i] = true; //i will be covered in i0's orbit
 						iEquiv.push_back(i);
 						for(unsigned iMat=0; iMat<ImSigmaMean.size(); iMat++)
-							ImSigmaMean[iMat] += cEph.ImSigma[iMat][i];
+							ImSigmaMean[iMat] += cD.ImSigma[iMat][i];
 					}
 				}
 			//Symmetrize within orbit:
 			for(unsigned iMat=0; iMat<ImSigmaMean.size(); iMat++)
 			{	ImSigmaMean[iMat] *= (1./iEquiv.size());
 				for(int i: iEquiv)
-					cEph.ImSigma[iMat][i] = ImSigmaMean[iMat];
+					cD.ImSigma[iMat][i] = ImSigmaMean[iMat];
 			}
 			iReduced.push_back(i0);
 		}
-	logPrintf("Symmetrized ImSigma for %lu k-points in mesh in %lu orbits.\n", cEph.kmesh.size(), iReduced.size());
+	logPrintf("Symmetrized ImSigma for %lu k-points in mesh in %lu orbits.\n", cD.kmesh.size(), iReduced.size());
 	
 	//Output linewidths and energies in text file:
 	if(mpiWorld->isHead())
 	{	FermiImSigmaReport fr(10);
-		string fname = "ImSigma_ePh" + fw.spinSuffix + ".dat";
+		string fname = "ImSigma_D_" + defectName + fw.spinSuffix + ".dat";
 		logPrintf("Dumping '%s' ... ", fname.c_str()); fflush(globalLog);
 		FILE* fp = fopen(fname.c_str(), "w");
 		for(int i: iReduced)
 			for(int b=0; b<fw.nBands; b++)
-			{	fprintf(fp, "%+16.12lf", cEph.E[i][b]);
-				for(unsigned iMat=0; iMat<cEph.ImSigma.size(); iMat++)
-					fprintf(fp, " %19.12le", cEph.ImSigma[iMat][i][b]);
+			{	fprintf(fp, "%+16.12lf", cD.E[i][b]);
+				for(unsigned iMat=0; iMat<cD.ImSigma.size(); iMat++)
+					fprintf(fp, " %19.12le", cD.ImSigma[iMat][i][b]);
 				fprintf(fp, "\n");
-				fr.addState(cEph.E[i][b], cEph.ImSigma[0][i][b]);
+				fr.addState(cD.E[i][b], cD.ImSigma[0][i][b]);
 			}
 		fclose(fp);
 		logPrintf("done.\n");
@@ -465,34 +406,35 @@ int main(int argc, char** argv)
 	
 	//Wannierize output:
 	//--- create unique cells:
-	cEph.uniqueCells.reserve(cEph.kmesh.size());
+	cD.uniqueCells.reserve(cD.kmesh.size());
 	{	vector3<int> iR;
 		for(iR[0]=0; iR[0]<fw.kfold[0]; iR[0]++)
 		for(iR[1]=0; iR[1]<fw.kfold[1]; iR[1]++)
 		for(iR[2]=0; iR[2]<fw.kfold[2]; iR[2]++)
-			cEph.uniqueCells.push_back(iR);
-		assert(cEph.uniqueCells.size() == cEph.kmesh.size());
+			cD.uniqueCells.push_back(iR);
+		assert(cD.uniqueCells.size() == cD.kmesh.size());
 	}
 	//--- divide output cells over MPI groups:
-	cEph.cStart = cEph.cStop = 0;
+	cD.cStart = cD.cStop = 0;
 	if(mpiGroup->isHead())
-		TaskDivision(cEph.kmesh.size(), mpiGroupHead).myRange(cEph.cStart, cEph.cStop);
-	mpiGroup->bcast(cEph.cStart);
-	mpiGroup->bcast(cEph.cStop);
-	int ncMine = std::max(1, cEph.cStop - cEph.cStart);
+		TaskDivision(cD.kmesh.size(), mpiGroupHead).myRange(cD.cStart, cD.cStop);
+	mpiGroup->bcast(cD.cStart);
+	mpiGroup->bcast(cD.cStop);
+	int ncMine = std::max(1, cD.cStop - cD.cStart);
 	int nkMine = std::max(1, fw.Hw->nk * nqOffset);
 	//--- Wannierize
-	for(unsigned iP=0; iP<cEph.nP; iP++)
-		cEph.mlwfImSigma[iP] = zeroes(fw.nBands*fw.nBands*cEph.f1grid.size(), nkMine);
-	cEph.phase = zeroes(nkMine, ncMine);
-	cEph.iCol = 0;
-	for(vector3<> qOff: fw.qOffset) fw.eLoop(qOff, CollectEph::eProcess, &cEph);
-	cEph.phase *= (1./cEph.kmesh.size()); //inverse transform normalizing factor
-	cEph.dumpWannierized(cEph.mlwfImSigma[0], fwp.wannierPrefix + ".mlwfImSigma_ePh" + fw.spinSuffix);
-	cEph.dumpWannierized(cEph.mlwfImSigma[1], fwp.wannierPrefix + ".mlwfImSigmaP_ePh" + fw.spinSuffix);
-	if(valley) cEph.dumpWannierized(cEph.mlwfImSigma[2], fwp.wannierPrefix + ".mlwfImSigmaV_ePh" + fw.spinSuffix);
+	for(unsigned iP=0; iP<cD.nP; iP++)
+		cD.mlwfImSigma[iP] = zeroes(fw.nBands*fw.nBands, nkMine);
+	cD.phase = zeroes(nkMine, ncMine);
+	cD.iCol = 0;
+	for(vector3<> qOff: fw.qOffset) fw.eLoop(qOff, CollectDefect::eProcess, &cD);
+	cD.phase *= (1./cD.kmesh.size()); //inverse transform normalizing factor
+	cD.dumpWannierized(cD.mlwfImSigma[0], fwp.wannierPrefix + ".mlwfImSigma_D_" + defectName + fw.spinSuffix);
+	cD.dumpWannierized(cD.mlwfImSigma[1], fwp.wannierPrefix + ".mlwfImSigmaP_D_" + defectName + fw.spinSuffix);
+	if(valley) cD.dumpWannierized(cD.mlwfImSigma[2], fwp.wannierPrefix + ".mlwfImSigmaV_D_" + defectName + fw.spinSuffix);
 	
 	fw.free();
 	FeynWann::finalize();
 	return 0;
 }
+

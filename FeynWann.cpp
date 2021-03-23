@@ -29,7 +29,7 @@ FeynWannParams::FeynWannParams(InputMap* inputMap)
 : iSpin(0), totalEprefix("Wannier/totalE"), phononPrefix("Wannier/phonon"), wannierPrefix("Wannier/wannier"),
 needSymmetries(false), needPhonons(false), needVelocity(false), needSpin(false),
 needLinewidth_ee(false), needLinewidth_ePh(false), needLinewidthP_ePh(false),
-ePhHeadOnly(false), maskOptimize(false), EzExt(0.), scissor(0.)
+ePhHeadOnly(false), maskOptimize(false), EzExt(0.), scissor(0.), EshiftWeight(0.)
 {
 	if(inputMap)
 	{	const double nm = 10*Angstrom;
@@ -97,6 +97,20 @@ std::vector<vector3<int>> readCellMap(string fname)
 	return cellMap;
 }
 
+std::vector<matrix> readCellWeights(string fname, int nCells, int nAtoms, int nBands)
+{	logPrintf("Reading '%s' ... ", fname.c_str()); logFlush();
+	matrix cellWeightsAll(nAtoms*nBands, nCells);
+	cellWeightsAll.read_real(fname.c_str());
+	//--- split to matrix per cell:
+	std::vector<matrix> cellWeights(nCells);
+	for(int iCell=0; iCell<nCells; iCell++)
+	{	cellWeights[iCell] = cellWeightsAll(0,nAtoms*nBands, iCell,iCell+1);
+		cellWeights[iCell].reshape(nAtoms,nBands);
+	}
+	logPrintf("done.\n");
+	return cellWeights;
+}
+
 diagMatrix readPhononBasis(string fname)
 {	logPrintf("Reading '%s' ... ", fname.c_str()); logFlush();
 	ifstream ifs(fname); if(!ifs.is_open()) die("could not open file.\n");
@@ -121,7 +135,7 @@ std::vector<vector3<>> readArrayVec3(string fname); //Read an array of vector3<>
 
 
 FeynWann::FeynWann(FeynWannParams& fwp)
-: fwp(fwp), nAtoms(0), nSpins(0), nSpinor(0), spinWeight(0), mu(NAN), nElectrons(0), polar(false), ePhEstart(0.), ePhEstop(0.), tTransformByCompute(1), inEphLoop(false)
+: fwp(fwp), nAtoms(0), nSpins(0), nSpinor(0), spinWeight(0), mu(NAN), nElectrons(0), polar(false), ePhEstart(0.), ePhEstop(0.), tTransformByCompute(1), tTransformByComputeD(1), inEphLoop(false)
 {	
 	//Create inter-group communicator if requested:
 	std::shared_ptr<MPIUtil> mpiInterGroup;
@@ -325,7 +339,7 @@ FeynWann::FeynWann(FeynWannParams& fwp)
 	//Initialize phonon properties:
 	realPartOnly = (nSpinor==1);
 	offsetDim = kfold; //size of an offset is determined by electronic k-points by default
-	qOffset.assign(1, vector3<>()); //no q-mesh offsets required to cover k-mesh by default
+	kfoldSup = vector3<int>(1,1,1); //no additional k-point sampling needed beyond offsetDim
 	if(fwp.needPhonons)
 	{	//Read relevant parameters from phonon.out:
 		fname = fwp.phononPrefix + ".out";
@@ -362,15 +376,6 @@ FeynWann::FeynWann(FeynWannParams& fwp)
 		logPrintf("\n");
 		offsetDim = phononSup; //size of an offset is limited by phonon supercell
 		
-		//Initialize q-mesh offsets that will cover k-mesh:
-		qOffset.clear();
-		vector3<int> iqOffset;
-		matrix3<> kfoldInv = inv(Diag(vector3<>(kfold)));
-		for(iqOffset[0]=0; iqOffset[0]<kfoldSup[0]; iqOffset[0]++)
-		for(iqOffset[1]=0; iqOffset[1]<kfoldSup[1]; iqOffset[1]++)
-		for(iqOffset[2]=0; iqOffset[2]<kfoldSup[2]; iqOffset[2]++)
-			qOffset.push_back(kfoldInv * iqOffset);
-		
 		//Read phonon basis:
 		invsqrtM = readPhononBasis(fwp.totalEprefix + ".phononBasis");
 		
@@ -391,20 +396,9 @@ FeynWann::FeynWann(FeynWannParams& fwp)
 		ePhCellMap = readCellMap(fwp.wannierPrefix + ".mlwfCellMapPh" + spinSuffix);
 		ePhCellMapSum = readCellMap(fwp.wannierPrefix + ".mlwfCellMapPhSum" + spinSuffix);
 
-		//Read e-ph cell weights:
-		std::vector<matrix> ePhCellWeights; //atom x band weights for each cell in ePhCellMap
-		{	fname = fwp.wannierPrefix + ".mlwfCellWeightsPh" + spinSuffix;
-			logPrintf("Reading '%s' ... ", fname.c_str()); logFlush();
-			matrix ePhCellWeightsAll(nAtoms*nBands, ePhCellMap.size());
-			ePhCellWeightsAll.read_real(fname.c_str());
-			//--- split to matrix per cell:
-			ePhCellWeights.resize(ePhCellMap.size());
-			for(size_t iCell=0; iCell<ePhCellWeights.size(); iCell++)
-			{	ePhCellWeights[iCell] = ePhCellWeightsAll(0,nAtoms*nBands, iCell,iCell+1);
-				ePhCellWeights[iCell].reshape(nAtoms,nBands);
-			}
-			logPrintf("done.\n");
-		}
+		//Read e-ph cell weights (atom x band weights for each cell in ePhCellMap):
+		fname = fwp.wannierPrefix + ".mlwfCellWeightsPh" + spinSuffix;
+		std::vector<matrix> ePhCellWeights = readCellWeights(fname, ePhCellMap.size(), nAtoms, nBands);
 		
 		//Read electron-phonon matrix elements
 		fname = fwp.wannierPrefix + ".mlwfHePh" + spinSuffix;
@@ -490,8 +484,81 @@ FeynWann::FeynWann(FeynWannParams& fwp)
 			TIMErepeated(compute)
 			TIMErepeated(transform)
 			#undef TIMErepeated
+			tTransformByCompute = int(floor(transformTime/computeTime));
 			logPrintf("tCompute[s]: %lg tTransform[s]: %lg\n", computeTime, transformTime);
-			logPrintf("Will switch from transform to compute when mask count <= %d\n", int(floor(transformTime/computeTime)));
+			logPrintf("Will switch from transform to compute when mask count <= %d\n", tTransformByCompute);
+		}
+	}
+		
+	//Initialize defect properties:
+	if(fwp.needDefect.length())
+	{	logPrintf("\nInitializing defect '%s':\n", fwp.needDefect.c_str());
+		
+		//Get defect supercell from wannier output file:
+		fname = fwp.wannierPrefix + ".out";
+		logPrintf("Reading '%s' ... ", fname.c_str()); logFlush();
+		ifs.open(fname); if(!ifs.is_open()) die("could not open file.\n");
+		while(!ifs.eof())
+		{	string line; getline(ifs, line);
+			if(line.find("defect-supercell") == 0)
+			{	//at start of wannier command print
+				string key, name;
+				istringstream iss(line);
+				iss >> key >> name;
+				if(name == fwp.needDefect)
+				{	iss >> defectSup[0] >> defectSup[1] >> defectSup[2];
+					break;
+				}
+			}
+		}
+		ifs.close();
+		if(defectSup.length_squared())
+		{	logPrintf("done. Defect supercell: ");
+			defectSup.print(globalLog, " %d ");
+		}
+		else die("could not determine defect supercell.\n\n");
+		for(int iDir=0; iDir<3; iDir++)
+		{	kfoldSup[iDir] = kfold[iDir] / defectSup[iDir];
+			if(kfoldSup[iDir] * defectSup[iDir] != kfold[iDir])
+				die("kfold is not a multiple of defect supercell.\n");
+		}
+		if(fwp.needPhonons and (not (phononSup == defectSup)))
+			die("Phonon and defect supercells don't match; this is currently needed to calculate both in same run.\n");
+		offsetDim = defectSup; //size of an offset is limited by defect supercell
+		
+		//Read corresponding cell map and weights:
+		defectCellMap = readCellMap(fwp.wannierPrefix + ".mlwfCellMapD_" + fwp.needDefect + spinSuffix);
+		std::vector<matrix> defectCellWeights = readCellWeights(
+			fwp.wannierPrefix + ".mlwfCellWeightsD_" + fwp.needDefect + spinSuffix,
+			defectCellMap.size(), 1, nBands);
+		
+		//Read electron-defect matrix elements:
+		fname = fwp.wannierPrefix + ".mlwfHD_" + fwp.needDefect + spinSuffix;
+		HdefectW = std::make_shared<DistributedMatrix>(fname, realPartOnly,
+			mpiGroup, nBands*nBands, defectCellMap, offsetDim, true, mpiInterGroup, &defectCellWeights);
+		
+		//Benchmark e-defect transform and compute to optimize masked computations, if needed:
+		if(fwp.maskOptimize)
+		{	logPrintf("Benchmarking e-defect transform and single-point compute: "); logFlush();
+			const double tMin = 0.5; //time for at least 0.5 s
+			const int nMin = 3; //time at least 3 evaluations
+			#define TIMErepeated(funcName) \
+				double funcName##Time = 0.; \
+				{	double tStart = clock_sec(), t=0.; \
+					int nTries = 0; \
+					while(nTries<nMin or t<tMin) \
+					{	HdefectW->funcName(vector3<>(), vector3<>()); \
+						nTries++; \
+						t = clock_sec()-tStart; \
+					} \
+					funcName##Time = t / nTries; \
+				}
+			TIMErepeated(compute)
+			TIMErepeated(transform)
+			#undef TIMErepeated
+			tTransformByComputeD = int(floor(transformTime/computeTime));
+			logPrintf("tCompute[s]: %lg tTransform[s]: %lg\n", computeTime, transformTime);
+			logPrintf("Will switch from transform to compute when mask count <= %d\n", tTransformByComputeD);
 		}
 	}
 	
@@ -546,6 +613,15 @@ FeynWann::FeynWann(FeynWannParams& fwp)
 	}
 	
 	logPrintf("\n");
+	
+	//Initialize q-mesh offsets that will cover k-mesh:
+	qOffset.clear();
+	vector3<int> iqOffset;
+	matrix3<> kfoldInv = inv(Diag(vector3<>(kfold)));
+	for(iqOffset[0]=0; iqOffset[0]<kfoldSup[0]; iqOffset[0]++)
+	for(iqOffset[1]=0; iqOffset[1]<kfoldSup[1]; iqOffset[1]++)
+	for(iqOffset[2]=0; iqOffset[2]<kfoldSup[2]; iqOffset[2]++)
+		qOffset.push_back(kfoldInv * iqOffset);
 }
 
 void FeynWann::free()
@@ -560,6 +636,7 @@ void FeynWann::free()
 	HePhW = 0;
 	HePhSumW = 0;
 	Dw = 0;
+	HdefectW = 0;
 }
 
 //Get iMatrix'th matrix of specified dimensions from pointer src, assuming they are stored contiguously there in column-major order)
@@ -824,6 +901,118 @@ void FeynWann::ePhCalc(const FeynWann::StateE& e1, const FeynWann::StateE& e2, c
 	//Prepare state on group head:
 	if(mpiGroup->isHead()) setMatrix(e1, e2, ph, 0, m);
 }
+
+void FeynWann::defectLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::defectProcessFunc defectProcess, void* params,
+	eProcessFunc eProcess1, eProcessFunc eProcess2,
+	const std::vector<bool>* eMask1, const std::vector<bool>* eMask2, const std::vector<bool>* defectMask)
+{	static StopWatch watchBcast("FeynWann::defectLoop:bcast"); 
+	static StopWatch watchCallback("FeynWann::defectLoop:callback");
+	assert(fwp.needDefect.length());
+	int prodOffsetDim = Hw->nkTot;
+	int prodOffsetDimSq = HdefectW->nkTot;
+	assert(prodOffsetDimSq == prodOffsetDim*prodOffsetDim);
+	
+	//Initialize electronic states for 1 and 2:
+	#define PrepareElecStates(i) \
+		bool withinRange##i = false; \
+		std::vector<StateE> e##i(prodOffsetDim); /* States */ \
+		{	Hw->transform(k0##i); \
+			if(fwp.needVelocity) Pw->transform(k0##i); \
+			if(fwp.needSpin) Sw->transform(k0##i); \
+			if(fwp.EzExt) Zw->transform(k0##i); \
+			if(fwp.needLinewidth_ee) ImSigma_eeW->transform(k0##i); \
+			if(fwp.needLinewidth_ePh) ImSigma_ePhW->transform(k0##i); \
+			if(fwp.needLinewidthP_ePh) ImSigmaP_ePhW->transform(k0##i); \
+			int ik = Hw->ikStart; \
+			int ikStop = ik + Hw->nk; \
+			PartialLoop3D(offsetDim, ik, ikStop, e##i[ik].k, k0##i, \
+				e##i[ik].ik = ik; \
+				e##i[ik].withinRange = eMask##i ? eMask##i->at(ik) : true; \
+				setState(e##i[ik]); \
+				if(e##i[ik].withinRange) \
+				{	withinRange##i = true; \
+					if(eProcess##i) eProcess##i(e##i[ik], params); \
+				} \
+			) \
+			/* Make available on all processes of group */ \
+			if(mpiGroup->nProcesses() > 1) \
+			{	watchBcast.start(); \
+				for(int whose=0; whose<mpiGroup->nProcesses(); whose++) \
+					for(int ik=Hw->ikStartProc[whose]; ik<Hw->ikStartProc[whose+1]; ik++) \
+						bcastState(e##i[ik], mpiGroup, whose); \
+				mpiGroup->allReduce(withinRange##i, MPIUtil::ReduceLOr); \
+				watchBcast.stop(); \
+			} \
+		}
+	PrepareElecStates(1) //prepares e1 and V1
+	if(not withinRange1 and not (eProcess2)) return; //no states in active window of 1 and no other callbacks requested
+	PrepareElecStates(2) //prepares e2 and V2
+	if(not (withinRange1 and withinRange2)) return; //no states in either active window
+	#undef PrepareElecStates
+	
+	//Initialize net mask combining range entries and specified mask (if any):
+	std::vector<bool> pairMask(defectMask ? *defectMask : std::vector<bool>(prodOffsetDimSq, true));
+	if(fwp.ePhHeadOnly) { pairMask.assign(prodOffsetDimSq, false); pairMask[0] = true; } //only first entry
+	auto pairIter = pairMask.begin();
+	int nNZ = 0;
+	for(int ik1=0; ik1<prodOffsetDim; ik1++)
+		for(int ik2=0; ik2<prodOffsetDim; ik2++)
+		{	bool netMask = (*pairIter) and e1[ik1].withinRange and e2[ik2].withinRange;
+			if(netMask) nNZ++;
+			*(pairIter++) = netMask;
+		}
+	bool bypassTransform = (nNZ <= tTransformByComputeD);
+	
+	//Calculate electron-defect matrix elements:
+	if(bypassTransform)
+	{	//Loop over computes, stores data in same locations as transform:
+		int ikPair = 0;
+		int iProc = 0; //which process should contain this data:
+		auto pairIter = pairMask.begin();
+		for(int ik1=0; ik1<prodOffsetDim; ik1++)
+			for(int ik2=0; ik2<prodOffsetDim; ik2++)
+			{	if(*(pairIter++)) HdefectW->compute(e1[ik1].k, e2[ik2].k, ikPair, iProc);
+				ikPair++;
+				while(iProc+1<mpiGroup->nProcesses() and ikPair==HdefectW->ikStartProc[iProc+1]) iProc++;
+			}
+	}
+	else HdefectW->transform(k01, k02); //generate all data in a single transform
+	
+	//Process call back function using these matrix elements:
+	int ikPair = 0;
+	int ikPairStart = HdefectW->ikStart;
+	int ikPairStop = ikPairStart + HdefectW->nk;
+	int ik1 = 0; vector3<> k1;
+	PartialLoop3D(offsetDim, ik1, prodOffsetDim, k1, k01,
+		if(e1[ik1].withinRange)
+		{	int ik2 = 0; vector3<> k2;
+			PartialLoop3D(offsetDim, ik2, prodOffsetDim, k2, k02,
+				if(ikPair>=ikPairStart and ikPair<ikPairStop //subset to be evaluated on this process
+					and pairMask[ikPair] ) //state pair is active (includes e2.withinRange due to net mask constructed above)
+				{	//Set defect matrix elements:
+					MatrixDefect m;
+					setMatrix(e1[ik1], e2[ik2], ikPair, m);
+					//Invoke call-back function:
+					watchCallback.start();
+					defectProcess(m, params);
+					watchCallback.stop();
+				}
+				ikPair++;
+			)
+		}
+		else ikPair += prodOffsetDim; //no states within range at current k1
+	)
+}
+
+void FeynWann::defectCalc(const FeynWann::StateE& e1, const FeynWann::StateE& e2, FeynWann::MatrixDefect& m)
+{	assert(fwp.needDefect.length());
+	//Compute Fourier version of Hdefect for specified k1,k2 pair:
+	HdefectW->compute(e1.k, e2.k);
+	//Prepare state on group head:
+	if(mpiGroup->isHead()) setMatrix(e1, e2, 0, m);
+}
+
+
 
 void FeynWann::symmetrize(matrix3<>& m) const
 {	matrix3<> mOut;
@@ -1090,6 +1279,17 @@ void FeynWann::setMatrix(const FeynWann::StateE& e1, const FeynWann::StateE& e2,
 	watch.stop();
 }
 
+void FeynWann::setMatrix(const FeynWann::StateE& e1, const FeynWann::StateE& e2, int ikPair, FeynWann::MatrixDefect& m)
+{	static StopWatch watch("FeynWann::setMatrix"); watch.start();
+	m.e1 = &e1;
+	m.e2 = &e2;
+	//Get the (short-ranged) matrix elements:
+	m.M = getMatrix(HdefectW->getResult(ikPair), nBands, nBands);
+	//TODO: add long range polar corrections if required:
+	//Switch to E1 and E2 eigenbasis:
+	m.M = dagger(m.e1->U) * m.M * m.e2->U; //to E1 and E2 eigenbasis
+	watch.stop();
+}
 
 //----------- class FeynWann::StateE -------------
 inline double interpQuartic(const std::vector<diagMatrix>& Y, int n, double f)
