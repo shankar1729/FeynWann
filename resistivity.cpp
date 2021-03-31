@@ -28,10 +28,11 @@ struct ResistivityCollect
 	double defectFraction; //defect concentration: number/unit cell (dimensionless)
 	std::vector<double> n, g, vSq, tau; //carrier number, density of states, |v|^2 and e-ph life time
 	std::vector<matrix3<>> vvTau; //scattering time * velocity outer product
+	std::vector<matrix3<>> vvTauK; //scattering time * velocity outer product with (E-mu)^2/T factor for thermal conductivity
 
 	ResistivityCollect(const std::vector<double>& dmu, double T, double defectFraction)
 		: dmu(dmu), T(T), defectFraction(defectFraction),
-		n(dmu.size()), g(dmu.size()), vSq(dmu.size()), tau(dmu.size()), vvTau(dmu.size())
+		n(dmu.size()), g(dmu.size()), vSq(dmu.size()), tau(dmu.size()), vvTau(dmu.size()), vvTauK(dmu.size())
 	{
 	}
 	
@@ -58,6 +59,7 @@ struct ResistivityCollect
 				vSq[iMu] += (-dfdE) * v.length_squared();
 				tau[iMu] += (-dfdE) / (2*ImSigma);
 				vvTau[iMu] += ((-dfdE) / (2*ImSigmaP)) * vdotv;
+				vvTauK[iMu] += ((-dfdE) * invT * std::pow(E-dmu[iMu],2) / (2*ImSigmaP)) * vdotv;
 			}
 		}
 	}
@@ -142,6 +144,9 @@ int main(int argc, char** argv)
 	string rhoName = "Resistivity";
 	const double cm = 1e-2*meter;
 	const double cm2byVs = cm*cm/(Volt*sec);
+	double kappaUnit = Joule/(sec*meter*Kelvin);
+	string kappaUnitName="W/(m.K)";
+	string kappaName = "Kappa_e";
 	double densityUnit = std::pow(cm,-3);
 	string densityUnitName = "cm^-3";
 	if(slabDir>=0)
@@ -149,6 +154,8 @@ int main(int argc, char** argv)
 		rhoUnit = Ohm;
 		rhoUnitName = "Ohm";
 		rhoName = "SheetResistance";
+		kappaUnit = Joule/(sec*meter*meter*Kelvin);
+		kappaUnitName="W/(m^2.K)";
 		densityUnit = std::pow(cm,-2);
 		densityUnitName = "cm^-2";
 	}
@@ -199,22 +206,27 @@ int main(int argc, char** argv)
 				//Print progress:
 				if((o+1)%oInterval==0) { logPrintf("%d%% ", int(round((o+1)*100./noMine))); logFlush(); }
 			}
+			//Accumulate between processes:
+			mpiWorld->allReduceData(rc.n, MPIUtil::ReduceSum);
+			mpiWorld->allReduceData(rc.g, MPIUtil::ReduceSum);
+			mpiWorld->allReduceData(rc.vSq, MPIUtil::ReduceSum);
+			mpiWorld->allReduceData(rc.tau, MPIUtil::ReduceSum);
+			mpiWorld->allReduceData(rc.vvTau, MPIUtil::ReduceSum);
+			mpiWorld->allReduceData(rc.vvTauK, MPIUtil::ReduceSum);
 			for(int iMu=0; iMu<dmuCount; iMu++)
-			{	//Accumulate between processes:
-				mpiWorld->allReduce(rc.n[iMu], MPIUtil::ReduceSum);
-				mpiWorld->allReduce(rc.g[iMu], MPIUtil::ReduceSum);
-				mpiWorld->allReduce(rc.vSq[iMu], MPIUtil::ReduceSum);
-				mpiWorld->allReduce(rc.tau[iMu], MPIUtil::ReduceSum);
-				mpiWorld->allReduce(&rc.vvTau[iMu](0,0), 3*3, MPIUtil::ReduceSum);
-				//Apply normalizing factors:
+			{	//Apply normalizing factors:
 				rc.n[iMu] *= prefacDOS;
 				rc.n[iMu] -= (fw->nElectrons - Nconduction)/fw->nSpins; //convert to number of free carriers per unit cell
 				rc.g[iMu] *= prefacDOS;
 				rc.vSq[iMu] *= prefacDOS;
 				rc.tau[iMu] *= prefacDOS;
-				rc.vvTau[iMu] *= prefacDOS;
-				slabConstrain(rc.vvTau[iMu], slabDir); //eliminate out-of-plane components if necessary
-				fw->symmetrize(rc.vvTau[iMu]); //follow symmetries of unit cell
+				#define PROCESS_vvTau(vvTau) \
+					vvTau *= prefacDOS; \
+					slabConstrain(vvTau, slabDir); /*eliminate out-of-plane components if necessary*/ \
+					fw->symmetrize(vvTau); /* follow symmetries of unit cell */
+				PROCESS_vvTau(rc.vvTau[iMu])
+				PROCESS_vvTau(rc.vvTauK[iMu])
+				#undef PROCESS_vvTau
 			}
 			logPrintf("done.\n"); logFlush();
 		}
@@ -235,6 +247,7 @@ int main(int argc, char** argv)
 					rcTot.vSq[iMu] += rcArr[iSpin][block]->vSq[iMu];
 					rcTot.tau[iMu] += rcArr[iSpin][block]->tau[iMu];
 					rcTot.vvTau[iMu] += rcArr[iSpin][block]->vvTau[iMu];
+					rcTot.vvTauK[iMu] += rcArr[iSpin][block]->vvTauK[iMu];
 				}
 		}
 	}
@@ -245,8 +258,8 @@ int main(int argc, char** argv)
 		for(size_t iSpin=0; iSpin<rcArr.size(); iSpin++)
 		{	string spinSuffix = spinSuffixes[iSpin];
 			//Compute quantities for each block:
-			std::vector<matrix3<>> rhoArr(nBlocks), mobArr(nBlocks);
-			std::vector<double> rhoBarArr(nBlocks), mobBarArr(nBlocks); 
+			std::vector<matrix3<>> rhoArr(nBlocks), mobArr(nBlocks), kappaArr(nBlocks);
+			std::vector<double> rhoBarArr(nBlocks), mobBarArr(nBlocks), kappaBarArr(nBlocks); 
 			std::vector<double> tauArr(nBlocks), tauDrudeArr(nBlocks);
 			std::vector<double> mEffArr(nBlocks), vFarr(nBlocks);
 			std::vector<double> gArr(nBlocks), nArr(nBlocks);
@@ -254,12 +267,15 @@ int main(int argc, char** argv)
 			{	const ResistivityCollect& rc = *rcArr[iSpin][block];
 				rhoArr[block] = Omega * inv(rc.vvTau[iMu]);
 				mobArr[block] = rc.vvTau[iMu]/fabs(rc.n[iMu]);
+				kappaArr[block] = rc.vvTauK[iMu]/Omega;
 				if(slabDir>=0.)
 				{	rhoArr[block](slabDir,slabDir) = INFINITY;
 					mobArr[block](slabDir,slabDir) = 0.;
+					kappaArr[block](slabDir,slabDir) = 0.;
 				}
 				rhoBarArr[block] = trace(rhoArr[block], slabDir) / (slabDir>=0 ? 2. : 3.);
 				mobBarArr[block] = trace(mobArr[block], slabDir) / (slabDir>=0 ? 2. : 3.);
+				kappaBarArr[block] = trace(kappaArr[block], slabDir) / (slabDir>=0 ? 2. : 3.);
 				tauArr[block] = rc.tau[iMu] / rc.g[iMu];
 				tauDrudeArr[block] = trace(rc.vvTau[iMu], slabDir) / rc.vSq[iMu];
 				mEffArr[block] = tauDrudeArr[block] / mobBarArr[block]; //mobility-effective-mass
@@ -270,8 +286,10 @@ int main(int argc, char** argv)
 			//Report with statistics:
 			reportResult(rhoArr, rhoName+spinSuffix, rhoUnit, rhoUnitName);
 			reportResult(mobArr, "Mobility"+spinSuffix, cm2byVs, "cm^2/(V.s)");
+			reportResult(kappaArr, kappaName+spinSuffix, kappaUnit, kappaUnitName);
 			reportResult(rhoBarArr, rhoName+spinSuffix, rhoUnit, rhoUnitName);
 			reportResult(mobBarArr, "Mobility"+spinSuffix, cm2byVs, "cm^2/(V.s)");
+			reportResult(kappaBarArr, kappaName+spinSuffix, kappaUnit, kappaUnitName);
 			reportResult(tauDrudeArr, "tauDrude"+spinSuffix, fs, "fs");
 			reportResult(tauArr, "tau"+spinSuffix, fs, "fs");
 			reportResult(mEffArr, "mEff"+spinSuffix, 1, "");
