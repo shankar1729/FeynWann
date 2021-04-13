@@ -793,7 +793,7 @@ int main(int argc, char** argv)
 	fwp.needVelocity = true;
 	fwp.needSpin = true;
 	fwp.needPhonons = ePhEnabled;
-    fwp.needDefect = defectName;
+    if(defectEnabled) fwp.needDefect = defectName;
 	fwp.maskOptimize = true;
 	FeynWann fw(fwp);
 	
