@@ -887,6 +887,7 @@ struct LindbladLinear
 			logPrintf("   dfMax: %6.4lf", dfMax);
 			if(spinorial) logPrintf("   S: [ %16.15lg %16.15lg %16.15lg ]", Stot[0],  Stot[1],  Stot[2]);
 			logPrintf("\n"); logFlush();
+			/*
 			//Save distribution functions:
 			ofstream ofs("dist."+ossID.str());
 			ofs << "#E-mu/VBM[eV] n[eV^-1]";
@@ -899,7 +900,7 @@ struct LindbladLinear
 				for(int iDist=0; iDist<nDist; iDist++)
 					ofs << '\t' << dist[iDist].out[iE]*eV;
 				ofs << '\n';
-			}
+			}*/
 		}
 		//Write checkpoint file if needed:
 		if(checkpointFile.length())

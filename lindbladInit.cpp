@@ -59,13 +59,15 @@ struct LindbladInit
 	const bool ePhEnabled; //!< whether e-ph coupling is enabled
 	const double ePhDelta; //!< Gaussian energy conservation width
 	
+	const bool defectEnabled; //!< if defect scattering is enabled with phonons
+	
 	LindbladInit(FeynWann& fw, const vector3<int>& NkFine,
 		double dmuMin, double dmuMax, double Tmax, double pumpOmegaMax, double probeOmegaMax,
-		bool ePhEnabled, double ePhDelta)
+		bool ePhEnabled, double ePhDelta, bool defectEnabled)
 	: fw(fw), NkFine(NkFine), nkTot(NkFine[0]*NkFine[1]*NkFine[2]),
 		dmuMin(dmuMin), dmuMax(dmuMax), Tmax(Tmax),
 		pumpOmegaMax(pumpOmegaMax), probeOmegaMax(probeOmegaMax),
-		ePhEnabled(ePhEnabled), ePhDelta(ePhDelta)
+		ePhEnabled(ePhEnabled), ePhDelta(ePhDelta), defectEnabled(defectEnabled)
 	{
 	}
 	
@@ -288,7 +290,14 @@ struct LindbladInit
 						{	Econserve = true;
 							nActivePairs++;
 						}
-					}
+					} 
+					if(defectEnabled) //Phonon with defect
+                    {   double deltaE = (*E1) - (*E2); //energy conservation violation
+						if(fabs(deltaE) < nEphDelta*ePhDelta) //else negligible
+						{	Econserve = true;
+							nActivePairs++;
+						}
+                    }
 				}
 			}
 			if(Econserve) kpartners[ik1].push_back(ik2);
@@ -493,6 +502,45 @@ struct LindbladInit
 	static void addEph(const FeynWann::MatrixEph& mEph, void* params)
 	{	((LindbladInit*)params)->addEph(mEph);
 	}
+    //Add e-defect matrix element to k-point data
+    void addDefect(const FeynWann::MatrixDefect& mD)
+	{	const FeynWann::StateE& e1 = *(mD.e1);
+		const FeynWann::StateE& e2 = *(mD.e2);
+		LindbladFile::Kpoint& kp1 = kpOffset[e1.ik];
+		//Get global index and active ranges of each point:
+		#define PREP(i) \
+			size_t ik##i; \
+			int innerOffset##i, nInner##i; \
+			{	if(not findK(e##i.k, ik##i)) return; \
+				const double *Ebegin = E.data()+ik##i*fw.nBands; \
+				const double *Eend= Ebegin + fw.nBands; \
+				activeOffsets(Ebegin, Eend, Estart, Estop, innerOffset##i, nInner##i); \
+			}
+		PREP(1)
+		PREP(2)
+		#undef PREP
+        //Collect energy-conserving matrix elements within active window:
+        LindbladFile::GePhEntry g;
+        g.jk = ik2;
+        double sigmaInv = 1./ePhDelta;
+        double deltaPrefac = sqrt(sigmaInv/sqrt(2.*M_PI)) * kpairWeight[ik1]; //account for down-sampling weight (1 if no down-sampling)
+        const matrix& M = mD.M;
+        for(int n2=innerOffset2; n2<innerOffset2+nInner2; n2++)
+            for(int n1=innerOffset1; n1<innerOffset1+nInner1; n1++)
+            {	double deltaEbySigma = sigmaInv*(e1.E[n1] - e2.E[n2]);
+                if(fabs(deltaEbySigma) < nEphDelta)
+                {	SparseEntry s;
+                    s.i = n1 - innerOffset1;
+                    s.j = n2 - innerOffset2;
+                    s.val = M(n1,n2) * (deltaPrefac*exp(-0.25*deltaEbySigma*deltaEbySigma)); //apply e-conservation factor (sqrt(normalized gaussian))
+                    g.G.push_back(s);
+                }
+            }
+        if(g.G.size()) kp1.GePh.push_back(g);
+    }
+    static void addDefect(const FeynWann::MatrixDefect& mD, void* params)
+	{	((LindbladInit*)params)->addDefect(mD);
+	}
 	
 	void saveData(const std::vector<vector3<>>& k0, string outFile)
 	{
@@ -570,6 +618,7 @@ struct LindbladInit
 					FeynWann::eProcessFunc initFunc = 0; //after first pass, only need to invoke addEph(),
 					if(not initDone) initFunc = initKpoint; //... but in first pass, also invoke initKpoint()
 					fw.ePhLoop(k01, k02, addEph, this, initFunc, 0, 0, &mask1, &mask2, &maskPair);
+                    if(defectEnabled) fw.defectLoop(k01, k02, addDefect, this, initFunc, 0, &mask1, &mask2, &maskPair);
 					initDone = true;
 				}
 				if(not initDone) fw.eLoop(k01, initKpoint, this, &mask); //corner case: entire offset has no partners (make sure init still happens)
@@ -718,7 +767,9 @@ int main(int argc, char** argv)
 	const double pumpOmegaMax = inputMap.get("pumpOmegaMax") * eV; //maximum pump frequency in eV
 	const double probeOmegaMax = inputMap.get("probeOmegaMax") * eV; //maximum probe frequency in eV
 	const string ePhMode = inputMap.getString("ePhMode"); //must be Off or DiagK (add FullK in future)
+	const string defectName = inputMap.getString("defectName"); //must be a defect name when defect and phonons considered
 	const bool ePhEnabled = (ePhMode != "Off");
+    const bool defectEnabled = (defectName != "Off");
 	const double ePhDelta = inputMap.get("ePhDelta") * eV; //energy conservation width for e-ph coupling
 	const size_t maxNeighbors = inputMap.get("maxNeighbors", 0); //if non-zero: limit neighbors per k by stochastic down-sampling and amplifying the Econserve weights
 	const string outFile = inputMap.has("outFile") ? inputMap.getString("outFile") : "ldbd.dat"; //output file name
@@ -732,6 +783,7 @@ int main(int argc, char** argv)
 	logPrintf("pumpOmegaMax = %lg\n", pumpOmegaMax);
 	logPrintf("probeOmegaMax = %lg\n", probeOmegaMax);
 	logPrintf("ePhMode = %s\n", ePhMode.c_str());
+    logPrintf("defectName = %s\n", defectName.c_str());
 	logPrintf("ePhDelta = %lg\n", ePhDelta);
 	logPrintf("maxNeighbors = %lu\n", maxNeighbors);
 	logPrintf("outFile = %s\n", outFile.c_str());
@@ -741,6 +793,7 @@ int main(int argc, char** argv)
 	fwp.needVelocity = true;
 	fwp.needSpin = true;
 	fwp.needPhonons = ePhEnabled;
+    fwp.needDefect = defectName;
 	fwp.maskOptimize = true;
 	FeynWann fw(fwp);
 	
@@ -779,7 +832,7 @@ int main(int argc, char** argv)
 	}
 	
 	//Create and initialize lindblad calculator:
-	LindbladInit lb(fw, NkFine, dmuMin, dmuMax, Tmax, pumpOmegaMax, probeOmegaMax, ePhEnabled, ePhDelta);
+	LindbladInit lb(fw, NkFine, dmuMin, dmuMax, Tmax, pumpOmegaMax, probeOmegaMax, ePhEnabled, ePhDelta, defectEnabled);
 	
 	//First pass (e only): select k-points
 	lb.kpointSelect(k0);
