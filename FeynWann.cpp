@@ -29,7 +29,7 @@ FeynWannParams::FeynWannParams(InputMap* inputMap)
 : iSpin(0), totalEprefix("Wannier/totalE"), phononPrefix("Wannier/phonon"), wannierPrefix("Wannier/wannier"),
 needSymmetries(false), needPhonons(false), needVelocity(false), needSpin(false),
 needLinewidth_ee(false), needLinewidth_ePh(false), needLinewidthP_ePh(false),
-ePhHeadOnly(false), maskOptimize(false), EzExt(0.), scissor(0.), EshiftWeight(0.)
+ePhHeadOnly(false), maskOptimize(false), EzExt(0.), scissor(0.), EshiftWeight(0.), enforceKramerDeg(0.)
 {
 	if(inputMap)
 	{	const double nm = 10*Angstrom;
@@ -38,6 +38,7 @@ ePhHeadOnly(false), maskOptimize(false), EzExt(0.), scissor(0.), EshiftWeight(0.
 		EzExt = inputMap->get("EzExt", 0.) * eV/nm;
 		scissor = inputMap->get("scissor", 0.) * eV;
 		EshiftWeight = inputMap->get("EshiftWeight", 0.) * eV;
+		enforceKramerDeg = inputMap->get("enforceKramerDeg", 0.);
 	}
 }
 
@@ -46,6 +47,7 @@ void FeynWannParams::printParams() const
 	logPrintf("EzExt = %lg\n", EzExt);
 	logPrintf("scissor = %lg\n", scissor);
 	logPrintf("EshiftWeight = %lg\n", EshiftWeight);
+	logPrintf("enforceKramerDeg = %lg\n", enforceKramerDeg);
 }
 
 
@@ -1071,9 +1073,21 @@ void FeynWann::setState(FeynWann::StateE& state)
 		for(int iDir=0; iDir<3; iDir++)
 			if(fwp.Bext[iDir]) Hk += fwp.Bext[iDir] * getMatrix(Sw->getResult(state.ik), nBands, nBands, iDir);
 	}
-	if(fwp.EzExt) //Add Stark perturbation:
-		Hk += fwp.EzExt * getMatrix(Zw->getResult(state.ik), nBands, nBands);
-	Hk.diagonalize(state.U, state.E);
+	Hk.diagonalize(state.U, state.E);	
+        if(fwp.enforceKramerDeg) //enforce Kramers degeneracy in the inversion symmetric cases
+        {       int bIn = 0;
+                while(bIn < nBands)
+                {       double Etemp = state.E[bIn];
+                        state.E[bIn+1] = Etemp;
+                        bIn += 2;
+                }
+        }
+	matrix HE = state.U * state.E * dagger(state.U);
+	//Add Stark perturbation:
+	if(fwp.EzExt) 
+	{	HE += fwp.EzExt * getMatrix(Zw->getResult(state.ik), nBands, nBands);
+		HE.diagonalize(state.U, state.E);	
+	}
 	for(double& E: state.E) E -= mu; //reference to Fermi level
 	if(fwp.scissor)
 	{	//Apply scissor operator (move up unoccupied states):
