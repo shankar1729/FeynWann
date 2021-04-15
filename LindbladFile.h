@@ -150,13 +150,24 @@ namespace LindbladFile
 		}
 		
 		//Initialize Am and Ap given T:
-		void initA(double T)
+		void initA(double T, double defectFraction)
 		{	Am.clear(); Am.init(G.nRows(), G.nCols(), G.size());
 			Ap.clear(); Ap.init(G.nRows(), G.nCols(), G.size());
-			double nPh = (T>0 and omegaPh>1e-3*T) ? bose(omegaPh/T) : 0.; 
+			double mWeight = 0., pWeight = 0.; //weights for Am and Ap elements
+			if(omegaPh)
+			{	//Phonon case:
+				double nPh = (T>0 and omegaPh>1e-3*T) ? bose(omegaPh/T) : 0.;
+				mWeight = sqrt(nPh);
+				pWeight = sqrt(nPh+1);
+			}
+			else
+			{	//Defect case
+				mWeight = sqrt(defectFraction);
+				pWeight = sqrt(defectFraction);
+			}
 			for(const SparseEntry& se: G)
-			{	SparseEntry sm = se; sm.val *= sqrt(nPh);   Am.push_back(sm);
-				SparseEntry sp = se; sp.val *= sqrt(nPh+1); Ap.push_back(sp);
+			{	SparseEntry sm = se; sm.val *= mWeight; Am.push_back(sm);
+				SparseEntry sp = se; sp.val *= pWeight; Ap.push_back(sp);
 			}
 		}
 	};

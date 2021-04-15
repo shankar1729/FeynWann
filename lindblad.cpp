@@ -59,6 +59,7 @@ struct Lindblad : public Integrator<DM1>
 	const double dE; //!< energy resolution for distribution functions
 	
 	const bool ePhEnabled; //!< whether e-ph coupling is enabled
+	const double defectFraction; //!< defect fraction if present
 	const bool verbose; //!< whether to print more detailed stats during evolution
 	const string checkpointFile; //!< file name to save checkpoint data to
 	bool spinorial; //!< whether spin is available
@@ -87,13 +88,14 @@ struct Lindblad : public Integrator<DM1>
 	Lindblad(double dmu, double T, 
 		double pumpOmega, double pumpA0, double pumpTau, vector3<complex> pumpPol, bool pumpEvolve, bool pumpBfield, vector3<> pumpB,
 		double omegaMin, double omegaMax, double domega, double tau, std::vector<vector3<complex>> pol, double dE,
-		bool ePhEnabled, bool verbose, string checkpointFile)
+		bool ePhEnabled, double defectFraction, bool verbose, string checkpointFile)
 	: stepID(0),
 		dmu(dmu), T(T), invT(1./T),
 		pumpOmega(pumpOmega), pumpA0(pumpA0), pumpTau(pumpTau), pumpPol(pumpPol), pumpEvolve(pumpEvolve),
 		pumpBfield(pumpBfield), pumpB(pumpB),
 		omegaMin(omegaMin), domega(domega), omegaMax(omegaMax), nomega(1+int(round((omegaMax-omegaMin)/domega))),
-		tau(tau), pol(pol), dE(dE), ePhEnabled(ePhEnabled), verbose(verbose), checkpointFile(checkpointFile),
+		tau(tau), pol(pol), dE(dE), ePhEnabled(ePhEnabled), defectFraction(defectFraction),
+		verbose(verbose), checkpointFile(checkpointFile),
 		Emin(+DBL_MAX), Emax(-DBL_MAX), tPrev(0.)
 	{
 	}
@@ -267,7 +269,7 @@ struct Lindblad : public Integrator<DM1>
 			for(State& s: state)
 			{	for(LindbladFile::GePhEntry& g: s.GePh)
 				{	g.G.init(s.nInner, nInnerAll[g.jk]);
-					g.initA(T);
+					g.initA(T, defectFraction);
 				}
 			}
 		}
@@ -697,6 +699,7 @@ int main(int argc, char** argv)
 	if(ePhMode!="Off" and ePhMode!="DiagK")
 		die("\nePhMode must be 'Off' or 'DiagK'\n");
 	const bool ePhEnabled = (ePhMode != "Off");
+	const double defectFraction = inputMap.get("defectFraction", 0.); //fractional concentration of defects if any
 	const string verboseMode = inputMap.has("verbose") ? inputMap.getString("verbose") : "no"; //must be yes or no
 	if(verboseMode!="yes" and verboseMode!="no")
 		die("\nverboseMode must be 'yes' or 'no'\n");
@@ -734,6 +737,7 @@ int main(int argc, char** argv)
 	}
 	logPrintf("dE = %lg\n", dE);
 	logPrintf("ePhMode = %s\n", ePhMode.c_str());
+	logPrintf("defectFraction = %lg\n", defectFraction);
 	logPrintf("verbose = %s\n", verboseMode.c_str());
 	logPrintf("inFile = %s\n", inFile.c_str());
 	logPrintf("checkpointFile = %s\n", checkpointFile.c_str());
@@ -743,7 +747,7 @@ int main(int argc, char** argv)
 	Lindblad lb(dmu, T,
 		pumpOmega, pumpA0, pumpTau, pumpPol, (pumpMode=="Evolve"), (pumpMode=="Bfield"), pumpB,
 		omegaMin, omegaMax, domega, tau, pol, dE,
-		ePhEnabled, verbose, checkpointFile);
+		ePhEnabled, defectFraction, verbose, checkpointFile);
 	lb.initialize(inFile);
 	logPrintf("Initialization completed successfully at t[s]: %9.2lf\n\n", clock_sec());
 	logFlush();

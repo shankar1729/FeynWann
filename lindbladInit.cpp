@@ -291,8 +291,8 @@ struct LindbladInit
 							nActivePairs++;
 						}
 					} 
-					if(defectEnabled) //Phonon with defect
-                    {   double deltaE = (*E1) - (*E2); //energy conservation violation
+					if(defectEnabled) //Check for energy conservation for elastic scattering
+					{   double deltaE = (*E1) - (*E2); //energy conservation violation
 						if(fabs(deltaE) < nEphDelta*ePhDelta) //else negligible
 						{	Econserve = true;
 							nActivePairs++;
@@ -502,8 +502,9 @@ struct LindbladInit
 	static void addEph(const FeynWann::MatrixEph& mEph, void* params)
 	{	((LindbladInit*)params)->addEph(mEph);
 	}
-    //Add e-defect matrix element to k-point data
-    void addDefect(const FeynWann::MatrixDefect& mD)
+	
+	//Add e-defect matrix element to k-point data
+	void addDefect(const FeynWann::MatrixDefect& mD)
 	{	const FeynWann::StateE& e1 = *(mD.e1);
 		const FeynWann::StateE& e2 = *(mD.e2);
 		LindbladFile::Kpoint& kp1 = kpOffset[e1.ik];
@@ -519,25 +520,25 @@ struct LindbladInit
 		PREP(1)
 		PREP(2)
 		#undef PREP
-        //Collect energy-conserving matrix elements within active window:
-        LindbladFile::GePhEntry g;
-        g.jk = ik2;
-        double sigmaInv = 1./ePhDelta;
-        double deltaPrefac = sqrt(sigmaInv/sqrt(2.*M_PI)) * kpairWeight[ik1]; //account for down-sampling weight (1 if no down-sampling)
-        const matrix& M = mD.M;
-        for(int n2=innerOffset2; n2<innerOffset2+nInner2; n2++)
-            for(int n1=innerOffset1; n1<innerOffset1+nInner1; n1++)
-            {	double deltaEbySigma = sigmaInv*(e1.E[n1] - e2.E[n2]);
-                if(fabs(deltaEbySigma) < nEphDelta)
-                {	SparseEntry s;
-                    s.i = n1 - innerOffset1;
-                    s.j = n2 - innerOffset2;
-                    s.val = M(n1,n2) * (deltaPrefac*exp(-0.25*deltaEbySigma*deltaEbySigma)); //apply e-conservation factor (sqrt(normalized gaussian))
-                    g.G.push_back(s);
-                }
-            }
-        if(g.G.size()) kp1.GePh.push_back(g);
-    }
+		//Collect energy-conserving matrix elements within active window:
+		LindbladFile::GePhEntry g;
+		g.jk = ik2;
+		double sigmaInv = 1./ePhDelta;
+		double deltaPrefac = sqrt(sigmaInv/sqrt(2.*M_PI)) * kpairWeight[ik1]; //account for down-sampling weight (1 if no down-sampling)
+		const matrix& M = mD.M;
+		for(int n2=innerOffset2; n2<innerOffset2+nInner2; n2++)
+			for(int n1=innerOffset1; n1<innerOffset1+nInner1; n1++)
+			{	double deltaEbySigma = sigmaInv*(e1.E[n1] - e2.E[n2]);
+				if(fabs(deltaEbySigma) < nEphDelta)
+				{	SparseEntry s;
+					s.i = n1 - innerOffset1;
+					s.j = n2 - innerOffset2;
+					s.val = M(n1,n2) * (deltaPrefac*exp(-0.25*deltaEbySigma*deltaEbySigma)); //apply e-conservation factor (sqrt(normalized gaussian))
+					g.G.push_back(s);
+				}
+			}
+		if(g.G.size()) kp1.GePh.push_back(g);
+	}
     static void addDefect(const FeynWann::MatrixDefect& mD, void* params)
 	{	((LindbladInit*)params)->addDefect(mD);
 	}
@@ -618,7 +619,8 @@ struct LindbladInit
 					FeynWann::eProcessFunc initFunc = 0; //after first pass, only need to invoke addEph(),
 					if(not initDone) initFunc = initKpoint; //... but in first pass, also invoke initKpoint()
 					fw.ePhLoop(k01, k02, addEph, this, initFunc, 0, 0, &mask1, &mask2, &maskPair);
-                    if(defectEnabled) fw.defectLoop(k01, k02, addDefect, this, initFunc, 0, &mask1, &mask2, &maskPair);
+                    if(defectEnabled)
+						fw.defectLoop(k01, k02, addDefect, this, initFunc, 0, &mask1, &mask2, &maskPair);
 					initDone = true;
 				}
 				if(not initDone) fw.eLoop(k01, initKpoint, this, &mask); //corner case: entire offset has no partners (make sure init still happens)
@@ -767,7 +769,7 @@ int main(int argc, char** argv)
 	const double pumpOmegaMax = inputMap.get("pumpOmegaMax") * eV; //maximum pump frequency in eV
 	const double probeOmegaMax = inputMap.get("probeOmegaMax") * eV; //maximum probe frequency in eV
 	const string ePhMode = inputMap.getString("ePhMode"); //must be Off or DiagK (add FullK in future)
-	const string defectName = inputMap.getString("defectName"); //must be a defect name when defect and phonons considered
+	const string defectName = inputMap.has("defectName") ? inputMap.getString("defectName") : "Off"; //optional defect contribution
 	const bool ePhEnabled = (ePhMode != "Off");
     const bool defectEnabled = (defectName != "Off");
 	const double ePhDelta = inputMap.get("ePhDelta") * eV; //energy conservation width for e-ph coupling
@@ -793,7 +795,8 @@ int main(int argc, char** argv)
 	fwp.needVelocity = true;
 	fwp.needSpin = true;
 	fwp.needPhonons = ePhEnabled;
-    if(defectEnabled) fwp.needDefect = defectName;
+    if(defectEnabled)
+		fwp.needDefect = defectName;
 	fwp.maskOptimize = true;
 	FeynWann fw(fwp);
 	

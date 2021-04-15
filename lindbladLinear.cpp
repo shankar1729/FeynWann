@@ -78,6 +78,7 @@ struct LindbladLinear
 	const double dE; //!< energy resolution for distribution functions
 	
 	const bool ePhEnabled; //!< whether e-ph coupling is enabled
+	const double defectFraction; //!< defect fraction if present
 	const bool verbose; //!< whether to print more detailed stats during evolution
 	const string checkpointFile; //!< file name to save checkpoint data to
 	bool spinorial; //!< whether spin is available
@@ -107,12 +108,13 @@ struct LindbladLinear
 	LindbladLinear(double dmu, double T, bool spectrumMode, int blockSize,
 		double pumpOmega, double pumpA0, double pumpTau, vector3<complex> pumpPol, bool pumpBfield, vector3<> pumpB,
 		double omegaMin, double omegaMax, double domega, double tau, std::vector<vector3<complex>> pol, double dE,
-		bool ePhEnabled, bool verbose, string checkpointFile, ValleyMode valleyMode)
+		bool ePhEnabled, double defectFraction, bool verbose, string checkpointFile, ValleyMode valleyMode)
 	: stepID(0),
 		dmu(dmu), T(T), invT(1./T), spectrumMode(spectrumMode), blockSize(blockSize),
 		pumpOmega(pumpOmega), pumpA0(pumpA0), pumpTau(pumpTau), pumpPol(pumpPol), pumpBfield(pumpBfield), pumpB(pumpB),
 		omegaMin(omegaMin), domega(domega), omegaMax(omegaMax), nomega(1+int(round((omegaMax-omegaMin)/domega))),
-		tau(tau), pol(pol), dE(dE), ePhEnabled(ePhEnabled), verbose(verbose), checkpointFile(checkpointFile),
+		tau(tau), pol(pol), dE(dE), ePhEnabled(ePhEnabled), defectFraction(defectFraction), 
+		verbose(verbose), checkpointFile(checkpointFile),
 		Emin(+DBL_MAX), Emax(-DBL_MAX),
 		valleyMode(valleyMode), K(1./3, 1./3, 0), Kp(-1./3, -1./3, 0)
 	{
@@ -375,7 +377,7 @@ struct LindbladLinear
 						//Loop over all connections to the same ik2:
 						while((g != s.GePh.end()) and (g->jk == ik2))
 						{	g->G.init(nInner1, nInner2);
-							g->initA(T);
+							g->initA(T, defectFraction);
 							//Loop over A- and A+
 							for(int pm=0; pm<2; pm++) 
 							{	const SparseMatrix& Acur = pm ? g->Ap : g->Am;
@@ -1030,6 +1032,7 @@ int main(int argc, char** argv)
 	const bool ePhEnabled = (ePhMode != "Off");
 	if(spectrumMode and not ePhEnabled)
 		die("\nePhMode must be 'DiagK' in Spectrum mode\n");
+	const double defectFraction = inputMap.get("defectFraction", 0.); //fractional concentration of defects if any
 	const string verboseMode = inputMap.has("verbose") ? inputMap.getString("verbose") : "no"; //must be yes or no
 	if(verboseMode!="yes" and verboseMode!="no")
 		die("\nverboseMode must be 'yes' or 'no'\n");
@@ -1080,6 +1083,7 @@ int main(int argc, char** argv)
 	}
 	logPrintf("dE = %lg\n", dE);
 	logPrintf("ePhMode = %s\n", ePhMode.c_str());
+	logPrintf("defectFraction = %lg\n", defectFraction);
 	logPrintf("verbose = %s\n", verboseMode.c_str());
 	logPrintf("inFile = %s\n", inFile.c_str());
 	if(not spectrumMode) logPrintf("checkpointFile = %s\n", checkpointFile.c_str());
@@ -1099,7 +1103,7 @@ int main(int argc, char** argv)
 	LindbladLinear lbl(dmu, T, spectrumMode, blockSize,
 		pumpOmega, pumpA0, pumpTau, pumpPol, (pumpMode=="Bfield"), pumpB,
 		omegaMin, omegaMax, domega, tau, pol, dE,
-		ePhEnabled, verbose, checkpointFile, valleyMode);
+		ePhEnabled, defectFraction, verbose, checkpointFile, valleyMode);
 	CHECKERR(lbl.initialize(inFile));
 	logPrintf("Initialization completed successfully at t[s]: %9.2lf\n\n", clock_sec());
 	logFlush();
