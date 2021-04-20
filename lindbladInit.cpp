@@ -523,6 +523,7 @@ struct LindbladInit
 		//Collect energy-conserving matrix elements within active window:
 		LindbladFile::GePhEntry g;
 		g.jk = ik2;
+		g.omegaPh = 0.;
 		double sigmaInv = 1./ePhDelta;
 		double deltaPrefac = sqrt(sigmaInv/sqrt(2.*M_PI)) * kpairWeight[ik1]; //account for down-sampling weight (1 if no down-sampling)
 		const matrix& M = mD.M;
