@@ -190,7 +190,7 @@ struct Lindblad : public Integrator<DM1>
 			//Read base info from LindbladFile:
 			((LindbladFile::Kpoint&)s).read(fp, mpiWorld, h);
 			nInnerAll[ikStart+ikMine] = s.nInner;
-			
+            
 			//Initialize extra quantities in state:
 			s.innerStop = s.innerStart + s.nInner;
 			//--- Active energy range:
@@ -420,13 +420,29 @@ struct Lindblad : public Integrator<DM1>
         if(magneticEvolve)
         {   watchMagnetic.start();
             double prefac = .5; // = hbar/2 = 1 in a.u.
+            double omega  = 0*0.001; // Larmor freq of Bz == B0
             double deltaOmega = 2*0.001/100; // sets the magnitude of the perturbing field. deltaOmega = gamma * deltaB
-            if (t > M_PI/deltaOmega/2)
-            {   prefac = 0.; // control pulsing using prefac
-            }
             double omegaFreq  = 0.001; // time unit is 1/140 fs.
             vector3<> deltaB(deltaOmega*cos(omegaFreq*t), deltaOmega*sin(omegaFreq*t), 0); // perturbing B field
-                                    
+            
+            double piPulse = M_PI/deltaOmega;
+            double tDelay = 100*1000*fs;
+            
+            // Hahn spin echo setup
+            // First apply a pi/2 pulse
+            if (t > piPulse/2)
+            {   prefac = 0.; // control pulsing using prefac
+            }
+            // then wait for a time tDelay and apply a pi pulse
+            if (t > piPulse/2 + tDelay)
+            {
+                prefac = 0.5;
+            }
+            if (t > piPulse/2 + tDelay + piPulse)
+            {
+                prefac = 0.;
+            }
+            
             //Each k contributes separately:
 			const State* sPtr = state.data();
 			for(size_t ik=ikStart; ik<ikStop; ik++)
@@ -436,12 +452,12 @@ struct Lindblad : public Integrator<DM1>
                 
                 // deltaH in the Schrodinger picture
                 // deltaH = hbar/2 * deltaOmega, where deltaOmega = gamma * deltaB with gamma == gyromagnetic ratio
-                matrix deltaH = prefac*(deltaB[0]*s.S[0] + deltaB[1]*s.S[1] + deltaB[2]*s.S[2]); 
+                matrix deltaH = prefac*(deltaB[0]*s.S[0] + deltaB[1]*s.S[1] + deltaB[2]*s.S[2]) + 0.5*omega*s.S[2]; // omega*s.S[2] == mean field
                                 
                 //matrix deltaH = zeroes(s.nInner, s.nInner);
                 //deltaH.set(0, 1, deltaOmega*cis(omegaFreq*t));
                 //deltaH.set(1, 0, deltaOmega*cis(-omegaFreq*t));
-                
+                                
                 // convert to interaction picture:
                 for(int n=0; n < s.nInner; n++)
                     for(int m=0; m < s.nInner; m++)
@@ -704,6 +720,9 @@ int main(int argc, char** argv)
 {	
 	InitParams ip = FeynWann::initialize(argc, argv, "Lindblad dynamics in an ab initio Wannier basis");
 	
+    // Initialize random seed to use whenever
+    Random::seed(std::time(0));
+    
 	//Get the system parameters:
 	InputMap inputMap(ip.inputFilename);
 	//--- doping / temperature
