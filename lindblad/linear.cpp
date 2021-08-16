@@ -23,13 +23,13 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 #include <core/Random.h>
 #include <core/string.h>
 #include <commands/command.h>
-#include "FeynWann.h"
-#include "Histogram.h"
-#include "InputMap.h"
-#include "LindbladFile.h"
-#include "Integrator.h"
-#include "BlockCyclicMatrix.h"
 #include <core/Units.h>
+#include <FeynWann.h>
+#include <Histogram.h>
+#include <InputMap.h>
+#include <lindblad/LindbladFile.h>
+#include <Integrator.h>
+#include <BlockCyclicMatrix.h>
 
 #ifdef PETSC_ENABLED
 	#include <petsc.h>

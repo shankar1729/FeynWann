@@ -1,5 +1,5 @@
 project(FeynWann)
-cmake_minimum_required(VERSION 2.8)
+cmake_minimum_required(VERSION 2.8.12...3.20)
 
 set(JDFTX_SRC "<full-path-to-jdftx-src>" CACHE STRING "Full path to the jdftx source root")
 set(JDFTX_BUILD "<full-path-to-jdftx-build>" CACHE STRING "Full path to the jdftx build directory")
@@ -97,7 +97,7 @@ else()
 endif()
 
 #Optional ScaLAPACK:
-option(EnableScaLAPACK "Enable ScaLAPACK support (currently used only by the dense diagonalization in lindbladLinear)")
+option(EnableScaLAPACK "Enable ScaLAPACK support (currently used only by the dense diagonalization in lindblad/linear)")
 if(EnableScaLAPACK)
 	add_definitions("-DSCALAPACK_ENABLED")
 	include_directories(/opt/intel/mkl/include ${MKL_PATH}/include) #needed for c function definitions
@@ -105,15 +105,6 @@ if(EnableScaLAPACK)
 	file(GLOB F_FILES scalapack/*.f)
 	#JDFTx must be built with scalapack support for this to work (not tested in this cmake script)
 endif()
-
-#Optional PETSc to enable linear dynamics in lindbladLinear
-option(EnablePETSc "Enable lindbladian linear dynamics using PETSc" OFF)
-if(EnablePETSc)
-	find_package(PETSc REQUIRED)
-	include_directories("${PETSC_INCLUDE_DIR}")
-	add_definitions("-DPETSC_ENABLED")
-endif()
-
 
 #Main library for FeynWann containing all the auxiliary functionality
 add_library(FeynWann ${LINK_TYPE} FeynWann.cpp DistributedMatrix.cpp InputMap.cpp Histogram.cpp Interp1.cpp BlockCyclicMatrix.cpp ${F_FILES})
@@ -139,14 +130,8 @@ add_FeynWann_executable(ImEps)
 add_FeynWann_executable(ImEpsNonTherm)
 add_FeynWann_executable(circularDichroism)
 add_FeynWann_executable(phononElectronLinewidth)
-add_FeynWann_executable(lindblad)
-add_FeynWann_executable(lindbladInit)
-add_FeynWann_executable(lindbladLinear)
 add_FeynWann_executable(ePhRelax)
 add_FeynWann_executable(ePhSpinRelax)
 add_FeynWann_executable(debugEph)
-add_FeynWann_executable(test)
 
-target_link_libraries(lindblad ${GSL_BLAS_LIBRARY})
-target_link_libraries(lindbladLinear ${GSL_BLAS_LIBRARY} ${PETSC_LIBRARY})
-
+add_subdirectory(lindblad)

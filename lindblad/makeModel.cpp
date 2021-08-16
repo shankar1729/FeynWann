@@ -4,15 +4,11 @@
 #include <core/Random.h>
 #include <core/string.h>
 #include <commands/command.h>
-#include "FeynWann.h"
-#include "Histogram.h"
-#include "InputMap.h"
-#include "LindbladFile.h"
-#include "Integrator.h"
+#include <lindblad/LindbladFile.h>
 #include <core/Units.h>
 
-int main(int argc, char** argv)
-{    
+int main()
+{
     int nBands   = 2;
     int nKpoints = 100;
     
@@ -22,7 +18,7 @@ int main(int argc, char** argv)
     
     std::cout << "omega in ps = " << larmorFreq*1000*fs << std::endl;
     
-    Random::seed(std::time(0));
+    Random::seed(0);
     
     std::vector<LindbladFile::Kpoint> kArray(nKpoints);
     

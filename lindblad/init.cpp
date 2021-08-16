@@ -23,10 +23,10 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 #include <core/Random.h>
 #include <core/string.h>
 #include <core/Units.h>
-#include "FeynWann.h"
-#include "Histogram.h"
-#include "InputMap.h"
-#include "LindbladFile.h"
+#include <FeynWann.h>
+#include <Histogram.h>
+#include <InputMap.h>
+#include <lindblad/LindbladFile.h>
 
 //Reverse iterator for pointers:
 template<class T> constexpr std::reverse_iterator<T*> reverse(T* i) { return std::reverse_iterator<T*>(i); }
