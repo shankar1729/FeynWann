@@ -2,7 +2,7 @@ T           30000    #Kelvin
 dmu         0    #eV
 mode  RealTime    #RealTime or Spectrum
 
-dt      1.      #fs; time step for reporting
+dt      100.      #fs; time step for reporting
 tStop 300000      #fs; end time for simulation
 tStep    0.       #fs; if non-zero, time step for fixed-step integrator
 tolAdaptive 1e-2  #tolerance for adaptive integrator (used only if tStep = 0)
