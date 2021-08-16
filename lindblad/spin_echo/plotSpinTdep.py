@@ -51,8 +51,9 @@ for iFile, fname in enumerate(glob.glob('*.out')):
 	
 	#Rotating frame versions:
 	Sprime = np.zeros(S.shape)
-	Sprime[0] =  S[0]*np.cos(omega*tPS) + S[1]*np.sin(omega*tPS)
-	Sprime[1] = -S[0]*np.sin(omega*tPS) + S[1]*np.cos(omega*tPS)
+	cos_wt, sin_wt = np.cos(omega*tPS), np.sin(omega*tPS)
+	rot = np.array([[cos_wt, sin_wt], [-sin_wt, cos_wt]])
+	Sprime[:2] = np.einsum('ijt, jt -> it', rot, S[:2])
 	Sprime[2] = S[2]
 
 	#Plot each direction in separate panel:
