@@ -20,7 +20,6 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 #include <core/Util.h>
 #include <core/matrix.h>
 #include <core/scalar.h>
-#include <core/Random.h>
 #include <core/string.h>
 #include <commands/command.h>
 #include <FeynWann.h>
@@ -720,9 +719,6 @@ int main(int argc, char** argv)
 {	
 	InitParams ip = FeynWann::initialize(argc, argv, "Lindblad dynamics in an ab initio Wannier basis");
 	
-    // Initialize random seed to use whenever
-    Random::seed(std::time(0));
-    
 	//Get the system parameters:
 	InputMap inputMap(ip.inputFilename);
 	//--- doping / temperature
