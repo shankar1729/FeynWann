@@ -39,7 +39,7 @@ Lindblad::Lindblad(const LindbladParams& lp)
 	nkMine = ikStop-ikStart;
 	state.resize(nkMine);
 	nInnerAll.resize(nk);
-	std::vector<int> isKall(lp.valleyMode==ValleyNone ? 0 : nk, 0); //whether each k-point is closer to K or K'
+	if(lp.valleyMode != ValleyNone) isKall.resize(nk);
 	
 	//Read k-point info and initialize states:
 	mpiWorld->fseek(fp, byteOffsets[ikStart], SEEK_SET);

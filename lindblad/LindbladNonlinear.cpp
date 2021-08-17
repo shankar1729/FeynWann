@@ -2,7 +2,8 @@
 
 
 LindbladNonlinear::LindbladNonlinear(const LindbladParams& lp) : Lindblad(lp)
-{
+{	assert((not lp.spectrumMode) and (not lp.linearized));
+	
 	//Initialize A+ and A- for e-ph matrix elements if required:
 	if(lp.ePhEnabled)
 	{	for(State& s: state)

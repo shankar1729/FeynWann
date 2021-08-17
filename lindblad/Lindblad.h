@@ -28,10 +28,14 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 #ifdef PETSC_ENABLED
 	#include <petsc.h>
 	
-	//Slightly more graceful wrapper to CHKERRQ() macro from Petsc:
+	//Replacement for CHKERRQ() macro in Petsc:
 	#define CHECKERR(codeLine) \
 		{	PetscInt iErr = codeLine; \
-			CHKERRQ(iErr); \
+			if(iErr) \
+			{	char* errMessage; \
+				PetscErrorMessage(iErr, NULL, &errMessage); \
+				die("PETSc error: %s\n\n", errMessage); \
+			} \
 		}
 #else
 	#define PetscErrorCode int
@@ -53,7 +57,7 @@ struct LindbladParams
 	double dmu; //!< Fermi level position relative to neutral value / VBM
 	double T; //!< Temperature
 	
-	double dt, tStop; //!< Time evolution reprtin interval and end time
+	double dt, tStop; //!< Time evolution reporting interval and end time
 	double tStep; //!< Explicit time evolution step size (fixed integrator)
 	double tolAdaptive; //!< Adaptive integrator relative tolerance
 
@@ -122,6 +126,7 @@ protected:
 	};
 	std::vector<State> state; //!< all information read from lindbladInit output (e and e-ph properties) + extra local variables above
 	std::vector<int> nInnerAll; //!< nInner for all k-points on all processes
+	std::vector<int> isKall; //whether each k-point is closer to K or K' (used only if valleyMode is not ValleyNone)
 	double Emin, Emax; //!< energy range of active space across all k (for spin and number density output)
 	
 	//---- Flat density matrix storage and access functions ----
@@ -161,8 +166,8 @@ public:
 //Base class of lindblad implementations with explicit time-evolution matrix (in LindbladMatrix.cpp)
 class LindbladMatrix : public Lindblad
 {
-	PetscErrorCode initialize();
-public:
+protected:
+	void initializeMatrix();
 	LindbladMatrix(const LindbladParams& lp);
 	virtual ~LindbladMatrix();
 };
@@ -170,7 +175,15 @@ public:
 
 //Linearized real-time Lindblad dynamics (in LindbladLinear.cpp)
 class LindbladLinear : public LindbladMatrix
-{
+{	friend class LindbladMatrix;
+	std::vector<int> nnzD, nnzO; //!< number of process-diagonal and process off-diagonal entries by row
+	#ifdef PETSC_ENABLED
+	Mat evolveMat; //!< Time evolution operator
+	Vec vRho, vRhoDot; //!< temporary copies of drho and rdhoDot data in Petsc format
+	void initialize(); //Initialize Petsc library
+	void cleanup(); //Clean up Petsc quantities and library
+	#endif
+
 public:
 	LindbladLinear(const LindbladParams& lp);
 	virtual ~LindbladLinear();
@@ -179,7 +192,12 @@ public:
 
 //Diagonalization of Lindblad superoperator to get time evolution spectrum (in LindbladSpectrum.cpp)
 class LindbladSpectrum : public LindbladMatrix
-{
+{	friend class LindbladMatrix;
+	std::vector<std::vector<std::pair<double,int>>> evolveEntries; //intermediate matrix elements by target process
+	#ifdef SCALAPACK_ENABLED
+	std::shared_ptr<BlockCyclicMatrix> bcm;  //Block-cyclic matrix descriptor
+	BlockCyclicMatrix::Buffer evolveMat, spinMat, spinPert; //Time evolution, spin and spin perturbation matrices
+	#endif
 public:
 	LindbladSpectrum(const LindbladParams& lp);
 	virtual ~LindbladSpectrum();

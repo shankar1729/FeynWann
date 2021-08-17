@@ -57,7 +57,9 @@ int main(int argc, char** argv)
 		lp.tolAdaptive = inputMap.get("tolAdaptive", 1e-3); //relative tolerance for adaptive integrator
 	}
 	//--- pump
-	const string pumpMode = inputMap.getString("pumpMode"); //must be Evolve, Perturb or Bfield
+	const string pumpMode = lp.spectrumMode
+		? "Bfield" //only uses pumpB to set perturbation strength for spectrum mode
+		: inputMap.getString("pumpMode"); //must be Evolve, Perturb or Bfield
 	if(pumpMode!="Evolve" and pumpMode!="Perturb" and pumpMode!="Bfield")
 		die("\npumpMode must be 'Evolve' or 'Perturb' pr 'Bfield'\n");
 	lp.pumpEvolve = (pumpMode == "Evolve");
