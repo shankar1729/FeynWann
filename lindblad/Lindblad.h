@@ -117,14 +117,25 @@ protected:
 	{	int innerStop; //end of active inner window range (relative to outer window)
 		diagMatrix rho0; //equilibrium / initial density matrix (diagonal)
 		matrix pumpPD; //P matrix elements at pump polarization x energy conservation delta (D), but without A0 and time factor
+		matrix rho; //density matrix in current state of the system
+		matrix rhoDot; //contribution to drho/dt at current state (collected together with Lindblad::rhoDot
 	};
 	std::vector<State> state; //!< all information read from lindbladInit output (e and e-ph properties) + extra local variables above
 	std::vector<int> nInnerAll; //!< nInner for all k-points on all processes
 	double Emin, Emax; //!< energy range of active space across all k (for spin and number density output)
 	
+	//---- Flat density matrix storage and access functions ----
+	DM1 drho; //!< flat array of change in density matrices (relative to rho0) of all k stored on this process
 	std::vector<double> Eall; //!< inner window energies for all k (only needed and initialized when ePhEnabled)
 	std::vector<size_t> nInnerPrev; //!< cumulative nInner for each k, which is the offset into the Eall array for each k
-	double tPrev; //last time at which compute() was called; used internally to update e-ph operator phases
+	std::vector<size_t> nRhoPrev; //cumulative nInner^2 for each k, which is the offset into the global rho structure for each k
+	std::vector<size_t> rhoOffset; //!< array of offsets into process's rho for each k
+	std::vector<size_t> rhoSize; //!< total size of rho on each process
+	size_t rhoOffsetGlobal; //!< offset of current process rho data in the overall data
+	size_t rhoSizeTot; //!< total size of rho
+	inline matrix getRho(const double* rhoData, int N) const; //!< Get an NxN complex Hermitian matrix from a real array of length N^2
+	inline void accumRho(const diagMatrix& in, double* rhoData) const; //!< Accumulate a diagonal matrix to a real array of length N^2
+	inline void accumRhoHC(const matrix& in, double* rhoData) const; //!< Accumulate NxN matrix + its H.C. to a real array of length N^2
 	
 	const vector3<> K, Kp; //!< K and K' valley in reciprocal lattice coordinates
 	static inline vector3<> wrap(const vector3<>& x); //!< Wrap fratcional coordinates to fundamental interval
@@ -185,5 +196,61 @@ inline vector3<> Lindblad::wrap(const vector3<>& x)
 	return result;
 }
 
-#endif
 
+//Get an NxN complex Hermitian matrix from a real array of length N^2
+inline matrix Lindblad::getRho(const double* rhoData, int N) const
+{	matrix out(N, N); complex* outData = out.data();
+	for(int i=0; i<N; i++)
+		for(int j=0; j<=i; j++)
+		{	int i1 = i+N*j, i2 = j+N*i;
+			if(i==j)
+				outData[i1] = rhoData[i1];
+			else
+				outData[i2] = (outData[i1] = complex(rhoData[i1],rhoData[i2])).conj();
+		}
+	return out;
+}
+
+
+//Accumulate a diagonal matrix to a real array of length N^2
+inline void Lindblad::accumRho(const diagMatrix& in, double* rhoData) const
+{	const int N = in.nRows();
+	for(int i=0; i<N; i++)
+	{	*(rhoData) += in[i];
+		rhoData += (N+1); //advance to next diagonal entry
+	}
+}
+
+
+//Accumulate an NxN matrix and its Hermitian conjugate to a real array of length N^2
+inline void Lindblad::accumRhoHC(const matrix& in, double* rhoData) const
+{	const complex* inData = in.data();
+	const int N = in.nRows();
+	for(int i=0; i<N; i++)
+		for(int j=0; j<=i; j++)
+		{	int i1 = i+N*j, i2 = j+N*i;
+			if(i==j)
+				rhoData[i1] += 2*inData[i1].real();
+			else
+			{	complex hcSum = inData[i1] + inData[i2].conj();
+				rhoData[i1] += hcSum.real();
+				rhoData[i2] += hcSum.imag();
+			}
+		}
+}
+
+
+//Dot product for contracting dipole matrix elements to specified polarization:
+inline matrix dot(const matrix* P, vector3<complex> pol)
+{	return pol[0]*P[0] + pol[1]*P[1] + pol[2]*P[2];
+}
+
+
+//Construct identity - X:
+inline diagMatrix bar(const diagMatrix& X)
+{	diagMatrix Xbar(X);
+	for(double& x: Xbar) x = 1. - x;
+	return Xbar;
+}
+
+#endif

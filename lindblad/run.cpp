@@ -99,6 +99,7 @@ int main(int argc, char** argv)
 	EnumStringMap<ValleyMode> valleyModeMap(ValleyNone, "None", ValleyInter, "Inter", ValleyIntra, "Intra");
 	if(not valleyModeMap.getEnum(valleyModeStr.c_str(), lp.valleyMode))
 		die("\nvalleyMode must be 'None' or 'Intra' or 'Inter'\n");
+	lp.initialize(); //update derived parameters
 
 	//Report converted input parameters as a check:
 	logPrintf("\nInputs after conversion to atomic units:\n");
@@ -169,4 +170,9 @@ int main(int argc, char** argv)
 		return 0;
 	}
 	logPrintf("\n");
+	
+	//Cleanup:
+	lbl = 0;
+	FeynWann::finalize();
+	return 0;
 }
