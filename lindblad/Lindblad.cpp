@@ -131,7 +131,117 @@ Lindblad::Lindblad(const LindbladParams& lp)
 
 
 void Lindblad::calculate()
-{	//TODO
+{
+	if(not (lp.pumpEvolve or lp.ePhEnabled))
+	{	//Simple probe - one-shot-pump - probe with no relaxation:
+		report(-lp.dt, drho);
+		applyPump(); //one-shot optical pump or B-field excitation
+		report(0., drho);
+	}
+	else
+	{	//Pump and time evolve with continuous probe:
+		//Initialization:
+		double tStart = 0.;
+		if(readCheckpoint(tStart))
+		{	//tStart and stepID already set to end of previously checkpointed run.
+			//No other initialization needed.
+		}
+		else
+		{	if(lp.pumpEvolve)
+			{	//Set start time to a multiple of dt that covers pulse:
+				tStart = -lp.dt * ceil(5.*lp.tau/lp.dt);
+				//pump will be included in evolution below
+			}
+			else
+			{	report(-lp.dt, drho); //initial-state report
+				applyPump(); //takes care of optical pump or B-field excitation
+				tStart = 0.; //integrate will report at t=0 below, before evolving ePh relaxation
+			}
+		}
+		
+		//Evolution:
+		if(lp.tStep) //Fixed-step integrator:
+			integrateFixed(drho, tStart, lp.tStop, lp.tStep, lp.dt);
+		else //Adaptive integrator:
+			integrateAdaptive(drho, tStart, lp.tStop, lp.tolAdaptive, lp.dt);
+	}
+}
+
+
+void Lindblad::applyPump()
+{
+}
+
+
+bool Lindblad::readCheckpoint(double& t)
+{	//Check checkpoimnt availability:
+	bool checkpointExists = false;
+	if(mpiWorld->isHead())
+		checkpointExists = ((lp.checkpointFile.length() > 0) //checkpoint specified
+			and (fileSize(lp.checkpointFile.c_str())>0)); // ... and is readable
+	mpiWorld->bcast(checkpointExists);
+
+	if(checkpointExists)
+	{	logPrintf("Reading checkpoint from '%s' ... ", lp.checkpointFile.c_str()); logFlush(); 
+
+		//Determine offset of current process data and total expected file length:
+		size_t headerLength = sizeof(int) + sizeof(double);
+		size_t offset = headerLength + sizeof(double)*rhoOffsetGlobal;
+		size_t fsizeExpected = headerLength + sizeof(double)*rhoSizeTot;
+
+		//Open check point file and read step/time header:
+		MPIUtil::File fp;
+		mpiWorld->fopenRead(fp, lp.checkpointFile.c_str(), fsizeExpected);
+		mpiWorld->fread(&stepID, sizeof(int), 1, fp);
+		mpiWorld->fread(&t, sizeof(double), 1, fp);
+		mpiWorld->bcast(t);
+
+		//Read density matrix from check point file:
+		mpiWorld->fseek(fp, offset, SEEK_SET);
+		mpiWorld->fread(drho.data(), sizeof(double), drho.size(), fp);
+		mpiWorld->fclose(fp);
+		logPrintf("done.\n");
+	}
+	return checkpointExists;
+}
+
+
+void Lindblad::writeCheckpoint(double t) const
+{
+	if(not lp.checkpointFile.length()) return; //checkpoint disabled
+#ifdef MPI_SAFE_WRITE
+	if(mpiWorld->isHead())
+	{	FILE* fp = fopen(lp.checkpointFile.c_str(), "w");
+		fwrite(&stepID, sizeof(int), 1, fp);
+		fwrite(&t, sizeof(double), 1, fp);
+		//Data from head:
+		fwrite(drho.data(), sizeof(double), drho.size(), fp);
+		//Data from remaining processes:
+		for(int jProc=1; jProc<mpiWorld->nProcesses(); jProc++)
+		{	DM1 buf(rhoSize[jProc]);
+			mpiWorld->recvData(buf, jProc, 0); //recv data to be written
+			fwrite(buf.data(), sizeof(double), buf.size(), fp);
+		}
+		fclose(fp);
+	}
+	else mpiWorld->sendData(drho, 0, 0); //send to head for writing
+#else
+	//Write in parallel using MPI I/O:
+	MPIUtil::File fp;
+	mpiWorld->fopenWrite(fp, lp.checkpointFile.c_str());
+	//--- Write current step and time as a header:
+	if(mpiWorld->isHead())
+	{	mpiWorld->fwrite(&stepID, sizeof(int), 1, fp);
+		mpiWorld->fwrite(&t, sizeof(double), 1, fp);
+	}
+	//--- Move to location of this process's data:
+	size_t offset = sizeof(int) + sizeof(double); //offset due to header
+	offset += sizeof(double)*rhoOffsetGlobal; //offset due to data from previous processes
+	mpiWorld->fseek(fp, offset, SEEK_SET);
+	//--- Write this process's data:
+	mpiWorld->fwrite(drho.data(), sizeof(double), drho.size(), fp);
+	mpiWorld->fclose(fp);
+#endif
 }
 
 

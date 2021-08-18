@@ -151,6 +151,11 @@ public:
 	virtual ~Lindblad() {}
 	virtual void calculate(); //set up initial state and run dynamics as specified
 
+	//Steps within calculate:
+	bool readCheckpoint(double& t); //read checkpoint file; set final t and return true if state loaded
+	void writeCheckpoint(double t) const; //write checkpoint file corresponding to time t
+	void applyPump(); //one-shot pump (optical or Bfield)
+
 	//Interface to Integrator:
 	DM1 compute(double t, const DM1& v); //specify differential equation for time evolution
 	void report(double t, const DM1& v) const; //called by integrator for periodic reporting
