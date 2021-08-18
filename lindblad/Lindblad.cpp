@@ -169,7 +169,42 @@ void Lindblad::calculate()
 
 
 void Lindblad::applyPump()
-{
+{	static StopWatch watch("Lindblad::applyPump"); 
+	if(lp.pumpEvolve) return; //only use this function when perturbing instantly
+	watch.start();
+	const State* sPtr = state.data();
+	//Perturb each k separately:
+	for(size_t ik=ikStart; ik<ikStop; ik++)
+	{	const State& s = *(sPtr++);
+		if(lp.pumpBfield)
+		{	//Construct Hamiltonian including magnetic field contribution:
+			matrix Htot(s.E(s.innerStart, s.innerStart+s.nInner));
+			for(int iDir=0; iDir<3; iDir++) //Add Zeeman Hamiltonian
+				Htot -= lp.pumpB[iDir] * s.S[iDir];
+			//Set rho to Fermi function of this perturbed Hamiltonian:
+			diagMatrix Epert; matrix Vpert;
+			Htot.diagonalize(Vpert, Epert);
+			diagMatrix fPert(s.nInner);
+			for(int b=0; b<s.nInner; b++)
+				fPert[b] = fermi((Epert[b] - lp.dmu) * lp.invT);
+			matrix rhoPert = Vpert * fPert * dagger(Vpert);
+			accumRhoHC(0.5*(rhoPert-s.rho0), drho.data()+rhoOffset[ik]);
+		}
+		else
+		{	const diagMatrix& rho0 = s.rho0;
+			diagMatrix rho0bar = bar(rho0); //1-rho0
+			//Compute and apply perturbation:
+			matrix P = s.pumpPD; //P-
+			matrix Pdag = dagger(P); //P+
+			matrix deltaRho;
+			for(int s=-1; s<=+1; s+=2)
+			{	deltaRho += rho0bar*P*rho0*Pdag - Pdag*rho0bar*P*rho0;
+				std::swap(P, Pdag); //P- <--> P+
+			}
+			accumRhoHC((M_PI*std::pow(lp.pumpA0, 2)) * deltaRho, drho.data()+rhoOffset[ik]);
+		}
+	}
+	watch.stop();
 }
 
 
