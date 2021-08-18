@@ -148,7 +148,7 @@ protected:
 
 public:
 	Lindblad(const LindbladParams& lp);
-	virtual ~Lindblad();
+	virtual ~Lindblad() {}
 	DM1 compute(double t, const DM1& v); //specify differential equation for time evolution
 	void report(double t, const DM1& v) const; //called by integrator for periodic reporting
 };
@@ -159,7 +159,7 @@ class LindbladNonlinear : public Lindblad
 {
 public:
 	LindbladNonlinear(const LindbladParams& lp);
-	virtual ~LindbladNonlinear();
+	virtual ~LindbladNonlinear() {}
 };
 
 
@@ -168,8 +168,8 @@ class LindbladMatrix : public Lindblad
 {
 protected:
 	void initializeMatrix();
-	LindbladMatrix(const LindbladParams& lp);
-	virtual ~LindbladMatrix();
+	LindbladMatrix(const LindbladParams& lp) : Lindblad(lp) {}
+	virtual ~LindbladMatrix() {}
 };
 
 
@@ -200,7 +200,7 @@ class LindbladSpectrum : public LindbladMatrix
 	#endif
 public:
 	LindbladSpectrum(const LindbladParams& lp);
-	virtual ~LindbladSpectrum();
+	virtual ~LindbladSpectrum() {}
 };
 
 

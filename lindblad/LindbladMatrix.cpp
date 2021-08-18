@@ -1,16 +1,6 @@
 #include <lindblad/Lindblad.h>
 
 
-LindbladMatrix::LindbladMatrix(const LindbladParams& lp) : Lindblad(lp)
-{
-}
-
-
-LindbladMatrix::~LindbladMatrix()
-{
-}
-
-
 void LindbladMatrix::initializeMatrix()
 {
 	assert(lp.ePhEnabled);
@@ -146,7 +136,7 @@ void LindbladMatrix::initializeMatrix()
 									ls->evolveEntries[whose].push_back(std::make_pair(M,localIndex)); \
 								} \
 							} \
-						} /* TODO */ \
+						} \
 					}
 					EXTRACT_NNZ(1,2)
 					EXTRACT_NNZ(2,1)

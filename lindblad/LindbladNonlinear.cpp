@@ -14,8 +14,3 @@ LindbladNonlinear::LindbladNonlinear(const LindbladParams& lp) : Lindblad(lp)
 		}
 	}
 }
-
-
-LindbladNonlinear::~LindbladNonlinear()
-{
-}

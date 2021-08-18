@@ -127,8 +127,3 @@ LindbladSpectrum::LindbladSpectrum(const LindbladParams& lp)
 		#endif
 	}
 }
-
-
-LindbladSpectrum::~LindbladSpectrum()
-{
-}
