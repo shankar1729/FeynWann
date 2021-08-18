@@ -343,12 +343,27 @@ void Lindblad::writeCheckpoint(double t) const
 
 
 DM1 Lindblad::compute(double t, const DM1& drho)
-{	for(State& s: state)
+{	double pumpPrefac = lp.pumpEvolve
+		? sqrt(M_PI) * std::pow(lp.pumpA0, 2) * exp(-(t*t)/std::pow(lp.pumpTau, 2)) / lp.pumpTau
+		: 0.;
+	
+	for(State& s: state)
 	{	//Convert interaction picture input to Schrodinger picture within state:
 		setState(t, drho, s);
 		
-		//k-diagonal contributions:
-		rhoDotPump(s);
+		//---- k-diagonal contributions -----
+		
+		//Pump:
+		if(lp.pumpEvolve)
+		{	matrix P = s.pumpPD; //P-
+			matrix Pdag = dagger(P); //P+
+			const matrix rhoBar = s.rho; //1-rho
+			for(int sign=-1; sign<=+1; sign+=2)
+			{	s.rhoDot += pumpPrefac * (rhoBar * P * s.rho * Pdag
+										- Pdag * rhoBar * P * s.rho); //+HC added by getRhoDot()
+				std::swap(P, Pdag); //P- <--> P+
+			}
+		}
 		
 		//Time-dependent magnetic field contribution:
 		//TODO
@@ -445,7 +460,7 @@ void Lindblad::report(double t, const DM1& drho) const
 	for(Histogram& h: dist) h.reduce(MPIUtil::ReduceSum);
 	if(mpiWorld->isHead())
 	{	//Report step ID and energy:
-		logPrintf("Integrate: Step: %4d   t[fs]: %6.1lf   Etot[eV]: %.6lf   dfMax: %.4lf", stepID, t/fs, Etot/eV, dfMax);
+		logPrintf("Integrate: Step: %4d   t[fs]: %6.1lf   Etot[eV]: %.2le   dfMax: %.2le", stepID, t/fs, Etot/eV, dfMax);
 		if(spinorial) logPrintf("   S: [ %16.15lg %16.15lg %16.15lg ]", Stot[0],  Stot[1],  Stot[2]);
 		logPrintf("\n"); logFlush();
 		

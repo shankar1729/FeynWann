@@ -161,7 +161,6 @@ protected:
 	void getStateDot(const State& s, DM1& rhoDot) const; //!< SP s.rhoDot -> IP rhoDot (at t from last setState())
 
 	//Interface to contributions implemented in subclasses (works on data within state):
-	virtual void rhoDotPump(State& s) = 0; //contribution of pump to specific state
 	virtual void rhoDotScatter() = 0; //overall scattering contribution coupling all states
 
 public:
@@ -189,7 +188,6 @@ public:
 	virtual ~LindbladNonlinear() {}
 
 protected:
-	virtual void rhoDotPump(State& s);
 	virtual void rhoDotScatter();
 };
 
@@ -220,7 +218,6 @@ public:
 	virtual ~LindbladLinear();
 
 protected:
-	virtual void rhoDotPump(State& s);
 	virtual void rhoDotScatter();
 };
 
@@ -240,7 +237,6 @@ public:
 	virtual void calculate(); //override dynamics with spectrum calculation
 
 protected:
-	virtual void rhoDotPump(State& s) {} //Not used; no dynamics
 	virtual void rhoDotScatter() {} //Not used; no dynamics
 };
 

@@ -37,11 +37,6 @@ LindbladLinear::~LindbladLinear()
 }
 
 
-void LindbladLinear::rhoDotPump(Lindblad::State& s)
-{	//TODO
-}
-
-
 void LindbladLinear::rhoDotScatter()
 {	//TODO
 }
