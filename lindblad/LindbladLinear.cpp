@@ -38,7 +38,30 @@ LindbladLinear::~LindbladLinear()
 
 
 void LindbladLinear::rhoDotScatter()
-{	//TODO
+{	static StopWatch watch("LindbladLinear::rhoDotScatter");
+	if(lp.ePhEnabled)
+	{	watch.start();
+
+		//Convert drho to PETSc format:
+		double* vRhoPtr;
+		VecGetArray(vRho, &vRhoPtr);
+		eblas_zero(drho.size(), vRhoPtr);
+		for(const State& s: state)
+			accumRhoHC(0.5*s.drho, vRhoPtr+rhoOffset[s.ik]);
+		VecRestoreArray(vRho, &vRhoPtr);
+
+		//Apply sparse operator using PETSc:
+		MatMult(evolveMat, vRho, vRhoDot);
+
+		//Extract rhoDot into state from PETSc:
+		const double* vRhoDotPtr;
+		VecGetArrayRead(vRhoDot, &vRhoDotPtr);
+		for(State& s: state)
+			s.rhoDot += 0.5 * getRho(vRhoDotPtr+rhoOffset[s.ik], s.nInner); //0.5 to compensate for +HC added later
+		VecRestoreArrayRead(vRhoDot, &vRhoDotPtr);
+
+		watch.stop();
+	}
 }
 
 
