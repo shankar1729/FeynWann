@@ -130,6 +130,11 @@ Lindblad::Lindblad(const LindbladParams& lp)
 }
 
 
+void Lindblad::calculate()
+{	//TODO
+}
+
+
 DM1 Lindblad::compute(double t, const DM1& v)
 {
 	return DM1(); //TODO

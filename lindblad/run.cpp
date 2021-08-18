@@ -92,6 +92,8 @@ int main(int argc, char** argv)
 	if(ePhMode!="Off" and ePhMode!="DiagK")
 		die("\nePhMode must be 'Off' or 'DiagK'\n");
 	lp.ePhEnabled = (ePhMode != "Off");
+	if(lp.spectrumMode and (not lp.ePhEnabled))
+		die("\nePhMode must be 'DiagK' in Spectrum mode\n");
 	lp.defectFraction = inputMap.get("defectFraction", 0.); //fractional concentration of defects if any
 	lp.verbose = inputMap.getBool("verbose", false);
 	lp.inFile = inputMap.has("inFile") ? inputMap.getString("inFile") : "ldbd.dat"; //input file name
@@ -172,6 +174,9 @@ int main(int argc, char** argv)
 		return 0;
 	}
 	logPrintf("\n");
+	
+	//Perform requestec actions (dynamics/spectrum):
+	lbl->calculate();
 	
 	//Cleanup:
 	lbl = 0;

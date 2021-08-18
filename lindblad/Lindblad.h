@@ -149,6 +149,9 @@ protected:
 public:
 	Lindblad(const LindbladParams& lp);
 	virtual ~Lindblad() {}
+	virtual void calculate(); //set up initial state and run dynamics as specified
+
+	//Interface to Integrator:
 	DM1 compute(double t, const DM1& v); //specify differential equation for time evolution
 	void report(double t, const DM1& v) const; //called by integrator for periodic reporting
 };
@@ -201,6 +204,7 @@ class LindbladSpectrum : public LindbladMatrix
 public:
 	LindbladSpectrum(const LindbladParams& lp);
 	virtual ~LindbladSpectrum() {}
+	virtual void calculate(); //override dynamics with spectrum calculation
 };
 
 
