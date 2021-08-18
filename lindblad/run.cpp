@@ -87,6 +87,7 @@ int main(int argc, char** argv)
 	lp.domega = inputMap.get("domega", lp.pol.size() ? NAN : 0.) * eV; //frequency resolution for probe calculation
 	lp.tau = inputMap.get("tau", lp.pol.size() ? NAN : 0.) * fs; //Gaussian probe pulse width (sigma of amplitude) in fs
 	//--- general options
+	lp.Bext = inputMap.getVector("Bext", vector3<>()) * Tesla; //constant external magnetic field post-initialization in Tesla
 	lp.dE = inputMap.get("dE") * eV; //energy resolution for distribution functions
 	const string ePhMode = inputMap.getString("ePhMode"); //must be Off or DiagK (add FullK in future)
 	if(ePhMode!="Off" and ePhMode!="DiagK")
@@ -96,6 +97,7 @@ int main(int argc, char** argv)
 		die("\nePhMode must be 'DiagK' in Spectrum mode\n");
 	lp.defectFraction = inputMap.get("defectFraction", 0.); //fractional concentration of defects if any
 	lp.verbose = inputMap.getBool("verbose", false);
+	lp.saveDist = inputMap.getBool("saveDist", true);
 	lp.inFile = inputMap.has("inFile") ? inputMap.getString("inFile") : "ldbd.dat"; //input file name
 	lp.checkpointFile = inputMap.has("checkpointFile") ? inputMap.getString("checkpointFile") : ""; //checkpoint file name
 	lp.evecFile = inputMap.has("evecFile") ? inputMap.getString("evecFile") : "ldbd.evecs"; //eigenvector file name
@@ -147,6 +149,7 @@ int main(int argc, char** argv)
 	logPrintf("ePhMode = %s\n", ePhMode.c_str());
 	logPrintf("defectFraction = %lg\n", lp.defectFraction);
 	logPrintf("verbose = %s\n", lp.verbose ? "yes" : "no");
+	logPrintf("saveDist = %s\n", lp.saveDist ? "yes" : "no");
 	logPrintf("inFile = %s\n", lp.inFile.c_str());
 	logPrintf("checkpointFile = %s\n", lp.checkpointFile.c_str());
 	logPrintf("evecFile = %s\n", lp.evecFile.c_str());

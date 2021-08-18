@@ -67,6 +67,7 @@ struct LindbladParams
 
 	bool pumpBfield; //!< whether the "pump" is a magnetic field initialization
 	vector3<> pumpB; //!< initialization magnetic field
+	vector3<> Bext; //!< constant external magnetic field applied post-initialization
 
 	double omegaMin, domega, omegaMax; //!< probe frequency grid
 	double tau; //!< probe width
@@ -84,6 +85,7 @@ struct LindbladParams
 	double defectFraction; //!< defect fraction if present
 	ValleyMode valleyMode; //!< whether all k-pairs (None) or only those corresponding to Intra/Inter-valley scattering are included
 	bool verbose; //!< whether to print more detailed stats during evolution
+	bool saveDist; //!< whether to save distributions at each reporting step
 	string inFile; //!< file name to get lindblad data from
 	string checkpointFile; //!< file name to save checkpoint data to
 	string evecFile; //!< filename to write eigenvectors to in spectrum mode
@@ -118,11 +120,19 @@ protected:
 	inline int whose(size_t ik) const { return kDivision.whose(ik); } //!< find out which process (in mpiWorld) this k-point belongs to
 
 	struct State : LindbladFile::Kpoint
-	{	int innerStop; //end of active inner window range (relative to outer window)
+	{	int ik; //global index of current k
+		int innerStop; //end of active inner window range (relative to outer window)
 		diagMatrix rho0; //equilibrium / initial density matrix (diagonal)
 		matrix pumpPD; //P matrix elements at pump polarization x energy conservation delta (D), but without A0 and time factor
-		matrix rho; //density matrix in current state of the system
-		matrix rhoDot; //contribution to drho/dt at current state (collected together with Lindblad::rhoDot
+		
+		//Handling of off-diagonal constant perturbations built into effective H0:
+		matrix V0; //if non-null, eigenvectors of H0 (i.e. H0 is not diagonal)
+		diagMatrix E0; //eigenvalues of H0 (equal to, or perturbed relative to E[innerStart:innerStop])
+
+		matrix phase; //exp(-i H0 t) phases / unitary transform from interaction to Schrodinger picture
+		matrix drho; //change of matrix from rho0 (Schrodinger picture)
+		matrix rho; //density matrix in current state of the system (Schrodinger picture)
+		matrix rhoDot; //contribution to drho/dt at current state (Schrodinger picture, before a global +H.C. added in getStateDot())
 	};
 	std::vector<State> state; //!< all information read from lindbladInit output (e and e-ph properties) + extra local variables above
 	std::vector<int> nInnerAll; //!< nInner for all k-points on all processes
@@ -146,15 +156,24 @@ protected:
 	static inline vector3<> wrap(const vector3<>& x); //!< Wrap fratcional coordinates to fundamental interval
 	inline bool isKvalley(vector3<> k) const { return (wrap(K-k)).length_squared() < (wrap(Kp-k)).length_squared(); }
 
+	//Scrodinger picture (SP) <-> interaction picture (IP) interface:
+	void setState(double t, const DM1& drho, State& s) const; //!< IP drho -> SP s.drho (also zero out s.rhoDot)
+	void getStateDot(const State& s, DM1& rhoDot) const; //!< SP s.rhoDot -> IP rhoDot (at t from last setState())
+
+	//Interface to contributions implemented in subclasses (works on data within state):
+	virtual void rhoDotPump(State& s) = 0; //contribution of pump to specific state
+	virtual void rhoDotScatter() = 0; //overall scattering contribution coupling all states
+
 public:
 	Lindblad(const LindbladParams& lp);
 	virtual ~Lindblad() {}
-	virtual void calculate(); //set up initial state and run dynamics as specified
+	virtual void calculate(); //!< set up initial state and run dynamics as specified
 
 	//Steps within calculate:
-	bool readCheckpoint(double& t); //read checkpoint file; set final t and return true if state loaded
-	void writeCheckpoint(double t) const; //write checkpoint file corresponding to time t
-	void applyPump(); //one-shot pump (optical or Bfield)
+	void applyPump(); //!< one-shot pump (optical or Bfield)
+	bool readCheckpoint(double& t); //!< read checkpoint file; set final t and return true if state loaded
+	void writeCheckpoint(double t) const; //!< write checkpoint file corresponding to time t
+	void writeImEps(string fname) const; //!< Write probe response at current rho
 
 	//Interface to Integrator:
 	DM1 compute(double t, const DM1& v); //specify differential equation for time evolution
@@ -168,6 +187,10 @@ class LindbladNonlinear : public Lindblad
 public:
 	LindbladNonlinear(const LindbladParams& lp);
 	virtual ~LindbladNonlinear() {}
+
+protected:
+	virtual void rhoDotPump(State& s);
+	virtual void rhoDotScatter();
 };
 
 
@@ -195,6 +218,10 @@ class LindbladLinear : public LindbladMatrix
 public:
 	LindbladLinear(const LindbladParams& lp);
 	virtual ~LindbladLinear();
+
+protected:
+	virtual void rhoDotPump(State& s);
+	virtual void rhoDotScatter();
 };
 
 
@@ -206,12 +233,16 @@ class LindbladSpectrum : public LindbladMatrix
 	std::shared_ptr<BlockCyclicMatrix> bcm;  //Block-cyclic matrix descriptor
 	BlockCyclicMatrix::Buffer evolveMat, spinMat, spinPert; //Time evolution, spin and spin perturbation matrices
 	#endif
+
 public:
 	LindbladSpectrum(const LindbladParams& lp);
 	virtual ~LindbladSpectrum() {}
 	virtual void calculate(); //override dynamics with spectrum calculation
-};
 
+protected:
+	virtual void rhoDotPump(State& s) {} //Not used; no dynamics
+	virtual void rhoDotScatter() {} //Not used; no dynamics
+};
 
 
 //----- Inline function implementations -----
@@ -277,6 +308,18 @@ inline matrix dot(const matrix* P, vector3<complex> pol)
 inline diagMatrix bar(const diagMatrix& X)
 {	diagMatrix Xbar(X);
 	for(double& x: Xbar) x = 1. - x;
+	return Xbar;
+}
+
+//Construct identity - X:
+inline matrix bar(const matrix& X)
+{	matrix Xbar(X);
+	complex* XbarData = Xbar.data();
+	for(int j=0; j<X.nCols(); j++)
+		for(int i=0; i<X.nRows(); i++)
+		{	(*XbarData) = (i==j ? 1. : 0.) - (*XbarData);
+			XbarData++;
+		}
 	return Xbar;
 }
 

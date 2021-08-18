@@ -14,3 +14,13 @@ LindbladNonlinear::LindbladNonlinear(const LindbladParams& lp) : Lindblad(lp)
 		}
 	}
 }
+
+
+void LindbladNonlinear::rhoDotPump(Lindblad::State& s)
+{	//TODO
+}
+
+
+void LindbladNonlinear::rhoDotScatter()
+{	//TODO
+}

@@ -37,6 +37,16 @@ LindbladLinear::~LindbladLinear()
 }
 
 
+void LindbladLinear::rhoDotPump(Lindblad::State& s)
+{	//TODO
+}
+
+
+void LindbladLinear::rhoDotScatter()
+{	//TODO
+}
+
+
 //------ PETSC library initalize and cleanup ------
 
 #ifdef PETSC_ENABLED
