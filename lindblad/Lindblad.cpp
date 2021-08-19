@@ -4,6 +4,42 @@
 #include <Histogram.h>
 
 
+void LindbladParams::initialize()
+{	invT = 1./T;
+	nomega = 1 + int(round((omegaMax-omegaMin)/domega));
+	
+	//Spin echo setup:
+	spinEchoOmega = 2.*Bext.length();
+	if(spinEchoB.length_squared())
+	{
+		//Check specified magnetic fields:
+		const double tol = 1E-6;
+		if(not Bext.length_squared())
+			die("Spin echo requires non-zero magnetic field Bext.\n\n");
+		vector3<> BextHat = normalize(Bext); //unit vector of precession axis
+		vector3<> spinEchoBhat = normalize(spinEchoB); //unit vector of starting rotational field
+		if(fabs(dot(spinEchoBhat, BextHat)) > tol)
+			die("spinEchoB must be perpendicular to Bext\n\n");
+		
+		//Compute rotation matrix and period:
+		spinEchoRot.set_col(0, spinEchoBhat);
+		spinEchoRot.set_col(1, cross(BextHat, spinEchoBhat));
+		spinEchoRot.set_col(2, BextHat);
+		spinEchoFlipTime = M_PI/(2.*spinEchoB.length());
+	}
+	else spinEchoFlipTime = 0.; //can use as a flag to check if spin echo being used
+}
+
+
+vector3<> LindbladParams::spinEchoTransform(vector3<> v, double t) const
+{	vector3<> vRef = v * spinEchoRot; //rotate to reference orientation (Bext along z)
+	double c = cos(spinEchoOmega*t), s = sin(spinEchoOmega*t);
+	vector3<> vLabRef(c*vRef[0]-s*vRef[1], s*vRef[0]+c*vRef[1], vRef[2]); //rotate to lab frame in reference axes
+	return spinEchoRot * vLabRef; //rotate back from reference to real axes
+}
+
+
+
 Lindblad::Lindblad(const LindbladParams& lp)
 : lp(lp), stepID(0), Emin(+DBL_MAX), Emax(-DBL_MAX),
 	K(1./3, 1./3, 0), Kp(-1./3, -1./3, 0)
@@ -29,6 +65,10 @@ Lindblad::Lindblad(const LindbladParams& lp)
 		die("ePhEnabled = %s differs from the mode specified in lindbladInit.\n", boolMap.getString(lp.ePhEnabled));
 	if(lp.pumpBfield and (not spinorial))
 		die("Bfield pump mode requires spin matrix elements from a spinorial calculation.\n");
+	if(lp.Bext.isNonzero() and (not spinorial))
+		die("Bext requires spin matrix elements from a spinorial calculation.\n");
+	if(lp.spinEchoFlipTime and (not spinorial))
+		die("Spin echo measurement requires spin matrix elements from a spinorial calculation.\n");
 	
 	//Read k-point offsets:
 	std::vector<size_t> byteOffsets(h.nk);
@@ -343,22 +383,21 @@ void Lindblad::writeCheckpoint(double t) const
 
 
 vector3<> Lindblad::getB(double t) const
-{	double omegaFreq  = 0.001; //Main Larmor frequency in Hartrees (time unit is 1/140 fs).
-	double deltaOmega = 0.1*omegaFreq; //Sets the magnitude of the perturbing field. deltaOmega = gamma * deltaB
-	double piPulseDuration = M_PI/deltaOmega;
-	double tDelay = 100*1000*fs;
-	vector3<> deltaBoff; //zero field
-	vector3<> deltaBon = (0.5*deltaOmega) * vector3<>(cos(omegaFreq*t), sin(omegaFreq*t), 0); // perturbing B field when on
-	//Modulation:
+{	vector3<> deltaBoff; //zero field
+	if(not lp.spinEchoFlipTime)
+		return deltaBoff;
+
+	//Modulated field:
+	vector3<> deltaBon = lp.spinEchoTransform(lp.spinEchoB, -t); //perturbing B field when on (spinEchoB in rotating frame -> lab frame)
 	if(t < 0.)
 		return deltaBoff;
 	//--- pi/2 pulse is on here
-	if(t < 0.5*piPulseDuration)
+	if(t < 0.5*lp.spinEchoFlipTime)
 		return deltaBon;
-	if(t < 0.5*piPulseDuration + tDelay)
+	if(t < lp.spinEchoDelay)
 		return deltaBoff;
 	//--- pi pulse is on here
-	if(t < 1.5*piPulseDuration + tDelay)
+	if(t < lp.spinEchoDelay + lp.spinEchoFlipTime)
 		return deltaBon;
 	else
 		return deltaBoff;
@@ -369,7 +408,7 @@ DM1 Lindblad::compute(double t, const DM1& drho)
 {	double pumpPrefac = lp.pumpEvolve
 		? sqrt(M_PI) * std::pow(lp.pumpA0, 2) * exp(-(t*t)/std::pow(lp.pumpTau, 2)) / lp.pumpTau
 		: 0.;
-	vector3<> Bcur = lp.spinEcho ? getB(t) : vector3<>();
+	vector3<> Bcur = getB(t);
 	
 	for(State& s: state)
 	{	//Convert interaction picture input to Schrodinger picture within state:
@@ -390,7 +429,7 @@ DM1 Lindblad::compute(double t, const DM1& drho)
 		}
 		
 		//Time-dependent magnetic field contribution:
-		if(lp.spinEcho)
+		if(Bcur.isNonzero())
 		{	assert(spinorial);
 			matrix deltaH = s.S[0]*Bcur[0] + s.S[1]*Bcur[1] + s.S[2]*Bcur[2];
 			s.rhoDot += complex(0, 1) * s.rho * deltaH; //+HC added by getRhoDot() completes commutator
@@ -491,6 +530,13 @@ void Lindblad::report(double t, const DM1& drho) const
 		logPrintf("Integrate: Step: %4d   t[fs]: %6.1lf   Etot[eV]: %.2le   dfMax: %.2le", stepID, t/fs, Etot/eV, dfMax);
 		if(spinorial) logPrintf("   S: [ %16.15lg %16.15lg %16.15lg ]", Stot[0],  Stot[1],  Stot[2]);
 		logPrintf("\n"); logFlush();
+		
+		//Report rotating frame spin in spin-echo setup:
+		if(lp.spinEchoFlipTime)
+		{	vector3<> Srot = lp.spinEchoTransform(Stot, t);
+			logPrintf("SpinEcho: Srot: [ %16.15lg %16.15lg %16.15lg ]\n", Srot[0],  Srot[1],  Srot[2]);
+			logFlush();
+		}
 		
 		//Save distribution functions:
 		if(lp.saveDist)

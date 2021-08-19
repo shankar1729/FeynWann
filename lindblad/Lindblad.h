@@ -69,7 +69,8 @@ struct LindbladParams
 	vector3<> pumpB; //!< initialization magnetic field
 	vector3<> Bext; //!< constant external magnetic field applied post-initialization
 
-	bool spinEcho; //!< whether to carry out spin echo (TODO: corresponding parameters)
+	vector3<> spinEchoB; //!< rotating magnetic field at t=0 in spin echo measurement (rotates about Bext)
+	double spinEchoDelay; //!< time delay between pi/2 and pi pulses in spin echo setup
 
 	double omegaMin, domega, omegaMax; //!< probe frequency grid
 	double tau; //!< probe width
@@ -93,14 +94,15 @@ struct LindbladParams
 	string evecFile; //!< filename to write eigenvectors to in spectrum mode
 
 	//---- Dependent variables computed from above ----
-	double invT; //inverse temperature
-	double nomega; //number of probe frequencies
+	double invT; //!< inverse temperature
+	double nomega; //!< number of probe frequencies
 
-	//! Set dependent variables
-	void initialize() 
-	{	invT = 1./T;
-		nomega = 1 + int(round((omegaMax-omegaMin)/domega));
-	}
+	double spinEchoOmega; //!< Larmor precession frequency for spin echo
+	double spinEchoFlipTime; //!< Flip time i.e. pi-pulse duration in spin echo setup
+	matrix3<> spinEchoRot; //!< Rotation matrix that takes x, z axes to spinEchoB, Bext directions
+	vector3<> spinEchoTransform(vector3<> v, double t) const; //!< convert v from lab to rotating frame at time t (or inverse at -t)
+
+	void initialize(); //!< Set dependent variables
 };
 
 

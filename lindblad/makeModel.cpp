@@ -21,7 +21,7 @@ int main()
 	std::vector<LindbladFile::Kpoint> kArray(nKpoints);
 	for (int ik=0; ik<nKpoints; ik++) 
 	{	LindbladFile::Kpoint& k0 = kArray[ik];
-		double randomNumber = Random::uniform()-0.5; // [-0.5 0.5]
+		double randomNumber = Random::normal();
 		double randomPerturbation = randomNumber/100*larmorFreq;
 		
 		k0.k[0] = ik;

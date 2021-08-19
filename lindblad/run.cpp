@@ -88,7 +88,8 @@ int main(int argc, char** argv)
 	lp.tau = inputMap.get("tau", lp.pol.size() ? NAN : 0.) * fs; //Gaussian probe pulse width (sigma of amplitude) in fs
 	//--- general options
 	lp.Bext = inputMap.getVector("Bext", vector3<>()) * Tesla; //constant external magnetic field post-initialization in Tesla
-	lp.spinEcho = inputMap.getBool("spinEcho", false); //whether to do a spin echo
+	lp.spinEchoB = inputMap.getVector("spinEchoB", vector3<>()) * Tesla; //spin-echo perturbing field in Tesla
+	lp.spinEchoDelay = inputMap.get("spinEchoDelay", 0.) * fs; //spin-echo delay time in fs
 	lp.dE = inputMap.get("dE") * eV; //energy resolution for distribution functions
 	const string ePhMode = inputMap.getString("ePhMode"); //must be Off or DiagK (add FullK in future)
 	if(ePhMode!="Off" and ePhMode!="DiagK")
@@ -147,7 +148,11 @@ int main(int argc, char** argv)
 		logPrintf("tau = %lg\n", lp.tau);
 	}
 	logPrintf("Bext = "); lp.Bext.print(globalLog, " %lg ");
-	logPrintf("spinEcho = %s\n", lp.spinEcho ? "yes" : "no");
+	if(lp.spinEchoFlipTime)
+	{	logPrintf("spinEchoB = \n"); lp.spinEchoB.print(globalLog, " %lg ");
+		logPrintf("spinEchoDelay = %lg\n", lp.spinEchoDelay);
+		logPrintf("spinEchoFlipTime = %lg\n", lp.spinEchoFlipTime);
+	}
 	logPrintf("dE = %lg\n", lp.dE);
 	logPrintf("ePhMode = %s\n", ePhMode.c_str());
 	logPrintf("defectFraction = %lg\n", lp.defectFraction);
