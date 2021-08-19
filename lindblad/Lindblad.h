@@ -51,7 +51,7 @@ enum ValleyMode
 };
 
 
-//Input parameters controlling Lindblad dynamics
+//Input parameters controlling Lindblad dynamics (implemented in Lindblad.cpp)
 struct LindbladParams
 {
 	double dmu; //!< Fermi level position relative to neutral value / VBM
@@ -101,12 +101,13 @@ struct LindbladParams
 	double spinEchoFlipTime; //!< Flip time i.e. pi-pulse duration in spin echo setup
 	matrix3<> spinEchoRot; //!< Rotation matrix that takes x, z axes to spinEchoB, Bext directions
 	vector3<> spinEchoTransform(vector3<> v, double t) const; //!< convert v from lab to rotating frame at time t (or inverse at -t)
+	vector3<> spinEchoGetB(double t) const; //!< Get time-dependent magnetic field for spin echo measurement
 
 	void initialize(); //!< Set dependent variables
 };
 
 
-// Base class of all lindblad dynamics (implemented in Lindblad.cpp)
+// Base class of all lindblad dynamics (implemented in Lindblad.cpp and LindbladDynamics.cpp)
 class Lindblad : public Integrator<DM1>
 {
 protected:
@@ -160,7 +161,7 @@ protected:
 	static inline vector3<> wrap(const vector3<>& x); //!< Wrap fratcional coordinates to fundamental interval
 	inline bool isKvalley(vector3<> k) const { return (wrap(K-k)).length_squared() < (wrap(Kp-k)).length_squared(); }
 
-	//Scrodinger picture (SP) <-> interaction picture (IP) interface:
+	//Scrodinger picture (SP) <-> interaction picture (IP) interface (in LindbladDynamics.cpp):
 	void setState(double t, const DM1& drho, State& s) const; //!< IP drho -> SP s.drho (also zero out s.rhoDot)
 	void getStateDot(const State& s, DM1& rhoDot) const; //!< SP s.rhoDot -> IP rhoDot (at t from last setState())
 
@@ -170,16 +171,15 @@ protected:
 public:
 	Lindblad(const LindbladParams& lp);
 	virtual ~Lindblad() {}
-	virtual void calculate(); //!< set up initial state and run dynamics as specified
 
-	//Steps within calculate:
-	void applyPump(); //!< one-shot pump (optical or Bfield)
+	//I/O routines:
 	bool readCheckpoint(double& t); //!< read checkpoint file; set final t and return true if state loaded
 	void writeCheckpoint(double t) const; //!< write checkpoint file corresponding to time t
 	void writeImEps(string fname) const; //!< Write probe response at current rho
-	vector3<> getB(double t) const; //!< Get current time-dependent magnetic field
 
-	//Interface to Integrator:
+	//Overall calculation and integrator interaction (in LindbladDynamics.cpp):
+	virtual void calculate(); //!< set up initial state and run dynamics as specified
+	void applyPump(); //!< one-shot pump (optical or Bfield)
 	DM1 compute(double t, const DM1& v); //specify differential equation for time evolution
 	void report(double t, const DM1& v) const; //called by integrator for periodic reporting
 };
