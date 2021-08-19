@@ -4,6 +4,7 @@
 #include <InputMap.h>
 #include <lindblad/LindbladFile.h>
 
+
 int main(int argc, char** argv)
 {
 	InitParams ip = FeynWann::initialize(argc, argv, "Create a (2-band) spin model system");
@@ -61,6 +62,32 @@ int main(int argc, char** argv)
 		for (int i=0; i < 3; i++)
 		{   k.S[i] = dagger(V) * S[i] * V;
 			k.P[i] = zeroes(nBands, nBands);
+		}
+	}
+
+	//Add defect matrix elements (effect controlled by defectFraction in lindblad run)
+	double sigmaDefect = sqrt(sigmaB.length() / nK) / nBands;
+	for(int ik1=0; ik1<nK; ik1++)
+	{	LindbladFile::Kpoint& k1 = kArray[ik1];
+		for(int ik2=0; ik2<ik1; ik2++)
+		{	LindbladFile::Kpoint& k2 = kArray[ik2];
+			//Create matrix element set connecting these k:
+			LindbladFile::GePhEntry M12, M21;
+			M12.jk = ik2;
+			M21.jk = ik1;
+			M12.omegaPh = 0.; //defect (not e-ph)
+			M21.omegaPh = 0.; //defect (not e-ph)
+			M12.G.init(nBands, nBands);
+			M21.G.init(nBands, nBands);
+			for(int b1=0; b1<nBands; b1++)
+				for(int b2=0; b2<nBands; b2++)
+				{	complex M = sigmaDefect * Random::normalComplex();
+					M12.G.push_back(SparseEntry{b1, b2, M});
+					M21.G.push_back(SparseEntry{b2, b1, M.conj()});
+				}
+			//Add to kpoints:
+			k1.GePh.push_back(M12);
+			k2.GePh.push_back(M21);
 		}
 	}
 

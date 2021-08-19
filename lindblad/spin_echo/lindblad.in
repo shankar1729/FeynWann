@@ -1,6 +1,7 @@
 T          300     #Kelvin
 dmu         0      #eV
 mode    RealTime   #RealTime or Spectrum
+linearized yes     #If yes, use PETSc to implement scattering matrix elements
 
 dt       100      #fs; time step for reporting
 tStop    3E5      #fs; end time for simulation
@@ -12,6 +13,8 @@ pumpB   1E4,0,0   #Magnetic field for initial perturbation in Tesla
 
 dE      0.001     #eV; energy resolution of distribution functions
 ePhMode  DiagK    #Off or DiagK
+
+defectFraction 1.  #Relative magnitude of spin-spin interactions
 
 Bext       10,0,0    #Constant external magnetic field in Tesla
 spinEchoB   0,2,0    #Spin echo perturbing field in Tesla
