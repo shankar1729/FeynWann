@@ -88,6 +88,7 @@ int main(int argc, char** argv)
 	lp.tau = inputMap.get("tau", lp.pol.size() ? NAN : 0.) * fs; //Gaussian probe pulse width (sigma of amplitude) in fs
 	//--- general options
 	lp.Bext = inputMap.getVector("Bext", vector3<>()) * Tesla; //constant external magnetic field post-initialization in Tesla
+	lp.spinEcho = inputMap.getBool("spinEcho", false); //whether to do a spin echo
 	lp.dE = inputMap.get("dE") * eV; //energy resolution for distribution functions
 	const string ePhMode = inputMap.getString("ePhMode"); //must be Off or DiagK (add FullK in future)
 	if(ePhMode!="Off" and ePhMode!="DiagK")
@@ -145,6 +146,8 @@ int main(int argc, char** argv)
 		logPrintf("domega = %lg\n", lp.domega);
 		logPrintf("tau = %lg\n", lp.tau);
 	}
+	logPrintf("Bext = "); lp.Bext.print(globalLog, " %lg ");
+	logPrintf("spinEcho = %s\n", lp.spinEcho ? "yes" : "no");
 	logPrintf("dE = %lg\n", lp.dE);
 	logPrintf("ePhMode = %s\n", ePhMode.c_str());
 	logPrintf("defectFraction = %lg\n", lp.defectFraction);

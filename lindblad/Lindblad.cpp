@@ -342,10 +342,34 @@ void Lindblad::writeCheckpoint(double t) const
 }
 
 
+vector3<> Lindblad::getB(double t) const
+{	double omegaFreq  = 0.001; //Main Larmor frequency in Hartrees (time unit is 1/140 fs).
+	double deltaOmega = 0.1*omegaFreq; //Sets the magnitude of the perturbing field. deltaOmega = gamma * deltaB
+	double piPulseDuration = M_PI/deltaOmega;
+	double tDelay = 100*1000*fs;
+	vector3<> deltaBoff; //zero field
+	vector3<> deltaBon = (0.5*deltaOmega) * vector3<>(cos(omegaFreq*t), sin(omegaFreq*t), 0); // perturbing B field when on
+	//Modulation:
+	if(t < 0.)
+		return deltaBoff;
+	//--- pi/2 pulse is on here
+	if(t < 0.5*piPulseDuration)
+		return deltaBon;
+	if(t < 0.5*piPulseDuration + tDelay)
+		return deltaBoff;
+	//--- pi pulse is on here
+	if(t < 1.5*piPulseDuration + tDelay)
+		return deltaBon;
+	else
+		return deltaBoff;
+}
+
+
 DM1 Lindblad::compute(double t, const DM1& drho)
 {	double pumpPrefac = lp.pumpEvolve
 		? sqrt(M_PI) * std::pow(lp.pumpA0, 2) * exp(-(t*t)/std::pow(lp.pumpTau, 2)) / lp.pumpTau
 		: 0.;
+	vector3<> Bcur = lp.spinEcho ? getB(t) : vector3<>();
 	
 	for(State& s: state)
 	{	//Convert interaction picture input to Schrodinger picture within state:
@@ -366,7 +390,11 @@ DM1 Lindblad::compute(double t, const DM1& drho)
 		}
 		
 		//Time-dependent magnetic field contribution:
-		//TODO
+		if(lp.spinEcho)
+		{	assert(spinorial);
+			matrix deltaH = s.S[0]*Bcur[0] + s.S[1]*Bcur[1] + s.S[2]*Bcur[2];
+			s.rhoDot += complex(0, 1) * s.rho * deltaH; //+HC added by getRhoDot() completes commutator
+		}
 	}
 	
 	//Scattering contributions (e-ph, defects) that couple k:

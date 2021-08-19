@@ -69,6 +69,8 @@ struct LindbladParams
 	vector3<> pumpB; //!< initialization magnetic field
 	vector3<> Bext; //!< constant external magnetic field applied post-initialization
 
+	bool spinEcho; //!< whether to carry out spin echo (TODO: corresponding parameters)
+
 	double omegaMin, domega, omegaMax; //!< probe frequency grid
 	double tau; //!< probe width
 	std::vector<vector3<complex>> pol; //!< probe polarizations
@@ -173,6 +175,7 @@ public:
 	bool readCheckpoint(double& t); //!< read checkpoint file; set final t and return true if state loaded
 	void writeCheckpoint(double t) const; //!< write checkpoint file corresponding to time t
 	void writeImEps(string fname) const; //!< Write probe response at current rho
+	vector3<> getB(double t) const; //!< Get current time-dependent magnetic field
 
 	//Interface to Integrator:
 	DM1 compute(double t, const DM1& v); //specify differential equation for time evolution
