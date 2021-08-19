@@ -9,13 +9,6 @@ endif()
 add_FeynWann_executable(init)
 add_FeynWann_executable(makeModel)
 
-
-add_FeynWann_executable(nonlinear)
-add_FeynWann_executable(linear)
-
-target_link_libraries(nonlinear ${GSL_BLAS_LIBRARY})
-target_link_libraries(linear ${GSL_BLAS_LIBRARY} ${PETSC_LIBRARY})
-
 #Combined linear/nonlinar dynamics executable:
 add_executable(run run.cpp Lindblad.cpp LindbladNonlinear.cpp LindbladMatrix.cpp LindbladLinear.cpp LindbladSpectrum.cpp)
 target_link_libraries(run ${LINK_PREFIX} FeynWann ${LINK_SUFFIX})
