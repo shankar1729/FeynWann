@@ -3,16 +3,17 @@ dmu         0    #eV
 mode  RealTime    #RealTime or Spectrum
 
 dt      100.      #fs; time step for reporting
-tStop 300000      #fs; end time for simulation
+tStop 300000.     #fs; end time for simulation
 tStep    0.       #fs; if non-zero, time step for fixed-step integrator
 tolAdaptive 1e-2  #tolerance for adaptive integrator (used only if tStep = 0)
 
 pumpMode Bfield   #Perturb or Bfield
-pumpB    0,0,1e8   #Magnetic field for initial perturbation in Tesla
+pumpB    0,0,1e8  #Magnetic field for initial perturbation in Tesla
 
 dE      0.001     #eV; energy resolution of distribution functions
 ePhMode  DiagK    #Off or DiagK
 
+Bext     0,0,-117.526   #Constant external magnetic field
 spinEcho yes
 saveDist no      #whether to write distributions at each time step (default: yes)
 #checkpointFile ldbd.rho  #optionally use for saving state and continuing

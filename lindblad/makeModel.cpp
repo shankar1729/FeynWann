@@ -11,7 +11,7 @@ int main()
 {
 	int nBands   = 2;
 	int nKpoints = 100;
-	double larmorFreq = .001; // time unit is 1/140 fs
+	double larmorFreq = 0.001; // time unit is 1/140 fs
 	double deltaOmegaX = 0*larmorFreq/10;
 	double deltaOmegaY = 0*larmorFreq/5;
 	std::cout << "omega in ps = " << larmorFreq*1000*fs << std::endl;
@@ -28,8 +28,8 @@ int main()
 		k0.nInner = k0.nOuter = nBands;
 		k0.innerStart = 0;
 		k0.E.resize(nBands);
-		k0.E[0] =  (larmorFreq + randomPerturbation)/2;
-		k0.E[1] = -(larmorFreq + randomPerturbation)/2;
+		k0.E[0] =  (0.*larmorFreq + randomPerturbation)/2;
+		k0.E[1] = -(0.*larmorFreq + randomPerturbation)/2;
 
 		for (int i=0; i < 3; i++)
 		{   k0.S[i] = zeroes(nBands, nBands);

@@ -233,7 +233,7 @@ void Lindblad::setState(double t, const DM1& drho, State& s) const
 		phaseDiag[b] = cis(-t * s.E0[b]);
 	//--- convert to required basis
 	if(s.V0)
-	{	s.phase = s.V0 * phaseDiag * dagger(s.V0); //construct unitary e^(-i H0 t) transform
+	{	s.phase = (s.V0 * phaseDiag) * dagger(s.V0); //construct unitary e^(-i H0 t) transform
 		s.drho = s.phase * s.drho * dagger(s.phase); //apply this transform to drho
 		s.rho = s.phase * s.rho * dagger(s.phase); //apply this transform to rho
 	}
@@ -256,7 +256,7 @@ void Lindblad::getStateDot(const State& s, DM1& rhoDot) const
 {	//Convert rhoDot from Schrodinger to interaction picture:
 	matrix rhoDotCur;
 	if(s.V0)
-		rhoDotCur = dagger(s.phase) * rhoDotCur * dagger(s.phase); //reverse unitary transform for phase
+		rhoDotCur = dagger(s.phase) * s.rhoDot * s.phase; //reverse unitary transform for phase
 	else
 	{	rhoDotCur = clone(s.rhoDot);
 		complex* rhoDotData = rhoDotCur.data();

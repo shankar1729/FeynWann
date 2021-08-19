@@ -31,12 +31,13 @@ for iFile, fname in enumerate(glob.glob('*.out')):
 	#Plot each direction in separate panel:
 	for iDir, ax in enumerate(axes):
 		plt.sca(ax)
-		plt.plot(tPS, S[iDir])
-		plt.plot(tPS, Sprime[iDir])
+		plt.plot(tPS, S[iDir], label='Lab frame')
+		plt.plot(tPS, Sprime[iDir], label='Rotating frame')
 		plt.axvline(100 + 3.7995, linestyle='--', color='black')
 		plt.axvline(200 + 3.7995, linestyle='--', color='black')
 		plt.ylabel(fr'$\langle S_{"xyz"[iDir]}(t) \rangle$')
 	plt.xlabel(r'$t$ [ps]')
-	plt.xlim(xmax=tPS[-1])
+	plt.xlim(tPS[0], tPS[-1])
 	plt.savefig(f'{title}.png', bbox_inches='tight')
+	plt.legend()
 plt.show()
