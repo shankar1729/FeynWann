@@ -1,70 +1,78 @@
-#include <core/Util.h>
 #include <core/matrix.h>
-#include <core/scalar.h>
 #include <core/Random.h>
-#include <core/string.h>
-#include <commands/command.h>
-#include <lindblad/LindbladFile.h>
 #include <core/Units.h>
+#include <InputMap.h>
+#include <lindblad/LindbladFile.h>
 
-int main()
+int main(int argc, char** argv)
 {
-	int nBands   = 2;
-	int nKpoints = 100;
-	double larmorFreq = 0.001; // time unit is 1/140 fs
-	double deltaOmegaX = 0*larmorFreq/10;
-	double deltaOmegaY = 0*larmorFreq/5;
-	std::cout << "omega in ps = " << larmorFreq*1000*fs << std::endl;
+	InitParams ip = FeynWann::initialize(argc, argv, "Create a (2-band) spin model system");
 
+	//Get input parameters:
+	InputMap inputMap(ip.inputFilename);
+	const int nK = int(inputMap.get("nK")); //number of k-points
+	const double Tesla = Joule/(Ampere*meter*meter);
+	const vector3<> sigmaB = inputMap.getVector("sigmaB") * Tesla; //magnitude of internal magnetic field fluctuations per direction
+	const int nBands = 2;
+	
+	//Print back input parameters (converted):
+	logPrintf("\nInputs after conversion to atomic units:\n");
+	logPrintf("nK = %d\n", nK);
+	logPrintf("sigmaB = "); sigmaB.print(globalLog, " %lg ");
+	logPrintf("\n");
+	
+	if(ip.dryRun)
+	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
+		FeynWann::finalize();
+		return 0;
+	}
+	logPrintf("\n");
+	
+	//Create Pauli matrices:
+	vector3<matrix> S;
+	// Sx
+	S[0] = zeroes(nBands, nBands);
+	S[0].set(0,1, 1);
+	S[0].set(1,0, 1);
+	// Sy
+	S[1] = zeroes(nBands, nBands);
+	S[1].set(0,1, complex(0,-1));
+	S[1].set(1,0, complex(0, 1));
+	// Sz
+	S[2] = zeroes(nBands, nBands);
+	S[2].set(0,0,  1);
+	S[2].set(1,1, -1);
+	
+	//Create model Hamiltonian:
 	Random::seed(0);
+	std::vector<LindbladFile::Kpoint> kArray(nK);
+	for(LindbladFile::Kpoint& k: kArray)
+	{	k.nInner = k.nOuter = nBands;
+		k.innerStart = 0;
 
-	std::vector<LindbladFile::Kpoint> kArray(nKpoints);
-	for (int ik=0; ik<nKpoints; ik++) 
-	{	LindbladFile::Kpoint& k0 = kArray[ik];
-		double randomPerturbation = 0.001 * larmorFreq * Random::normal();
+		//Create a random magnetic field hamiltonian:
+		matrix H0 = zeroes(nBands, nBands);
+		for(int iDir=0; iDir<3; iDir++)
+			H0 += (sigmaB[iDir] * Random::normal()) * S[iDir];
 		
-		k0.k[0] = ik;
-		k0.nInner = k0.nOuter = nBands;
-		k0.innerStart = 0;
-		k0.E.resize(nBands);
-		k0.E[0] =  (0.*larmorFreq + randomPerturbation)/2;
-		k0.E[1] = -(0.*larmorFreq + randomPerturbation)/2;
-
-		for (int i=0; i < 3; i++)
-		{   k0.S[i] = zeroes(nBands, nBands);
-			k0.P[i] = zeroes(nBands, nBands);
-		}
-
-		// Sx
-		k0.S[0].set(0,1, 1);
-		k0.S[0].set(1,0, 1);
-
-		// Sy
-		k0.S[1].set(0,1, complex(0,-1));
-		k0.S[1].set(1,0, complex(0, 1));
-
-		// Sz
-		k0.S[2].set(0,0, 1);
-		k0.S[2].set(1,1,-1);
-
-		matrix H = k0.E + 0.5*deltaOmegaX*k0.S[0] + 0.5*deltaOmegaY*k0.S[1];
-
-		// Transform Sx, Sy, Sz into eigenbasis of H
+		//Diagonalize:
 		matrix V;
-		H.diagonalize(V, k0.E);
+		H0.diagonalize(V, k.E);
 		for (int i=0; i < 3; i++)
-			k0.S[i] = dagger(V) * k0.S[i] * V;
+		{   k.S[i] = dagger(V) * S[i] * V;
+			k.P[i] = zeroes(nBands, nBands);
+		}
 	}
 
 	//Prepare the file header:
 	LindbladFile::Header h;
 	h.dmuMin = 0;
 	h.dmuMax = 0;
-	h.Tmax = 1e-1; // in Hartrees; 1e-3 ~ 320 K.
+	h.Tmax = DBL_MAX;
 	h.pumpOmegaMax = 0;
 	h.probeOmegaMax = 0;
-	h.nk = nKpoints;
-	h.nkTot = nKpoints;
+	h.nk = nK;
+	h.nkTot = nK;
 	h.ePhEnabled = true;
 	h.spinorial = true;
 	h.spinWeight = 1;
@@ -77,20 +85,22 @@ int main()
 		byteOffsets[ik+1] = byteOffsets[ik] + kArray[ik].nBytes(h);
 
 	//Write file:
-	FILE* fp = fopen("ldbd.dat", "w");
-	// --- header
-	std::ostringstream oss;
-	h.write(oss);
-	fwrite(oss.str().data(), 1, h.nBytes(), fp);
-	// --- byte offsets
-	fwrite(byteOffsets.data(), sizeof(size_t), byteOffsets.size(), fp);
-	// --- data for each k-point
-	for (int ik=0; ik < nKpoints; ik++)
-	{   LindbladFile::Kpoint& k0 = kArray[ik];
-		oss.str(std::string());
-		k0.write(oss, h);
-		fwrite(oss.str().data(), 1, k0.nBytes(h), fp);
+	if(mpiWorld->isHead())
+	{	FILE* fp = fopen("ldbd.dat", "w");
+		// --- header
+		std::ostringstream oss;
+		h.write(oss);
+		fwrite(oss.str().data(), 1, h.nBytes(), fp);
+		// --- byte offsets
+		fwrite(byteOffsets.data(), sizeof(size_t), byteOffsets.size(), fp);
+		// --- data for each k-point
+		for(const LindbladFile::Kpoint& k: kArray)
+		{	oss.str(std::string());
+			k.write(oss, h);
+			fwrite(oss.str().data(), 1, k.nBytes(h), fp);
+		}
+		fclose(fp);
 	}
-	fclose(fp);
+	FeynWann::finalize();
 	return 0;
 }

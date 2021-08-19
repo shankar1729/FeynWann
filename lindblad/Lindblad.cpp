@@ -17,11 +17,17 @@ void LindbladParams::initialize()
 		//Check specified magnetic fields:
 		const double tol = 1E-6;
 		if(not Bext.length_squared())
-			die("Spin echo requires non-zero magnetic field Bext.\n\n");
+			die("\nSpin echo requires non-zero magnetic field Bext.\n\n");
 		vector3<> BextHat = normalize(Bext); //unit vector of precession axis
 		vector3<> spinEchoBhat = normalize(spinEchoB); //unit vector of starting rotational field
-		if(fabs(dot(spinEchoBhat, BextHat)) > tol)
-			die("spinEchoB must be perpendicular to Bext\n\n");
+		if(fabs(dot(spinEchoBhat, BextHat)) >= tol)
+			die("\nspinEchoB must be perpendicular to Bext\n\n");
+		
+		//Ensure initial conditions:
+		if(not pumpBfield)
+			die("\nSpin echo requires initial spin state to be set with B-field pump mode.\n\n");
+		if(fabs(cross(pumpB, BextHat).length()) >= tol * pumpB.length())
+			die("\nSpin echo requires pumpB and Bext to be parallel.\n\n");
 		
 		//Compute rotation matrix and period:
 		spinEchoRot.set_col(0, spinEchoBhat);
