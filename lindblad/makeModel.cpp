@@ -14,12 +14,14 @@ int main(int argc, char** argv)
 	const int nK = int(inputMap.get("nK")); //number of k-points
 	const double Tesla = Joule/(Ampere*meter*meter);
 	const vector3<> sigmaB = inputMap.getVector("sigmaB") * Tesla; //magnitude of internal magnetic field fluctuations per direction
+	const double scatterB = inputMap.get("scatterB") * Tesla; //magnitude of scattering terms written as a magnetic field
 	const int nBands = 2;
 	
 	//Print back input parameters (converted):
 	logPrintf("\nInputs after conversion to atomic units:\n");
 	logPrintf("nK = %d\n", nK);
 	logPrintf("sigmaB = "); sigmaB.print(globalLog, " %lg ");
+	logPrintf("scatterB = %lg\n", scatterB);
 	logPrintf("\n");
 	
 	if(ip.dryRun)
@@ -66,7 +68,7 @@ int main(int argc, char** argv)
 	}
 
 	//Add defect matrix elements (effect controlled by defectFraction in lindblad run)
-	double sigmaDefect = sqrt(sigmaB.length() / nK) / nBands;
+	double sigmaDefect = sqrt(scatterB / nK) / nBands;
 	for(int ik1=0; ik1<nK; ik1++)
 	{	LindbladFile::Kpoint& k1 = kArray[ik1];
 		for(int ik2=0; ik2<ik1; ik2++)
