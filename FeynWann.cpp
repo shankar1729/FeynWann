@@ -1376,6 +1376,14 @@ template<typename PowType> matrix3<> powElemWise(const matrix3<>& m, PowType n)
 	return result;
 }
 
+//Elementwise std::pow of a vector
+template<typename PowType> vector3<> powElemWise(const vector3<>& m, PowType n)
+{	vector3<> result;
+	for(int i=0; i<3; i++)
+		result[i] = std::pow(m[i], n);
+	return result;
+}
+
 //Report a tensor with error estimates
 void reportResult(const std::vector<matrix3<>>& result, string resultName, double unit, string unitName, FILE* fp, bool invAvg)
 {	matrix3<> sum, sumSq; int N = 0;
@@ -1404,6 +1412,31 @@ void reportResult(const std::vector<matrix3<>>& result, string resultName, doubl
 		else fprintf(fp, " %c %s\n", mClose[i], i==1 ? unitName.c_str() : "");
 	}
 	fprintf(fp, "\n");
+}
+
+//Report a vector with error estimates
+void reportResult(const std::vector<vector3<>>& result, string resultName, double unit, string unitName, FILE* fp, bool invAvg)
+{	vector3<> sum, sumSq; int N = 0;
+	for(size_t block=0; block<result.size(); block++)
+	{	N++;
+		vector3<> term = invAvg ? powElemWise(result[block], -1) : result[block];
+		sum += term;
+		sumSq += powElemWise(term, 2);
+	}
+	vector3<> resultMean = (1./N)*sum;
+	vector3<> resultStd = powElemWise((1./N)*sumSq - powElemWise(resultMean,2), 0.5); //element-wise std. deviation
+	if(invAvg)
+	{	resultMean = powElemWise(resultMean, -1); //harmonic elementwise vector mean
+		resultStd = Diag(powElemWise(resultMean, 2)) * resultStd; //propagate error in reciprocal
+	}
+	//Print result:
+	fprintf(fp, "%17s = [", resultName.c_str());
+	for(int i=0; i<3; i++) fprintf(fp, " %12lg", resultMean[i]/unit);
+	if(N>1)
+	{	fprintf(fp, " ] +/- [");
+		for(int i=0; i<3; i++) fprintf(fp, " %12lg", fabs(resultStd[i])/unit);
+	}
+	fprintf(fp, " ] %s\n", unitName.c_str());
 }
 
 //Report a scalar with error estimates:
