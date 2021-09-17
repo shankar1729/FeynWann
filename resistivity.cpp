@@ -26,13 +26,14 @@ struct ResistivityCollect
 {	std::vector<double> dmu; //doping levels
 	double T; //temperature
 	double defectFraction; //defect concentration: number/unit cell (dimensionless)
-	std::vector<double> n, g, vSq, tau; //carrier number, density of states, |v|^2 and e-ph life time
+	std::vector<double> n, g, vSq, tau; //carrier number, density of states, |v|^2 and e-ph life time, 
+	std::vector<vector3<>> OmegaSpinDP; //Larmor frequency expression (left hand side of spin lifetime in DP relation)
 	std::vector<matrix3<>> vvTau; //scattering time * velocity outer product
 	std::vector<matrix3<>> vvTauK; //scattering time * velocity outer product with (E-mu)^2/T factor for thermal conductivity
 
 	ResistivityCollect(const std::vector<double>& dmu, double T, double defectFraction)
 		: dmu(dmu), T(T), defectFraction(defectFraction),
-		n(dmu.size()), g(dmu.size()), vSq(dmu.size()), tau(dmu.size()), vvTau(dmu.size()), vvTauK(dmu.size())
+		n(dmu.size()), g(dmu.size()), vSq(dmu.size()), tau(dmu.size()), OmegaSpinDP(dmu.size()), vvTau(dmu.size()), vvTauK(dmu.size())
 	{
 	}
 	
@@ -42,7 +43,15 @@ struct ResistivityCollect
 		for(int b=0; b<nBands; b++)
 		{	const double& E = state.E[b];
 			const vector3<>& v = state.vVec[b];
-			matrix3<> vdotv = outer(v, v);
+			matrix3<> vdotv = outer(v, v);     
+            // Larmor frequency squared
+			const double& Eother = state.E[b%2 ? b-1 : b+1];
+			vector3<double> LfreqSq; 
+			double  LfreqSqSum = 0.;
+			for (int iDir=0; iDir<3; iDir++)
+			{   LfreqSq[iDir] = std::pow((Eother-E)*state.S[iDir](b,b).real(), 2);
+				LfreqSqSum += LfreqSq[iDir];  
+			}
 			for(unsigned iMu=0; iMu<dmu.size(); iMu++)
 			{	double f = fermi((E-dmu[iMu])*invT);
 				double dfdE = -f*(1.-f)*invT;
@@ -60,6 +69,8 @@ struct ResistivityCollect
 				tau[iMu] += (-dfdE) / (2*ImSigma);
 				vvTau[iMu] += ((-dfdE) / (2*ImSigmaP)) * vdotv;
 				vvTauK[iMu] += ((-dfdE) * invT * std::pow(E-dmu[iMu],2) / (2*ImSigmaP)) * vdotv;
+				for (int iDir=0; iDir<3; iDir++)
+					OmegaSpinDP[iMu][iDir] += (-dfdE) * (LfreqSqSum - LfreqSq[iDir]);
 			}
 		}
 	}
@@ -128,10 +139,10 @@ int main(int argc, char** argv)
 	fwp.needVelocity = true;
 	fwp.needLinewidth_ePh = true;
 	fwp.needLinewidthP_ePh = true;
+	fwp.needSpin = true;
 	fwp.needLinewidth_D = defectName;
 	fwp.needLinewidthP_D = defectName;
 	std::shared_ptr<FeynWann> fw = std::make_shared<FeynWann>(fwp);
-	
 	//dmu array:
 	std::vector<double> dmu(dmuCount, dmuMin); //set first value here
 	for(int iMu=1; iMu<dmuCount; iMu++) //set remaining values (if any)
@@ -213,6 +224,7 @@ int main(int argc, char** argv)
 			mpiWorld->allReduceData(rc.tau, MPIUtil::ReduceSum);
 			mpiWorld->allReduceData(rc.vvTau, MPIUtil::ReduceSum);
 			mpiWorld->allReduceData(rc.vvTauK, MPIUtil::ReduceSum);
+			mpiWorld->allReduceData(rc.OmegaSpinDP, MPIUtil::ReduceSum);  
 			for(int iMu=0; iMu<dmuCount; iMu++)
 			{	//Apply normalizing factors:
 				rc.n[iMu] *= prefacDOS;
@@ -220,6 +232,7 @@ int main(int argc, char** argv)
 				rc.g[iMu] *= prefacDOS;
 				rc.vSq[iMu] *= prefacDOS;
 				rc.tau[iMu] *= prefacDOS;
+				rc.OmegaSpinDP[iMu] *= prefacDOS;                
 				#define PROCESS_vvTau(vvTau) \
 					vvTau *= prefacDOS; \
 					slabConstrain(vvTau, slabDir); /*eliminate out-of-plane components if necessary*/ \
@@ -248,6 +261,7 @@ int main(int argc, char** argv)
 					rcTot.tau[iMu] += rcArr[iSpin][block]->tau[iMu];
 					rcTot.vvTau[iMu] += rcArr[iSpin][block]->vvTau[iMu];
 					rcTot.vvTauK[iMu] += rcArr[iSpin][block]->vvTauK[iMu];
+					rcTot.OmegaSpinDP[iMu] += rcArr[iSpin][block]->OmegaSpinDP[iMu]; 
 				}
 		}
 	}
@@ -263,6 +277,7 @@ int main(int argc, char** argv)
 			std::vector<double> tauArr(nBlocks), tauDrudeArr(nBlocks);
 			std::vector<double> mEffArr(nBlocks), vFarr(nBlocks);
 			std::vector<double> gArr(nBlocks), nArr(nBlocks);
+			std::vector<double> OmegaSpinDPxArr(nBlocks), OmegaSpinDPyArr(nBlocks), OmegaSpinDPzArr(nBlocks);  
 			for(int block=0; block<nBlocks; block++)
 			{	const ResistivityCollect& rc = *rcArr[iSpin][block];
 				rhoArr[block] = Omega * inv(rc.vvTau[iMu]);
@@ -282,6 +297,9 @@ int main(int argc, char** argv)
 				vFarr[block] = sqrt(rc.vSq[iMu] / rc.g[iMu]);
 				gArr[block] = rc.g[iMu];
 				nArr[block] = rc.n[iMu];
+				OmegaSpinDPxArr[block] = rc.OmegaSpinDP[iMu][0] / rc.g[iMu];   
+				OmegaSpinDPyArr[block] = rc.OmegaSpinDP[iMu][1] / rc.g[iMu];   
+				OmegaSpinDPzArr[block] = rc.OmegaSpinDP[iMu][2] / rc.g[iMu];  
 			}
 			//Report with statistics:
 			reportResult(rhoArr, rhoName+spinSuffix, rhoUnit, rhoUnitName);
@@ -297,6 +315,9 @@ int main(int argc, char** argv)
 			reportResult(gArr, "g"+spinSuffix+"(eF)", 1, "");
 			reportResult(nArr, "Ncarriers"+spinSuffix, 1, "cell^-1");
 			reportResult(nArr, "nCarriers"+spinSuffix, (Omega*densityUnit), densityUnitName);
+			reportResult(OmegaSpinDPxArr, "OmegaSpinDPx"+spinSuffix, 1./(fs*fs), "fs^-2");      
+			reportResult(OmegaSpinDPyArr, "OmegaSpinDPy"+spinSuffix, 1./(fs*fs), "fs^-2");     
+			reportResult(OmegaSpinDPzArr, "OmegaSpinDPz"+spinSuffix, 1./(fs*fs), "fs^-2");          
 			logPrintf("\n");
 		}
 	}
