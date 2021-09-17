@@ -32,6 +32,7 @@ public:
 	bool has(string key) const;
 	double get(string key, double defaultVal=NAN) const;
 	vector3<> getVector(string key, vector3<> defaultVal=vector3<>(NAN)) const; //!< comma-delimited vector
+	bool getBool(string key, bool defaultVal=false) const; //!< convert from yes/no
 	string getString(string key) const;
 };
 

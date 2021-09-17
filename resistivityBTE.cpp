@@ -1,4 +1,4 @@
-#include "LindbladFile.h"
+#include "lindblad/LindbladFile.h"
 #include "InputMap.h"
 #include <core/Units.h>
 #include <core/Minimize.h>

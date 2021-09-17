@@ -21,8 +21,8 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 #define FEYNWANN_LINDBLADFILE_H
 
 #include <core/MPIUtil.h>
-#include "SparseMatrix.h"
-#include "FeynWann.h"
+#include <SparseMatrix.h>
+#include <FeynWann.h>
 
 //! Data type for lindblad dynamics integration
 typedef std::vector<double> DM1;
