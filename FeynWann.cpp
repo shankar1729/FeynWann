@@ -1455,7 +1455,7 @@ void reportResult(const std::vector<double>& result, string resultName, double u
 		resultStd *= std::pow(resultMean,2); //propagate error in reciprocal
 	}
 	if(N>1)
-		fprintf(fp, "%17s = %12lg +/- %12lg %s\n", resultName.c_str(), resultMean/unit, fabs(resultStd)/unit, unitName.c_str());
+		fprintf(fp, "%17s = %16lg +/- %16lg %s\n", resultName.c_str(), resultMean/unit, fabs(resultStd)/unit, unitName.c_str());
 	else
 		fprintf(fp, "%17s = %12lg %s\n", resultName.c_str(), resultMean/unit, unitName.c_str());
 }
