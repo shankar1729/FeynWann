@@ -453,11 +453,18 @@ void Lindblad::reportCarrierLifetime() const
 	}
 	
 	//Compute f-prime averages:
-	double wSum = 0., tauSum = 0., tauInvSum = 0.;
+	double wSum = 0., tauSum = 0., tauInvSum = 0., wSumDP = 0.;
 	vector3<> OmegaSqDPsum, tauInvSpinDPsum;
 	for(const State& s: state)
 	{	const diagMatrix& f = s.rho0;
 		const double* tauInv = &tauInv_i[nInnerPrev[s.ik] - iEallStart];
+		//Determine parity (starting at odd/even) of spin-split bands in inner window
+		int bSpinStart = 0;
+		if(spinorial and s.nInner>2)
+		{	double dE01 = s.E[1] - s.E[0];
+			double dE12 = s.E[2] - s.E[1];
+			bSpinStart = (dE01 < dE12 ? 0 : 1); //assume spin split smaller than band split
+		}
 		for(int b=0; b<s.nInner; b++)
 		{	double mfPrime = lp.invT * f[b] * (1. - f[b]); //-df/dE
 			wSum += mfPrime;
@@ -465,12 +472,15 @@ void Lindblad::reportCarrierLifetime() const
 			tauInvSum += mfPrime * tauInv[b];
 			//Optional DP field and lifetime calculation:
 			if(spinorial)
-			{	const double& Eother = s.E[b%2 ? b-1 : b+1];
+			{	int bOther = (((b-bSpinStart) % 2) ? b-1 : b+1);
+				if((bOther < 0) or (bOther >= s.nInner))
+					continue;
+				wSumDP += mfPrime; //NOTE: not all bands may be included in DP sum
 				//Get internal magnetic field squared:
 				vector3<double> LfreqSq;
 				double LfreqSqSum = 0.;
 				for(int iDir=0; iDir<3; iDir++)
-				{   LfreqSq[iDir] = std::pow((Eother-s.E[b]) * s.S[iDir](b,b).real(), 2);
+				{   LfreqSq[iDir] = std::pow((s.E[bOther]-s.E[b]) * s.S[iDir](b,b).real(), 2);
 					LfreqSqSum += LfreqSq[iDir];  
 				}
 				//Internal magnetic field perpendicular to each direction:
@@ -489,11 +499,12 @@ void Lindblad::reportCarrierLifetime() const
 	logPrintf("tau(time-avg) = %lf fs\n", (tauSum / wSum) / fs);
 	logPrintf("tau(rate-avg) = %lf fs\n", (wSum / tauInvSum) / fs);
 	if(spinorial)
-	{	mpiWorld->allReduce(OmegaSqDPsum, MPIUtil::ReduceSum);
+	{	mpiWorld->allReduce(wSumDP, MPIUtil::ReduceSum);
+		mpiWorld->allReduce(OmegaSqDPsum, MPIUtil::ReduceSum);
 		mpiWorld->allReduce(tauInvSpinDPsum, MPIUtil::ReduceSum);
-		vector3<> OmegaSqDP = OmegaSqDPsum / wSum, tauSpinDP;
+		vector3<> OmegaSqDP = OmegaSqDPsum / wSumDP, tauSpinDP;
 		for(int iDir=0; iDir<3; iDir++)
-			tauSpinDP[iDir] = wSum / tauInvSpinDPsum[iDir];
+			tauSpinDP[iDir] = wSumDP / tauInvSpinDPsum[iDir];
 		logPrintf("OmegaSqDP [1/fs^2] = "); (OmegaSqDP / std::pow(fs, -2)).print(globalLog, " %lg ");
 		logPrintf("tauSpinDP [fs] = "); (tauSpinDP / fs).print(globalLog, " %lg ");
 	}
