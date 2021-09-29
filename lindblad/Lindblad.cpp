@@ -194,9 +194,10 @@ Lindblad::Lindblad(const LindbladParams& lp)
 	}
 	drho.assign(rhoSize[mpiWorld->iProcess()], 0.);
 
-	//Make inner-window energies available for all processes (if needed):
 	if(lp.ePhEnabled)
-	{	nInnerPrev.assign(nk+1, 0); //cumulative nInner for each k (offset into the Eall array)
+	{
+		//Make inner-window energies available for all processes:
+		nInnerPrev.assign(nk+1, 0); //cumulative nInner for each k (offset into the Eall array)
 		nRhoPrev.assign(nk+1, 0); //cumulative nInner^2 for each k (offset into global rho)
 		for(size_t ik=0; ik<nk; ik++)
 		{	nInnerPrev[ik+1] = nInnerPrev[ik] + nInnerAll[ik];
@@ -212,6 +213,16 @@ Lindblad::Lindblad(const LindbladParams& lp)
 			size_t iEstop = nInnerPrev[kDivision.stop(jProc)];
 			mpiWorld->bcast(&Eall[iEstart], iEstop-iEstart, jProc);
 		}
+		
+		//Initialize A+ and A- for e-ph matrix elements:
+		for(State& s: state)
+		{	for(LindbladFile::GePhEntry& g: s.GePh)
+			{	g.G.init(s.nInner, nInnerAll[g.jk]);
+				g.initA(lp.T, lp.defectFraction);
+			}
+		}
+		if(not lp.spectrumMode)
+			reportCarrierLifetime();
 	}
 	logPrintf("\n"); logFlush();
 }
@@ -369,5 +380,94 @@ void Lindblad::writeImEps(string fname) const
 			ofs << '\n';
 		}
 	}	
+	watch.stop();
+}
+
+
+void Lindblad::reportCarrierLifetime() const
+{	static StopWatch watch("Lindblad::reportCarrierLifetime");
+	if(not lp.ePhEnabled) return;
+	watch.start();
+
+	//Scattering rate data for all k on this process:
+	int iProc = mpiWorld->iProcess();
+	size_t ikStart = kDivision.start(iProc);
+	size_t ikStop = kDivision.stop(iProc);
+	size_t iEallStart = nInnerPrev[ikStart]; //start index of Eall corresponding to iProc
+	size_t iEallStop = nInnerPrev[ikStop]; //end index of Eall corresponding to iProc
+	size_t nE_i = iEallStop - iEallStart; //total number of Eall corresponding to iProc
+	diagMatrix tauInv_i(nE_i); //all rate contributions to states on iProc
+
+	//Loop over process providing other k data:
+	const double prefac = (2.*M_PI)/nkTot;
+	for(int jProc=0; jProc<mpiWorld->nProcesses(); jProc++)
+	{	//Compute Fermi fillings for states on jProc:
+		size_t jkStart = kDivision.start(jProc);
+		size_t jkStop = kDivision.stop(jProc);
+		size_t jEallStart = nInnerPrev[jkStart]; //start index of Eall corresponding to jProc
+		size_t jEallStop = nInnerPrev[jkStop]; //end index of Eall corresponding to jProc
+		size_t nE_j = jEallStop - jEallStart; //total number of Eall corresponding to jProc
+		diagMatrix rho0_j(nE_j), tauInv_j(nE_j); //equilibrium fillings and rate contributions corresponding to jProc
+		for(size_t jEall=jEallStart; jEall<jEallStop; jEall++)
+			rho0_j[jEall-jEallStart] = fermi((Eall[jEall] - lp.dmu) * lp.invT);
+
+		//Loop over rho1 local to each process:
+		for(const State& s: state)
+		{	size_t iE1 = nInnerPrev[s.ik] - iEallStart; //index of ik1 (s.ik) in local Eall-like arrays
+			const diagMatrix& f1 = s.rho0;
+			double* tauInv1 = &tauInv_i[iE1];
+
+			//Find first entry of GePh whose partner is on jProc (if any):
+			std::vector<LindbladFile::GePhEntry>::const_iterator g = std::lower_bound(s.GePh.begin(), s.GePh.end(), jkStart);
+			while(g != s.GePh.end())
+			{	if(g->jk >= jkStop) break;
+				const size_t& ik2 = g->jk;
+				size_t jE2 = nInnerPrev[ik2] - jEallStart; //index of ik2 in local Eall-like arrays
+				const double* f2 = &rho0_j[jE2];
+				double* tauInv2 = &tauInv_j[jE2];
+
+				//Loop over all connections to the same partner k:
+				while((g != s.GePh.end()) and (g->jk == ik2))
+				{	//A- contributions:
+					for(const SparseEntry& e: g->Am)
+					{	double term = prefac * e.val.norm();
+						tauInv1[e.i] += term * f2[e.j];
+						tauInv2[e.j] += term * (1. - f1[e.i]);
+					}
+					//A+ contributions:
+					for(const SparseEntry& e: g->Ap)
+					{	double term = prefac * e.val.norm();
+						tauInv1[e.i] += term * (1. - f2[e.j]);
+						tauInv2[e.j] += term * f1[e.i];
+					}
+					//Move to next element:
+					g++;
+				}
+			}
+		}
+
+		//Collect remote contributions:
+		mpiWorld->reduceData(tauInv_j, MPIUtil::ReduceSum, jProc);
+		if(jProc==iProc)
+			tauInv_i += tauInv_j;
+	}
+	
+	//Compute f-prime averages:
+	double wSum = 0., tauSum = 0., tauInvSum = 0.;
+	for(const State& s: state)
+	{	const diagMatrix& f = s.rho0;
+		const double* tauInv = &tauInv_i[nInnerPrev[s.ik] - iEallStart];
+		for(int b=0; b<s.nInner; b++)
+		{	double mfPrime = lp.invT * f[b] * (1. - f[b]); //-df/dE
+			wSum += mfPrime;
+			tauSum += mfPrime / tauInv[b];
+			tauInvSum += mfPrime * tauInv[b];
+		}
+	}
+	mpiWorld->allReduce(wSum, MPIUtil::ReduceSum);
+	mpiWorld->allReduce(tauSum, MPIUtil::ReduceSum);
+	mpiWorld->allReduce(tauInvSum, MPIUtil::ReduceSum);
+	logPrintf("tau(time-avg) = %lf fs\n", (tauSum / wSum) / fs);
+	logPrintf("tau(rate-avg) = %lf fs\n", (wSum / tauInvSum) / fs);
 	watch.stop();
 }

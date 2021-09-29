@@ -182,6 +182,7 @@ public:
 	void applyPump(); //!< one-shot pump (optical or Bfield)
 	DM1 compute(double t, const DM1& v); //specify differential equation for time evolution
 	void report(double t, const DM1& v) const; //called by integrator for periodic reporting
+	void reportCarrierLifetime() const; //calculate and report fprime-averaged carrier lifetime
 };
 
 
