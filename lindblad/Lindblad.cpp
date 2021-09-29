@@ -454,6 +454,7 @@ void Lindblad::reportCarrierLifetime() const
 	
 	//Compute f-prime averages:
 	double wSum = 0., tauSum = 0., tauInvSum = 0.;
+	vector3<> OmegaSqDPsum, tauInvSpinDPsum;
 	for(const State& s: state)
 	{	const diagMatrix& f = s.rho0;
 		const double* tauInv = &tauInv_i[nInnerPrev[s.ik] - iEallStart];
@@ -462,6 +463,24 @@ void Lindblad::reportCarrierLifetime() const
 			wSum += mfPrime;
 			tauSum += mfPrime / tauInv[b];
 			tauInvSum += mfPrime * tauInv[b];
+			//Optional DP field and lifetime calculation:
+			if(spinorial)
+			{	const double& Eother = s.E[b%2 ? b-1 : b+1];
+				//Get internal magnetic field squared:
+				vector3<double> LfreqSq;
+				double LfreqSqSum = 0.;
+				for(int iDir=0; iDir<3; iDir++)
+				{   LfreqSq[iDir] = std::pow((Eother-s.E[b]) * s.S[iDir](b,b).real(), 2);
+					LfreqSqSum += LfreqSq[iDir];  
+				}
+				//Internal magnetic field perpendicular to each direction:
+				vector3<> OmegaSqDP;
+				for(int iDir=0; iDir<3; iDir++)
+					OmegaSqDP[iDir] = LfreqSqSum - LfreqSq[iDir];
+				//Collect DP results:
+				OmegaSqDPsum += mfPrime * OmegaSqDP;
+				tauInvSpinDPsum += (mfPrime / tauInv[b]) * OmegaSqDP;
+			}
 		}
 	}
 	mpiWorld->allReduce(wSum, MPIUtil::ReduceSum);
@@ -469,5 +488,14 @@ void Lindblad::reportCarrierLifetime() const
 	mpiWorld->allReduce(tauInvSum, MPIUtil::ReduceSum);
 	logPrintf("tau(time-avg) = %lf fs\n", (tauSum / wSum) / fs);
 	logPrintf("tau(rate-avg) = %lf fs\n", (wSum / tauInvSum) / fs);
+	if(spinorial)
+	{	mpiWorld->allReduce(OmegaSqDPsum, MPIUtil::ReduceSum);
+		mpiWorld->allReduce(tauInvSpinDPsum, MPIUtil::ReduceSum);
+		vector3<> OmegaSqDP = OmegaSqDPsum / wSum, tauSpinDP;
+		for(int iDir=0; iDir<3; iDir++)
+			tauSpinDP[iDir] = wSum / tauInvSpinDPsum[iDir];
+		logPrintf("OmegaSqDP [1/fs^2] = "); (OmegaSqDP / std::pow(fs, -2)).print(globalLog, " %lg ");
+		logPrintf("tauSpinDP [fs] = "); (tauSpinDP / fs).print(globalLog, " %lg ");
+	}
 	watch.stop();
 }
