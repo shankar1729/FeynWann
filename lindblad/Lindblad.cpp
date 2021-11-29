@@ -11,7 +11,8 @@ void LindbladParams::initialize()
 	nomega = 1 + int(round((omegaMax-omegaMin)/domega));
 	
 	//Spin echo setup:
-	spinEchoOmega = 2.*Bext.length();
+	if(not spinEchoOmega)
+		spinEchoOmega = 2.*Bext.length();
 	if(spinEchoB.length_squared())
 	{
 		//Check specified magnetic fields:
