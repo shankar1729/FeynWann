@@ -18,17 +18,25 @@ void LindbladParams::initialize()
 		//Check specified magnetic fields:
 		const double tol = 1E-6;
 		if(not Bext.length_squared())
-			die("\nSpin echo requires non-zero magnetic field Bext.\n\n");
+			die("\nSpin echo requires non-zero magnetic field Bext.\n"
+				"If internal magnetic fields play the role of Bext,\n"
+				"set Bhat to a small non-zero vector parallel to it.\n"
+				"This is needed to determine the precession axis.\n\n");
 		vector3<> BextHat = normalize(Bext); //unit vector of precession axis
 		vector3<> spinEchoBhat = normalize(spinEchoB); //unit vector of starting rotational field
 		if(fabs(dot(spinEchoBhat, BextHat)) >= tol)
 			die("\nspinEchoB must be perpendicular to Bext\n\n");
 		
 		//Ensure initial conditions:
-		if(not pumpBfield)
-			die("\nSpin echo requires initial spin state to be set with B-field pump mode.\n\n");
-		if(fabs(cross(pumpB, BextHat).length()) >= tol * pumpB.length())
-			die("\nSpin echo requires pumpB and Bext to be parallel.\n\n");
+		if(pumpBfield)
+		{	if(fabs(cross(pumpB, BextHat).length()) >= tol * pumpB.length())
+				die("\nSpin echo requires pumpB and Bext to be parallel.\n\n");
+		}
+		else
+			logPrintf(
+				"\nWARNING: Spin echo requires initial spin state to be parallel\n"
+				"to precession axis. This cam be checked internally only in B-field\n"
+				"pump mode; make sure laser pump creates appropriate initial spins.\n\n");
 		
 		//Compute rotation matrix and period:
 		spinEchoRot.set_col(0, spinEchoBhat);
