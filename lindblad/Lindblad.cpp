@@ -20,7 +20,7 @@ void LindbladParams::initialize()
 		if(not Bext.length_squared())
 			die("\nSpin echo requires non-zero magnetic field Bext.\n"
 				"If internal magnetic fields play the role of Bext,\n"
-				"set Bhat to a small non-zero vector parallel to it.\n"
+				"set Bext to a small non-zero vector parallel to it.\n"
 				"This is needed to determine the precession axis.\n\n");
 		vector3<> BextHat = normalize(Bext); //unit vector of precession axis
 		vector3<> spinEchoBhat = normalize(spinEchoB); //unit vector of starting rotational field

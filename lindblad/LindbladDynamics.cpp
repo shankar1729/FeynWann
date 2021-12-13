@@ -8,8 +8,8 @@
 
 void Lindblad::calculate()
 {
-	if(not (lp.pumpEvolve or lp.ePhEnabled))
-	{	//Simple probe - one-shot-pump - probe with no relaxation:
+	if(not (lp.pumpEvolve or lp.ePhEnabled or lp.Bext.length_squared()))
+	{	//Simple probe - one-shot-pump - probe with no relaxation (or coherent dynamics):
 		report(-lp.dt, drho);
 		applyPump(); //one-shot optical pump or B-field excitation
 		report(0., drho);
