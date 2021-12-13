@@ -77,10 +77,12 @@ void LindbladLinear::initialize()
 }
 
 void LindbladLinear::cleanup()
-{	CHECKERR(MatDestroy(&evolveMat));
-	CHECKERR(VecDestroy(&vRho));
-	CHECKERR(VecDestroy(&vRhoDot));
-	CHECKERR(PetscFinalize());
+{	if(lp.ePhEnabled)
+	{	CHECKERR(MatDestroy(&evolveMat));
+		CHECKERR(VecDestroy(&vRho));
+		CHECKERR(VecDestroy(&vRhoDot));
+		CHECKERR(PetscFinalize());
+	}
 }
 
 #endif

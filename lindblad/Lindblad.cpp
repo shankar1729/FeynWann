@@ -102,8 +102,8 @@ Lindblad::Lindblad(const LindbladParams& lp)
 	spinorial = h.spinorial;
 	spinWeight = h.spinWeight;
 	R = h.R; Omega = fabs(det(R));
-	if(lp.ePhEnabled != h.ePhEnabled)
-		die("ePhEnabled = %s differs from the mode specified in lindbladInit.\n", boolMap.getString(lp.ePhEnabled));
+	if(lp.ePhEnabled and not h.ePhEnabled)
+		die("ePhEnabled = yes requires e-ph included in lindbladInit.\n");
 	if(lp.pumpBfield and (not spinorial))
 		die("Bfield pump mode requires spin matrix elements from a spinorial calculation.\n");
 	if(lp.Bext.isNonzero() and (not spinorial))
