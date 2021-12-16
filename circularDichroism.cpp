@@ -80,6 +80,7 @@ struct CollectCD
 		{	for(int b1=0; b1<nBands; b1++)
 			{	double omega = E[b1] - E[b2]; //energy conservation
 				if(omega<domega || omega>=omegaMax) continue; //irrelevant event
+				if(fabs(F[b1] - F[b2]) < 1E-6) continue; //negligible weight below
 				//Get momentum matrix element:
 				vector3<complex> P21;
 				for(int iDir=0; iDir<3; iDir++)
