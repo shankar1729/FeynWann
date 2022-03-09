@@ -19,7 +19,7 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 
 #include <core/Util.h>
 #include <core/matrix.h>
-#include <core/scalar.h>
+#include <core/tensor3.h>
 #include <core/Random.h>
 #include <core/string.h>
 #include "FeynWann.h"
@@ -58,11 +58,13 @@ struct CollectCD
 	double domega, omegaMax, EemptyMax;
 	std::vector<Histogram> CD, CDmd; //Total circular dichorism and magnetic momentum contributions alone (xx,yy,zz,yz,zx,xy components)
 	double prefac;
+	bool useEmpty; //whether to use empty states
 	
 	CollectCD(double dmu, double T, double domega, double omegaMax, double EemptyMax)
 	: dmu(dmu), T(T), invT(1./T), domega(domega), omegaMax(omegaMax), EemptyMax(EemptyMax),
 		CD(6, Histogram(0, domega, omegaMax)),
-		CDmd(6, Histogram(0, domega, omegaMax))
+		CDmd(6, Histogram(0, domega, omegaMax)),
+		useEmpty(not isnan(EemptyMax))
 	{	logPrintf("Initialized frequency grid: 0 to %lg eV with %d points.\n", CD[0].Emax()/eV, CD[0].nE);
 	}
 	
@@ -85,24 +87,41 @@ struct CollectCD
 				vector3<complex> P21;
 				for(int iDir=0; iDir<3; iDir++)
 					P21[iDir] = state.v[iDir](b1,b2);
-				//Compute X12 = < r p >_12 by sum over empty states:
-				matrix3<complex> X12;
-				for(int b3=0; b3<nBands; b3++)
-					if(E[b3]<EemptyMax and fabs(E[b3]-E[b2])>degeneracyThreshold)
-					{	complex invDE23 = complex(0., 1./(E[b2]-E[b3]));
-						vector3<complex> P13, r32;
-						for(int iDir=0; iDir<3; iDir++)
-						{	P13[iDir] = state.v[iDir](b3,b1);
-							r32[iDir] = state.v[iDir](b2,b3) * invDE23;
+				//Compute L and Q matrix elements:
+				vector3<complex> L12;
+				matrix3<complex> Q12;
+				if(useEmpty)
+				{	//Compute X12 = < r p >_12 by sum over empty states:
+					matrix3<complex> X12;
+					for(int b3=0; b3<nBands; b3++)
+						if(E[b3]<EemptyMax and fabs(E[b3]-E[b2])>degeneracyThreshold)
+						{	complex invDE23 = complex(0., 1./(E[b2]-E[b3]));
+							vector3<complex> P13, r32;
+							for(int iDir=0; iDir<3; iDir++)
+							{	P13[iDir] = state.v[iDir](b3,b1);
+								r32[iDir] = state.v[iDir](b2,b3) * invDE23;
+							}
+							X12 += outer(r32, P13);
 						}
-						X12 += outer(r32, P13);
-					}
+					//Get L and Q from X:
+					L12 = epsDot(X12);
+					Q12 = complex(2.) * Sym(X12);
+				}
+				else
+				{	//Use Wannier interpolated L matrix elements:
+					for(int iDir=0; iDir<3; iDir++)
+						L12[iDir] = state.L[iDir](b2,b1);
+					//Use Wannier interpolated Q matrix elements:
+					tensor3<complex> Q12t;
+					for(int iComp=0; iComp<5; iComp++)
+						Q12t[iComp] = state.Q[iComp](b2,b1);
+					Q12 = matrix3<complex>(Q12t);
+				}
 				//Compute EQ and MD contributions:
 				//--- Magnetic Dipole (MD) contribution:
-				vector3<complex> L12 = epsDot(X12);
 				matrix3<> Gmd = Sym(Real(outer(P21,L12))) - Id*dot(P21,L12).real();
 				//--- Electric Quadrupole (EQ) contribution:
-				matrix3<> Geq = 2.*Sym(Real(Sym(X12) * epsDot(P21)));
+				matrix3<> Geq = Sym(Real(Q12 * epsDot(P21)));
 				matrix3<> Gtot = Gmd + Geq;
 				double weight = prefac * (F[b1] - F[b2]);
 				//Save contribution to appropriate frequency:
@@ -171,14 +190,14 @@ struct CollectCD
 
 int main(int argc, char** argv)
 {	
-	InitParams ip = FeynWann::initialize(argc, argv, "Wannier calculation of imaginary dielectric tensor (ImEps)");
+	InitParams ip = FeynWann::initialize(argc, argv, "Wannier calculation of circular dichroism");
 
 	//Get the system parameters (mu, T, lattice vectors etc.)
 	InputMap inputMap(ip.inputFilename);
 	const int nOffsets = inputMap.get("nOffsets"); assert(nOffsets>0);
 	const double omegaMax = inputMap.get("omegaMax") * eV; assert(omegaMax>0.); //maximum photon frequency to collect results for
 	const double domega = inputMap.get("domega") * eV; assert(domega>0.); //photon energy grid resolution
-	const double EemptyMax = inputMap.get("EemptyMax", +DBL_MAX) * eV; //maximum empty-state energy to use (vary below max Wannier energy) to check convergence
+	const double EemptyMax = inputMap.get("EemptyMax", NAN) * eV; //maximum empty-state energy to use (vary below max Wannier energy) to check convergence; default NAN: use L and Q computed without empty states
 	const double T = inputMap.get("T") * Kelvin;
 	const double dmu = inputMap.get("dmu", 0.) * eV; //optional shift in chemical potential from neutral value/ VBM; (default to 0)
 	FeynWannParams fwp(&inputMap);
@@ -196,6 +215,7 @@ int main(int argc, char** argv)
 	//Initialize FeynWann:
 	fwp.needSymmetries = true;
 	fwp.needVelocity = true;
+	fwp.needQ = (fwp.needL = isnan(EemptyMax));
 	std::shared_ptr<FeynWann> fw = std::make_shared<FeynWann>(fwp);
 	size_t nKeff = nOffsets * fw->eCountPerOffset();
 	logPrintf("Effectively sampled nKpts: %lu\n", nKeff);

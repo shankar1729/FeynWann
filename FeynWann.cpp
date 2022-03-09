@@ -27,7 +27,7 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 
 FeynWannParams::FeynWannParams(InputMap* inputMap)
 : iSpin(0), totalEprefix("Wannier/totalE"), phononPrefix("Wannier/phonon"), wannierPrefix("Wannier/wannier"),
-needSymmetries(false), needPhonons(false), needVelocity(false), needSpin(false),
+needSymmetries(false), needPhonons(false), needVelocity(false), needSpin(false), needL(false), needQ(false),
 needLinewidth_ee(false), needLinewidth_ePh(false), needLinewidthP_ePh(false),
 ePhHeadOnly(false), maskOptimize(false), EzExt(0.), scissor(0.), EshiftWeight(0.), enforceKramerDeg(0.)
 {
@@ -588,6 +588,18 @@ FeynWann::FeynWann(FeynWannParams& fwp)
 		Sw = std::make_shared<DistributedMatrix>(fname, realPartOnly,
 			mpiGroup, 3*nBands*nBands, cellMap, offsetDim, false, mpiInterGroup, &cellWeightsVec, &kfold);
 	}
+	//Angular momentum matrix elements
+	if(fwp.needL)
+	{	fname = fwp.wannierPrefix + ".mlwfL" + spinSuffix;
+		Lw = std::make_shared<DistributedMatrix>(fname, realPartOnly,
+			mpiGroup, 3*nBands*nBands, cellMap, offsetDim, false, mpiInterGroup, &cellWeightsVec, &kfold);
+	}
+	//Electric quadrupole r*p matrix elements
+	if(fwp.needQ)
+	{	fname = fwp.wannierPrefix + ".mlwfQ" + spinSuffix;
+		Qw = std::make_shared<DistributedMatrix>(fname, realPartOnly,
+			mpiGroup, 5*nBands*nBands, cellMap, offsetDim, false, mpiInterGroup, &cellWeightsVec, &kfold);
+	}
 	//z position matrix elements
 	if(fwp.EzExt)
 	{	fname = fwp.wannierPrefix + ".mlwfZ" + spinSuffix;
@@ -705,6 +717,8 @@ void FeynWann::eLoop(const vector3<>& k0, FeynWann::eProcessFunc eProcess, void*
 	Hw->transform(k0);
 	if(fwp.needVelocity) Pw->transform(k0);
 	if(fwp.needSpin) Sw->transform(k0);
+	if(fwp.needL) Lw->transform(k0);
+	if(fwp.needQ) Qw->transform(k0);
 	if(fwp.EzExt) Zw->transform(k0);
 	if(fwp.needLinewidth_ee) ImSigma_eeW->transform(k0);
 	if(fwp.needLinewidth_ePh) ImSigma_ePhW->transform(k0);
@@ -731,6 +745,8 @@ void FeynWann::eCalc(const vector3<>& k, FeynWann::StateE& e)
 	Hw->compute(k);
 	if(fwp.needVelocity) Pw->compute(k);
 	if(fwp.needSpin) Sw->compute(k);
+	if(fwp.needL) Lw->compute(k);
+	if(fwp.needQ) Qw->compute(k);
 	if(fwp.EzExt) Zw->compute(k);
 	if(fwp.needLinewidth_ee) ImSigma_eeW->compute(k);
 	if(fwp.needLinewidth_ePh) ImSigma_ePhW->compute(k);
@@ -797,6 +813,8 @@ void FeynWann::ePhLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::ePh
 		{	Hw->transform(k0##i); \
 			if(fwp.needVelocity) Pw->transform(k0##i); \
 			if(fwp.needSpin) Sw->transform(k0##i); \
+			if(fwp.needL) Lw->transform(k0##i); \
+			if(fwp.needQ) Qw->transform(k0##i); \
 			if(fwp.EzExt) Zw->transform(k0##i); \
 			if(fwp.needLinewidth_ee) ImSigma_eeW->transform(k0##i); \
 			if(fwp.needLinewidth_ePh) ImSigma_ePhW->transform(k0##i); \
@@ -939,6 +957,8 @@ void FeynWann::defectLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::
 		{	Hw->transform(k0##i); \
 			if(fwp.needVelocity) Pw->transform(k0##i); \
 			if(fwp.needSpin) Sw->transform(k0##i); \
+			if(fwp.needL) Lw->transform(k0##i); \
+			if(fwp.needQ) Qw->transform(k0##i); \
 			if(fwp.EzExt) Zw->transform(k0##i); \
 			if(fwp.needLinewidth_ee) ImSigma_eeW->transform(k0##i); \
 			if(fwp.needLinewidth_ePh) ImSigma_ePhW->transform(k0##i); \
@@ -1117,6 +1137,7 @@ void FeynWann::setState(FeynWann::StateE& state)
 				state.vVec[b][iDir] = state.v[iDir](b,b).real();
 		}
 	}
+	//Spin matrix, if needed:
 	if(fwp.needSpin)
 	{	state.Svec.resize(nBands);
 		for(int iDir=0; iDir<3; iDir++)
@@ -1126,6 +1147,18 @@ void FeynWann::setState(FeynWann::StateE& state)
 				state.Svec[b][iDir] = state.S[iDir](b,b).real();
 		}
 	}
+	//Angular momentum matrix elements, if needed
+	if(fwp.needL)
+		for(int iDir=0; iDir<3; iDir++)
+		{	state.L[iDir] = complex(0,-1) //Since L was stored with -i omitted (to make it real when possible)
+				* (dagger(state.U) * getMatrix(Lw->getResult(state.ik), nBands, nBands, iDir) * state.U);
+		}
+	//Electric quadrupole r*p matrix elements, if needed
+	if(fwp.needQ)
+		for(int iComp=0; iComp<5; iComp++)
+		{	state.Q[iComp] = complex(0,-1) //Since Q was stored with -i omitted (to make it real when possible)
+				* (dagger(state.U) * getMatrix(Qw->getResult(state.ik), nBands, nBands, iComp) * state.U);
+		}
 	//Linewidths, as needed:
 	if(fwp.needLinewidth_ee)
 		state.ImSigma_ee = diag(dagger(state.U) * getMatrix(ImSigma_eeW->getResult(state.ik), nBands, nBands) * state.U);
@@ -1198,6 +1231,16 @@ void FeynWann::bcastState(FeynWann::StateE& state, MPIUtil* mpiUtil, int root)
 			bcast(state.S[iDir], nBands, nBands, mpiUtil, root);
 		state.Svec.resize(nBands);
 		mpiUtil->bcastData(state.Svec, root);
+	}
+	//Angular momentum matrix, if needed:
+	if(fwp.needL)
+	{	for(int iDir=0; iDir<3; iDir++)
+			bcast(state.L[iDir], nBands, nBands, mpiUtil, root);
+	}
+	//Electric quadrupole r*p matrix, if needed:
+	if(fwp.needQ)
+	{	for(int iComp=0; iComp<3; iComp++)
+			bcast(state.Q[iComp], nBands, nBands, mpiUtil, root);
 	}
 	//Linewidths, if needed:
 	if(fwp.needLinewidth_ee) bcast(state.ImSigma_ee, nBands, mpiUtil, root);
