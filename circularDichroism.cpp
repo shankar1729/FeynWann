@@ -95,7 +95,7 @@ struct CollectCD
 					matrix3<complex> X12;
 					for(int b3=0; b3<nBands; b3++)
 						if(E[b3]<EemptyMax and fabs(E[b3]-E[b2])>degeneracyThreshold)
-						{	complex invDE23 = complex(0., 1./(E[b2]-E[b3]));
+						{	complex invDE23 = complex(0., -1./(E[b2]-E[b3]));
 							vector3<complex> P13, r32;
 							for(int iDir=0; iDir<3; iDir++)
 							{	P13[iDir] = state.v[iDir](b3,b1);
