@@ -55,22 +55,19 @@ inline matrix3<> Real(const matrix3<complex>& M)
 //Collect circular dichroism contibutions using FeynWann callbacks:
 struct CollectCD
 {	double dmu, T, invT;
-	double domega, omegaMax, EemptyMax;
+	double domega, omegaMax;
 	std::vector<Histogram> CD, CDmd; //Total circular dichorism and magnetic momentum contributions alone (xx,yy,zz,yz,zx,xy components)
 	double prefac;
-	bool useEmpty; //whether to use empty states
 	
-	CollectCD(double dmu, double T, double domega, double omegaMax, double EemptyMax)
-	: dmu(dmu), T(T), invT(1./T), domega(domega), omegaMax(omegaMax), EemptyMax(EemptyMax),
+	CollectCD(double dmu, double T, double domega, double omegaMax)
+	: dmu(dmu), T(T), invT(1./T), domega(domega), omegaMax(omegaMax),
 		CD(6, Histogram(0, domega, omegaMax)),
-		CDmd(6, Histogram(0, domega, omegaMax)),
-		useEmpty(not isnan(EemptyMax))
+		CDmd(6, Histogram(0, domega, omegaMax))
 	{	logPrintf("Initialized frequency grid: 0 to %lg eV with %d points.\n", CD[0].Emax()/eV, CD[0].nE);
 	}
 	
 	void collectE(const FeynWann::StateE& state)
 	{	int nBands = state.E.nRows();
-		const double degeneracyThreshold = 1e-4;
 		matrix3<> Id(1.,1.,1.); //3x3 identity
 		//Calculate Fermi fillings and linewidths:
 		const diagMatrix& E = state.E;
@@ -83,40 +80,20 @@ struct CollectCD
 			{	double omega = E[b1] - E[b2]; //energy conservation
 				if(omega<domega || omega>=omegaMax) continue; //irrelevant event
 				if(fabs(F[b1] - F[b2]) < 1E-6) continue; //negligible weight below
-				//Get momentum matrix element:
+				//Collect relevant matrix elements:
+				//--- P
 				vector3<complex> P21;
 				for(int iDir=0; iDir<3; iDir++)
 					P21[iDir] = state.v[iDir](b1,b2);
-				//Compute L and Q matrix elements:
+				//--- L
 				vector3<complex> L12;
-				matrix3<complex> Q12;
-				if(useEmpty)
-				{	//Compute X12 = < r p >_12 by sum over empty states:
-					matrix3<complex> X12;
-					for(int b3=0; b3<nBands; b3++)
-						if(E[b3]<EemptyMax and fabs(E[b3]-E[b2])>degeneracyThreshold)
-						{	complex invDE23 = complex(0., -1./(E[b2]-E[b3]));
-							vector3<complex> P13, r32;
-							for(int iDir=0; iDir<3; iDir++)
-							{	P13[iDir] = state.v[iDir](b3,b1);
-								r32[iDir] = state.v[iDir](b2,b3) * invDE23;
-							}
-							X12 += outer(r32, P13);
-						}
-					//Get L and Q from X:
-					L12 = epsDot(X12);
-					Q12 = complex(2.) * Sym(X12);
-				}
-				else
-				{	//Use Wannier interpolated L matrix elements:
-					for(int iDir=0; iDir<3; iDir++)
-						L12[iDir] = state.L[iDir](b2,b1);
-					//Use Wannier interpolated Q matrix elements:
-					tensor3<complex> Q12t;
-					for(int iComp=0; iComp<5; iComp++)
-						Q12t[iComp] = state.Q[iComp](b2,b1);
-					Q12 = matrix3<complex>(Q12t);
-				}
+				for(int iDir=0; iDir<3; iDir++)
+					L12[iDir] = state.L[iDir](b2,b1);
+				//--- Q
+				tensor3<complex> Q12t;
+				for(int iComp=0; iComp<5; iComp++)
+					Q12t[iComp] = state.Q[iComp](b2,b1);
+				matrix3<complex> Q12(Q12t);
 				//Compute EQ and MD contributions:
 				//--- Magnetic Dipole (MD) contribution:
 				matrix3<> Gmd = Sym(Real(outer(P21,L12))) - Id*dot(P21,L12).real();
@@ -197,7 +174,6 @@ int main(int argc, char** argv)
 	const int nOffsets = inputMap.get("nOffsets"); assert(nOffsets>0);
 	const double omegaMax = inputMap.get("omegaMax") * eV; assert(omegaMax>0.); //maximum photon frequency to collect results for
 	const double domega = inputMap.get("domega") * eV; assert(domega>0.); //photon energy grid resolution
-	const double EemptyMax = inputMap.get("EemptyMax", NAN) * eV; //maximum empty-state energy to use (vary below max Wannier energy) to check convergence; default NAN: use L and Q computed without empty states
 	const double T = inputMap.get("T") * Kelvin;
 	const double dmu = inputMap.get("dmu", 0.) * eV; //optional shift in chemical potential from neutral value/ VBM; (default to 0)
 	FeynWannParams fwp(&inputMap);
@@ -207,7 +183,6 @@ int main(int argc, char** argv)
 	logPrintf("nOffsets = %d\n", nOffsets);
 	logPrintf("omegaMax = %lg\n", omegaMax);
 	logPrintf("domega = %lg\n", domega);
-	logPrintf("EemptyMax = %lg\n", EemptyMax);
 	logPrintf("T = %lg\n", T);
 	logPrintf("dmu = %lg\n", dmu);
 	fwp.printParams();
@@ -215,7 +190,8 @@ int main(int argc, char** argv)
 	//Initialize FeynWann:
 	fwp.needSymmetries = true;
 	fwp.needVelocity = true;
-	fwp.needQ = (fwp.needL = isnan(EemptyMax));
+	fwp.needQ = true;
+	fwp.needL = true;
 	std::shared_ptr<FeynWann> fw = std::make_shared<FeynWann>(fwp);
 	size_t nKeff = nOffsets * fw->eCountPerOffset();
 	logPrintf("Effectively sampled nKpts: %lu\n", nKeff);
@@ -239,7 +215,7 @@ int main(int argc, char** argv)
 	int oInterval = std::max(1, int(round(noMine/50.))); //interval for reporting progress
 	
 	//Collect results:
-	CollectCD ccd(dmu, T, domega, omegaMax, EemptyMax);
+	CollectCD ccd(dmu, T, domega, omegaMax);
 	const double c = 137.035999084; //speed of light in atomic units = 1/(fine structure constant)
 	ccd.prefac = 4.*std::pow(M_PI/c,2) * fw->spinWeight / (nKeff*fabs(det(fw->R))); //frequency independent part of prefactor
 	
