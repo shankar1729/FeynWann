@@ -181,7 +181,7 @@ public:
 	//Electrons:
 	std::vector< vector3<int> > cellMap; //electron Wannier cell map
 	matrix cellWeights; //corresponding weights (nBands*nBands x nCells)
-	std::shared_ptr<DistributedMatrix> Hw, Pw, Sw, Lw, Qw, Zw; //Wannier hamiltonian, momentum, spin, L, Q and z matrix elements
+	std::shared_ptr<DistributedMatrix> Hw, Pw, Sw, RPw, Zw; //Wannier hamiltonian, momentum, spin, R*P and z matrix elements
 	std::shared_ptr<DistributedMatrix> ImSigma_eeW, ImSigma_ePhW, ImSigmaP_ePhW, ImSigma_DW, ImSigmaP_DW; //linewidths in wannier basis
 	void setState(StateE& state); //!< set requested properties for ik in state
 	void bcastState(StateE& state, MPIUtil* mpiUtil, int root); //!< broadcast specified state on specified MPI instance

@@ -588,17 +588,11 @@ FeynWann::FeynWann(FeynWannParams& fwp)
 		Sw = std::make_shared<DistributedMatrix>(fname, realPartOnly,
 			mpiGroup, 3*nBands*nBands, cellMap, offsetDim, false, mpiInterGroup, &cellWeightsVec, &kfold);
 	}
-	//Angular momentum matrix elements
-	if(fwp.needL)
-	{	fname = fwp.wannierPrefix + ".mlwfL" + spinSuffix;
-		Lw = std::make_shared<DistributedMatrix>(fname, realPartOnly,
-			mpiGroup, 3*nBands*nBands, cellMap, offsetDim, false, mpiInterGroup, &cellWeightsVec, &kfold);
-	}
-	//Electric quadrupole r*p matrix elements
-	if(fwp.needQ)
-	{	fname = fwp.wannierPrefix + ".mlwfQ" + spinSuffix;
-		Qw = std::make_shared<DistributedMatrix>(fname, realPartOnly,
-			mpiGroup, 5*nBands*nBands, cellMap, offsetDim, false, mpiInterGroup, &cellWeightsVec, &kfold);
+	//R*P matrix elements for angular momentum and/or electric quadrupole
+	if(fwp.needL or fwp.needQ)
+	{	fname = fwp.wannierPrefix + ".mlwfRP" + spinSuffix;
+		RPw = std::make_shared<DistributedMatrix>(fname, realPartOnly,
+			mpiGroup, 9*nBands*nBands, cellMap, offsetDim, false, mpiInterGroup, &cellWeightsVec, &kfold);
 	}
 	//z position matrix elements
 	if(fwp.EzExt)
@@ -717,8 +711,7 @@ void FeynWann::eLoop(const vector3<>& k0, FeynWann::eProcessFunc eProcess, void*
 	Hw->transform(k0);
 	if(fwp.needVelocity) Pw->transform(k0);
 	if(fwp.needSpin) Sw->transform(k0);
-	if(fwp.needL) Lw->transform(k0);
-	if(fwp.needQ) Qw->transform(k0);
+	if(fwp.needL or fwp.needQ) RPw->transform(k0);
 	if(fwp.EzExt) Zw->transform(k0);
 	if(fwp.needLinewidth_ee) ImSigma_eeW->transform(k0);
 	if(fwp.needLinewidth_ePh) ImSigma_ePhW->transform(k0);
@@ -745,8 +738,7 @@ void FeynWann::eCalc(const vector3<>& k, FeynWann::StateE& e)
 	Hw->compute(k);
 	if(fwp.needVelocity) Pw->compute(k);
 	if(fwp.needSpin) Sw->compute(k);
-	if(fwp.needL) Lw->compute(k);
-	if(fwp.needQ) Qw->compute(k);
+	if(fwp.needL or fwp.needQ) RPw->compute(k);
 	if(fwp.EzExt) Zw->compute(k);
 	if(fwp.needLinewidth_ee) ImSigma_eeW->compute(k);
 	if(fwp.needLinewidth_ePh) ImSigma_ePhW->compute(k);
@@ -813,8 +805,7 @@ void FeynWann::ePhLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::ePh
 		{	Hw->transform(k0##i); \
 			if(fwp.needVelocity) Pw->transform(k0##i); \
 			if(fwp.needSpin) Sw->transform(k0##i); \
-			if(fwp.needL) Lw->transform(k0##i); \
-			if(fwp.needQ) Qw->transform(k0##i); \
+			if(fwp.needL or fwp.needQ) RPw->transform(k0##i); \
 			if(fwp.EzExt) Zw->transform(k0##i); \
 			if(fwp.needLinewidth_ee) ImSigma_eeW->transform(k0##i); \
 			if(fwp.needLinewidth_ePh) ImSigma_ePhW->transform(k0##i); \
@@ -957,8 +948,7 @@ void FeynWann::defectLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::
 		{	Hw->transform(k0##i); \
 			if(fwp.needVelocity) Pw->transform(k0##i); \
 			if(fwp.needSpin) Sw->transform(k0##i); \
-			if(fwp.needL) Lw->transform(k0##i); \
-			if(fwp.needQ) Qw->transform(k0##i); \
+			if(fwp.needL or fwp.needQ) RPw->transform(k0##i); \
 			if(fwp.EzExt) Zw->transform(k0##i); \
 			if(fwp.needLinewidth_ee) ImSigma_eeW->transform(k0##i); \
 			if(fwp.needLinewidth_ePh) ImSigma_ePhW->transform(k0##i); \
@@ -1147,18 +1137,35 @@ void FeynWann::setState(FeynWann::StateE& state)
 				state.Svec[b][iDir] = state.S[iDir](b,b).real();
 		}
 	}
-	//Angular momentum matrix elements, if needed
-	if(fwp.needL)
+	//R*P matrix elements for angular momentum and/or electric quadrupole:
+	if(fwp.needL or fwp.needQ)
+	{	matrix3<matrix> RP;
 		for(int iDir=0; iDir<3; iDir++)
-		{	state.L[iDir] = complex(0,-1) //Since L was stored with -i omitted (to make it real when possible)
-				* (dagger(state.U) * getMatrix(Lw->getResult(state.ik), nBands, nBands, iDir) * state.U);
+			for(int jDir=0; jDir<3; jDir++)
+				RP(iDir, jDir) = complex(0,-1) //Since RP was stored with -i omitted (to make it real when possible)
+					* (dagger(state.U) * getMatrix(RPw->getResult(state.ik), nBands, nBands, 3*iDir+jDir) * state.U);
+		//TODO: long range correction
+		//Extract L if needed:
+		if(fwp.needL)
+		{	for(int kDir=0; kDir<3; kDir++)
+			{	int iDir = (kDir + 1) % 3;
+				int jDir = (kDir + 2) % 3;
+				state.L[kDir] = dagger_symmetrize(RP(iDir, jDir) - RP(jDir, iDir));
+			}
 		}
-	//Electric quadrupole r*p matrix elements, if needed
-	if(fwp.needQ)
-		for(int iComp=0; iComp<5; iComp++)
-		{	state.Q[iComp] = complex(0,-1) //Since Q was stored with -i omitted (to make it real when possible)
-				* (dagger(state.U) * getMatrix(Qw->getResult(state.ik), nBands, nBands, iComp) * state.U);
+		//Extract Q if needed:
+		if(fwp.needQ)
+		{	//xy, yz and zx components:
+			for(int iDir=0; iDir<3; iDir++)
+			{	int jDir = (iDir + 1) % 3;
+				state.Q[iDir] = dagger_symmetrize(RP(iDir, jDir) + RP(jDir, iDir));
+			}
+			//xx - r^2/3 and yy - r^2/3 components:
+			matrix traceTerm = (1./3) * trace(RP);
+			for(int iDir=0; iDir<2; iDir++)
+				state.Q[iDir+3] = 2.*(RP(iDir, iDir) - traceTerm);
 		}
+	}
 	//Linewidths, as needed:
 	if(fwp.needLinewidth_ee)
 		state.ImSigma_ee = diag(dagger(state.U) * getMatrix(ImSigma_eeW->getResult(state.ik), nBands, nBands) * state.U);

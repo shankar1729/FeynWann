@@ -133,5 +133,6 @@ add_FeynWann_executable(phononElectronLinewidth)
 add_FeynWann_executable(ePhRelax)
 add_FeynWann_executable(ePhSpinRelax)
 add_FeynWann_executable(debugEph)
+add_FeynWann_executable(debugE)
 
 add_subdirectory(lindblad)
