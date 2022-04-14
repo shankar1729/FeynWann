@@ -49,7 +49,8 @@ struct FeynWannParams
 	double EzExt; //!< external electric field (added as a Stark perturbation to hamiltonian in FeynWann:setState)
 	double scissor; //!< scissor operator to move conduction band states up in energy to fix band gap in post-processing
 	double EshiftWeight; //!< if non-zero, apply this energy shift to the region of space selected by wannier slab weight (in mlwfW)
-	double enforceKramerDeg; //!< whether to enforce Kramer degeneracy in eigenvalues	
+	bool enforceKramerDeg; //!< whether to enforce Kramer degeneracy in eigenvalues	
+	double degeneracyThreshold; //!< threshold within which to treat Wannier bands as degenerate
 	
 	FeynWannParams(class InputMap* inputMap=0); //!< If specified, look for optional parameters Bext (in Tesla), EzExt (in eV/nm), scissor (in eV) and EshiftWeight (in eV) from in inputMap
 	void printParams() const; //!< Print the parameters read from inputMap (in atomic units)
@@ -126,6 +127,8 @@ public:
 	//! Optional array mask selects which indices within the offset to actually calculate, skipping the rest for efficiency.
 	void eLoop(const vector3<>& k0, eProcessFunc eProcess, void* params, const std::vector<bool>* mask=0);
 	void eCalc(const vector3<>& k, StateE& e); //!< Calculate electronic properties for a single k and store results in e on group head
+	void eTransformNeeded(const vector3<>& k0); //!< Helper to transform all needed matrix elements at offset k0
+	void eComputeNeeded(const vector3<>& k); //!< Helper to compute all needed matrix elements at single k
 	size_t eCountPerOffset() const { return Hw->nkTot; } //!< number of k's sampled per offset = prod(offsetDim)
 	
 	//! Calculate phonon properties for each q-point in a mesh offset by q0
@@ -182,6 +185,7 @@ public:
 	std::vector< vector3<int> > cellMap; //electron Wannier cell map
 	matrix cellWeights; //corresponding weights (nBands*nBands x nCells)
 	std::shared_ptr<DistributedMatrix> Hw, Pw, Sw, RPw, Zw; //Wannier hamiltonian, momentum, spin, R*P and z matrix elements
+	std::shared_ptr<DistributedMatrix> HprimeW[3]; //d/dk of Wannier hamiltonian in each Cartesian direction
 	std::shared_ptr<DistributedMatrix> ImSigma_eeW, ImSigma_ePhW, ImSigmaP_ePhW, ImSigma_DW, ImSigmaP_DW; //linewidths in wannier basis
 	void setState(StateE& state); //!< set requested properties for ik in state
 	void bcastState(StateE& state, MPIUtil* mpiUtil, int root); //!< broadcast specified state on specified MPI instance

@@ -29,7 +29,8 @@ FeynWannParams::FeynWannParams(InputMap* inputMap)
 : iSpin(0), totalEprefix("Wannier/totalE"), phononPrefix("Wannier/phonon"), wannierPrefix("Wannier/wannier"),
 needSymmetries(false), needPhonons(false), needVelocity(false), needSpin(false), needL(false), needQ(false),
 needLinewidth_ee(false), needLinewidth_ePh(false), needLinewidthP_ePh(false),
-ePhHeadOnly(false), maskOptimize(false), EzExt(0.), scissor(0.), EshiftWeight(0.), enforceKramerDeg(0.)
+ePhHeadOnly(false), maskOptimize(false),
+EzExt(0.), scissor(0.), EshiftWeight(0.), enforceKramerDeg(0.), degeneracyThreshold(1E-4*eV)
 {
 	if(inputMap)
 	{	const double nm = 10*Angstrom;
@@ -38,7 +39,8 @@ ePhHeadOnly(false), maskOptimize(false), EzExt(0.), scissor(0.), EshiftWeight(0.
 		EzExt = inputMap->get("EzExt", 0.) * eV/nm;
 		scissor = inputMap->get("scissor", 0.) * eV;
 		EshiftWeight = inputMap->get("EshiftWeight", 0.) * eV;
-		enforceKramerDeg = inputMap->get("enforceKramerDeg", 0.);
+		enforceKramerDeg = inputMap->getBool("enforceKramerDeg", false);
+		degeneracyThreshold = inputMap->get("degeneracyThreshold", 1E-4) * eV;
 	}
 }
 
@@ -47,7 +49,8 @@ void FeynWannParams::printParams() const
 	logPrintf("EzExt = %lg\n", EzExt);
 	logPrintf("scissor = %lg\n", scissor);
 	logPrintf("EshiftWeight = %lg\n", EshiftWeight);
-	logPrintf("enforceKramerDeg = %lg\n", enforceKramerDeg);
+	logPrintf("enforceKramerDeg = %s\n", enforceKramerDeg ? "yes" : "no");
+	logPrintf("degeneracyThreshold = %lg\n", degeneracyThreshold);
 }
 
 
@@ -576,7 +579,7 @@ FeynWann::FeynWann(FeynWannParams& fwp)
 	}
 	
 	//Velocity matrix elements
-	if(fwp.needVelocity)
+	if(fwp.needVelocity or (fwp.needL or fwp.needQ)) //also needed for long-raneg correction of R*P
 	{	fname = fwp.wannierPrefix + ".mlwfP" + spinSuffix;
 		Pw = std::make_shared<DistributedMatrix>(fname, realPartOnly,
 			mpiGroup, 3*nBands*nBands, cellMap, offsetDim, false, mpiInterGroup, &cellWeightsVec, &kfold);
@@ -593,6 +596,11 @@ FeynWann::FeynWann(FeynWannParams& fwp)
 	{	fname = fwp.wannierPrefix + ".mlwfRP" + spinSuffix;
 		RPw = std::make_shared<DistributedMatrix>(fname, realPartOnly,
 			mpiGroup, 9*nBands*nBands, cellMap, offsetDim, false, mpiInterGroup, &cellWeightsVec, &kfold);
+		//Setup dH/dk for long-range correction:
+		for(int iDir=0; iDir<3; iDir++)
+			HprimeW[iDir] = std::make_shared<DistributedMatrix>("", realPartOnly, //data taken from Hw
+				mpiGroup, nBands*nBands, cellMap, offsetDim, false, mpiInterGroup, &cellWeightsVec, &kfold,
+				iDir, Hw.get(), &R);
 	}
 	//z position matrix elements
 	if(fwp.EzExt)
@@ -708,16 +716,7 @@ template<typename T> vector3<T> elemwiseProd(vector3<int> a, vector3<T> b)
 void FeynWann::eLoop(const vector3<>& k0, FeynWann::eProcessFunc eProcess, void* params, const std::vector<bool>* mask)
 {	static StopWatch watchCallback("FeynWann::eLoop:callback");
 	//Run Fourier transforms with this offset:
-	Hw->transform(k0);
-	if(fwp.needVelocity) Pw->transform(k0);
-	if(fwp.needSpin) Sw->transform(k0);
-	if(fwp.needL or fwp.needQ) RPw->transform(k0);
-	if(fwp.EzExt) Zw->transform(k0);
-	if(fwp.needLinewidth_ee) ImSigma_eeW->transform(k0);
-	if(fwp.needLinewidth_ePh) ImSigma_ePhW->transform(k0);
-	if(fwp.needLinewidthP_ePh) ImSigmaP_ePhW->transform(k0);
-	if(fwp.needLinewidth_D.length()) ImSigma_DW->transform(k0);
-	if(fwp.needLinewidthP_D.length()) ImSigmaP_DW->transform(k0);
+	eTransformNeeded(k0);
 	//Call eProcess for k-points on present process:
 	int ik = Hw->ikStart;
 	int ikStop = ik + Hw->nk;
@@ -733,18 +732,10 @@ void FeynWann::eLoop(const vector3<>& k0, FeynWann::eProcessFunc eProcess, void*
 		}
 	)
 }
+
 void FeynWann::eCalc(const vector3<>& k, FeynWann::StateE& e)
 {	//Compute Fourier versions for this k:
-	Hw->compute(k);
-	if(fwp.needVelocity) Pw->compute(k);
-	if(fwp.needSpin) Sw->compute(k);
-	if(fwp.needL or fwp.needQ) RPw->compute(k);
-	if(fwp.EzExt) Zw->compute(k);
-	if(fwp.needLinewidth_ee) ImSigma_eeW->compute(k);
-	if(fwp.needLinewidth_ePh) ImSigma_ePhW->compute(k);
-	if(fwp.needLinewidthP_ePh) ImSigmaP_ePhW->compute(k);
-	if(fwp.needLinewidth_D.length()) ImSigma_DW->compute(k);
-	if(fwp.needLinewidthP_D.length()) ImSigmaP_DW->compute(k);
+	eComputeNeeded(k);
 	if(fwp.needPhonons) //prepare sum rule quantities
 	{	inEphLoop = true;
 		Dw->compute(k);
@@ -758,6 +749,31 @@ void FeynWann::eCalc(const vector3<>& k, FeynWann::StateE& e)
 	inEphLoop = false;
 }
 
+void FeynWann::eTransformNeeded(const vector3<>& k0)
+{	Hw->transform(k0);
+	if(fwp.needVelocity or (fwp.needL or fwp.needQ)) Pw->transform(k0);
+	if(fwp.needSpin) Sw->transform(k0);
+	if(fwp.needL or fwp.needQ) { RPw->transform(k0); for(int iDir=0; iDir<3; iDir++) HprimeW[iDir]->transform(k0); }
+	if(fwp.EzExt) Zw->transform(k0);
+	if(fwp.needLinewidth_ee) ImSigma_eeW->transform(k0);
+	if(fwp.needLinewidth_ePh) ImSigma_ePhW->transform(k0);
+	if(fwp.needLinewidthP_ePh) ImSigmaP_ePhW->transform(k0);
+	if(fwp.needLinewidth_D.length()) ImSigma_DW->transform(k0);
+	if(fwp.needLinewidthP_D.length()) ImSigmaP_DW->transform(k0);
+}
+
+void FeynWann::eComputeNeeded(const vector3<>& k)
+{	Hw->compute(k);
+	if(fwp.needVelocity or (fwp.needL or fwp.needQ)) Pw->compute(k);
+	if(fwp.needSpin) Sw->compute(k);
+	if(fwp.needL or fwp.needQ) { RPw->compute(k); for(int iDir=0; iDir<3; iDir++) HprimeW[iDir]->compute(k); }
+	if(fwp.EzExt) Zw->compute(k);
+	if(fwp.needLinewidth_ee) ImSigma_eeW->compute(k);
+	if(fwp.needLinewidth_ePh) ImSigma_ePhW->compute(k);
+	if(fwp.needLinewidthP_ePh) ImSigmaP_ePhW->compute(k);
+	if(fwp.needLinewidth_D.length()) ImSigma_DW->compute(k);
+	if(fwp.needLinewidthP_D.length()) ImSigmaP_DW->compute(k);
+}
 
 void FeynWann::phLoop(const vector3<>& q0, FeynWann::phProcessFunc phProcess, void* params)
 {	static StopWatch watchCallback("FeynWann::phLoop:callback");
@@ -802,16 +818,7 @@ void FeynWann::ePhLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::ePh
 	#define PrepareElecStates(i) \
 		bool withinRange##i = false; \
 		std::vector<StateE> e##i(prodOffsetDim); /* States */ \
-		{	Hw->transform(k0##i); \
-			if(fwp.needVelocity) Pw->transform(k0##i); \
-			if(fwp.needSpin) Sw->transform(k0##i); \
-			if(fwp.needL or fwp.needQ) RPw->transform(k0##i); \
-			if(fwp.EzExt) Zw->transform(k0##i); \
-			if(fwp.needLinewidth_ee) ImSigma_eeW->transform(k0##i); \
-			if(fwp.needLinewidth_ePh) ImSigma_ePhW->transform(k0##i); \
-			if(fwp.needLinewidthP_ePh) ImSigmaP_ePhW->transform(k0##i); \
-			if(fwp.needLinewidth_D.length()) ImSigma_DW->transform(k0##i); \
-			if(fwp.needLinewidthP_D.length()) ImSigmaP_DW->transform(k0##i); \
+		{	eTransformNeeded(k0##i); \
 			HePhSumW->transform(k0##i); \
 			Dw->transform(k0##i); \
 			int ik = Hw->ikStart; \
@@ -945,16 +952,7 @@ void FeynWann::defectLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::
 	#define PrepareElecStates(i) \
 		bool withinRange##i = false; \
 		std::vector<StateE> e##i(prodOffsetDim); /* States */ \
-		{	Hw->transform(k0##i); \
-			if(fwp.needVelocity) Pw->transform(k0##i); \
-			if(fwp.needSpin) Sw->transform(k0##i); \
-			if(fwp.needL or fwp.needQ) RPw->transform(k0##i); \
-			if(fwp.EzExt) Zw->transform(k0##i); \
-			if(fwp.needLinewidth_ee) ImSigma_eeW->transform(k0##i); \
-			if(fwp.needLinewidth_ePh) ImSigma_ePhW->transform(k0##i); \
-			if(fwp.needLinewidthP_ePh) ImSigmaP_ePhW->transform(k0##i); \
-			if(fwp.needLinewidth_D.length()) ImSigma_DW->transform(k0##i); \
-			if(fwp.needLinewidthP_D.length()) ImSigmaP_DW->transform(k0##i); \
+		{	eTransformNeeded(k0##i); \
 			int ik = Hw->ikStart; \
 			int ikStop = ik + Hw->nk; \
 			PartialLoop3D(offsetDim, ik, ikStop, e##i[ik].k, k0##i, \
@@ -1083,15 +1081,15 @@ void FeynWann::setState(FeynWann::StateE& state)
 		for(int iDir=0; iDir<3; iDir++)
 			if(fwp.Bext[iDir]) Hk += fwp.Bext[iDir] * getMatrix(Sw->getResult(state.ik), nBands, nBands, iDir);
 	}
-	Hk.diagonalize(state.U, state.E);	
-        if(fwp.enforceKramerDeg) //enforce Kramers degeneracy in the inversion symmetric cases
-        {       int bIn = 0;
-                while(bIn < nBands)
-                {       double Etemp = state.E[bIn];
-                        state.E[bIn+1] = Etemp;
-                        bIn += 2;
-                }
-        }
+	Hk.diagonalize(state.U, state.E);
+	if(fwp.enforceKramerDeg) //enforce Kramers degeneracy in the inversion symmetric cases
+	{	int bIn = 0;
+		while(bIn < nBands)
+		{       double Etemp = state.E[bIn];
+				state.E[bIn+1] = Etemp;
+				bIn += 2;
+		}
+	}
 	matrix HE = state.U * state.E * dagger(state.U);
 	//Add Stark perturbation:
 	if(fwp.EzExt) 
@@ -1117,7 +1115,7 @@ void FeynWann::setState(FeynWann::StateE& state)
 	if(not state.withinRange) return; //Remaining quantities will never be used
 	watchRotations.start();
 	//Velocity matrix, if needed:
-	if(fwp.needVelocity)
+	if(fwp.needVelocity or (fwp.needL or fwp.needQ))
 	{	state.vVec.resize(nBands);
 		for(int iDir=0; iDir<3; iDir++)
 		{	state.v[iDir] = complex(0,-1) //Since P was stored with -i omitted (to make it real when possible)
@@ -1141,10 +1139,24 @@ void FeynWann::setState(FeynWann::StateE& state)
 	if(fwp.needL or fwp.needQ)
 	{	matrix3<matrix> RP;
 		for(int iDir=0; iDir<3; iDir++)
-			for(int jDir=0; jDir<3; jDir++)
+		{	for(int jDir=0; jDir<3; jDir++)
 				RP(iDir, jDir) = complex(0,-1) //Since RP was stored with -i omitted (to make it real when possible)
 					* (dagger(state.U) * getMatrix(RPw->getResult(state.ik), nBands, nBands, 3*iDir+jDir) * state.U);
-		//TODO: long range correction
+			//Long range correction:
+			//--- fetch dH/dk
+			matrix iDi = dagger(state.U) * getMatrix(HprimeW[iDir]->getResult(state.ik), nBands, nBands) * state.U;
+			//--- convert to i*D := i dU/dk in place:
+			{	complex* iDiData = iDi.data();
+				for(int bCol=0; bCol<nBands; bCol++) //note: column major storage
+					for(int bRow=0; bRow<nBands; bRow++)
+					{	double Ediff = state.E[bCol] - state.E[bRow];
+						*(iDiData++) *= complex(0., (fabs(Ediff) < fwp.degeneracyThreshold) ? 0. : 1./Ediff);
+					}
+			}
+			//--- add correction
+			for(int jDir=0; jDir<3; jDir++)
+				RP(iDir, jDir) += iDi * state.v[jDir];
+		}
 		//Extract L if needed:
 		if(fwp.needL)
 		{	for(int kDir=0; kDir<3; kDir++)
@@ -1163,7 +1175,7 @@ void FeynWann::setState(FeynWann::StateE& state)
 			//xx - r^2/3 and yy - r^2/3 components:
 			matrix traceTerm = (1./3) * trace(RP);
 			for(int iDir=0; iDir<2; iDir++)
-				state.Q[iDir+3] = 2.*(RP(iDir, iDir) - traceTerm);
+				state.Q[iDir+3] = 2.*dagger_symmetrize(RP(iDir, iDir) - traceTerm);
 		}
 	}
 	//Linewidths, as needed:

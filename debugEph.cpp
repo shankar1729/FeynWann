@@ -57,11 +57,14 @@ struct DebugEph
 	FeynWann::StatePh ph;
 	FeynWann::MatrixEph m;
 	bool spinAvailable;
+	double degeneracyThreshold;
 	
-	DebugEph(int bandStart, int bandStop, int modeStart, int modeStop)
-	: bandStart(bandStart), bandStop(bandStop), modeStart(modeStart), modeStop(modeStop)
+	DebugEph(int bandStart, int bandStop, int modeStart, int modeStop, const FeynWannParams& fwp)
+	: bandStart(bandStart), bandStop(bandStop), modeStart(modeStart), modeStop(modeStop),
+	spinAvailable(fwp.needSpin), degeneracyThreshold(fwp.degeneracyThreshold)
 	{
 	}
+	
 	void process(const FeynWann::MatrixEph& mEph)
 	{	const diagMatrix& E1 = mEph.e1->E;
 		const diagMatrix& E2 = mEph.e2->E;
@@ -132,8 +135,7 @@ struct DebugEph
 	}
 	
 	inline matrix degenerateProject(const matrix& M, const diagMatrix& E)
-	{	static const double degeneracyThreshold = 1e-6;
-		matrix out = M;
+	{	matrix out = M;
 		complex* outData = out.data();
 		for(int b2=0; b2<out.nCols(); b2++)
 			for(int b1=0; b1<out.nRows(); b1++)
@@ -145,8 +147,7 @@ struct DebugEph
 	
 	//Sum over degenerate subspace of electrons at one k
 	inline matrix degSqSum(const matrix& M, const diagMatrix& E)
-	{	static const double degeneracyThreshold = 1e-6;
-		matrix ret(M.nRows(), M.nCols());
+	{	matrix ret(M.nRows(), M.nCols());
 		//Loop over left degenerate subspace:
 		for(int b1start=0; b1start<E.nRows();)
 		{	int b1stop=b1start+1;
@@ -175,8 +176,7 @@ struct DebugEph
 	
 	//Sum over degenerate subspace of electrons and phonons at k1,k2
 	inline std::vector<matrix> degSqSum(const std::vector<matrix>& M, const diagMatrix& E1, const diagMatrix& E2, const diagMatrix& omegaPh)
-	{	static const double degeneracyThreshold = 1e-6;
-		std::vector<matrix> ret(M.size(), matrix(M[0].nRows(), M[0].nCols()));
+	{	std::vector<matrix> ret(M.size(), matrix(M[0].nRows(), M[0].nCols()));
 		//Loop over omegaPh subspace:
 		for(int modeStart=0; modeStart<omegaPh.nRows();)
 		{	int modeStop=modeStart+1;
@@ -261,9 +261,8 @@ int main(int argc, char** argv)
 	{	Mtot += 1./std::pow(invsqrtM[iMode],2);
 	}
 	Mtot *= 1./3;
-	DebugEph src(bandStart, bandStop, modeStart, modeStop);
+	DebugEph src(bandStart, bandStop, modeStart, modeStop, fwp);
 	src.Mtot = Mtot;
-	src.spinAvailable = fwp.needSpin;
 	fw.eCalc(k1, src.e1);
 	if(mpiGroup->isHead())
 	{	logPrintf("E1[eV]: ");
