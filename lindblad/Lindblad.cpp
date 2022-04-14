@@ -383,12 +383,24 @@ void Lindblad::writeImEps(string fname) const
 	watch.stop();
 }
 
+// Helper functions for projecting spin on the degenerate subspac
+inline matrix degProj(const matrix& M, const diagMatrix& E, double degeneracyThreshold){
+	matrix Mdeg(E.size(), E.size());
+	complex *MdegData = Mdeg.data();
+	for (int b2 = 0; b2 < E.nRows(); b2++)
+	for (int b1 = 0; b1 < E.nRows(); b1++){
+		if (fabs(E[b1] - E[b2]) < degeneracyThreshold) *MdegData = M(b1, b2);
+		MdegData++;
+	}
+	return Mdeg;
+	}
+
 
 void Lindblad::reportCarrierLifetime() const
 {	static StopWatch watch("Lindblad::reportCarrierLifetime");
 	if(not lp.ePhEnabled) return;
 	watch.start();
-
+    	double degeneracyThreshold = 1e-6*eV; // for EY degenerate subspace 
 	//Scattering rate data for all k on this process:
 	int iProc = mpiWorld->iProcess();
 	size_t ikStart = kDivision.start(iProc);
@@ -397,7 +409,7 @@ void Lindblad::reportCarrierLifetime() const
 	size_t iEallStop = nInnerPrev[ikStop]; //end index of Eall corresponding to iProc
 	size_t nE_i = iEallStop - iEallStart; //total number of Eall corresponding to iProc
 	diagMatrix tauInv_i(nE_i); //all rate contributions to states on iProc
-
+	
 	//Loop over process providing other k data:
 	const double prefac = (2.*M_PI)/nkTot;
 	for(int jProc=0; jProc<mpiWorld->nProcesses(); jProc++)
@@ -425,10 +437,14 @@ void Lindblad::reportCarrierLifetime() const
 				size_t jE2 = nInnerPrev[ik2] - jEallStart; //index of ik2 in local Eall-like arrays
 				const double* f2 = &rho0_j[jE2];
 				double* tauInv2 = &tauInv_j[jE2];
-
+				bool shouldSkip = false; //must skip after iterating over all matching k2 below (else endless loop!)
+				if((lp.valleyMode==ValleyIntra) and (isKall[s.ik]!=isKall[ik2])) shouldSkip=true; //skip intervalley scattering
+				if((lp.valleyMode==ValleyInter) and (isKall[s.ik]==isKall[ik2])) shouldSkip=true; //skip intravalley scattering
+				
 				//Loop over all connections to the same partner k:
 				while((g != s.GePh.end()) and (g->jk == ik2))
-				{	//A- contributions:
+				{	if(shouldSkip) { g++; continue; }
+					//A- contributions:
 					for(const SparseEntry& e: g->Am)
 					{	double term = prefac * e.val.norm();
 						tauInv1[e.i] += term * f2[e.j];
@@ -439,11 +455,12 @@ void Lindblad::reportCarrierLifetime() const
 					{	double term = prefac * e.val.norm();
 						tauInv1[e.i] += term * (1. - f2[e.j]);
 						tauInv2[e.j] += term * f1[e.i];
+
 					}
 					//Move to next element:
 					g++;
-				}
-			}
+				} 
+			} 
 		}
 
 		//Collect remote contributions:
@@ -454,7 +471,7 @@ void Lindblad::reportCarrierLifetime() const
 	
 	//Compute f-prime averages:
 	double wSum = 0., tauSum = 0., tauInvSum = 0., wSumDP = 0.;
-	vector3<> OmegaSqDPsum, tauInvSpinDPsum;
+	vector3<> SpinMixSqEYsum, tauInvSpinEYsum, OmegaSqDPsum, tauInvSpinDPsum;
 	for(const State& s: state)
 	{	const diagMatrix& f = s.rho0;
 		const double* tauInv = &tauInv_i[nInnerPrev[s.ik] - iEallStart];
@@ -476,12 +493,20 @@ void Lindblad::reportCarrierLifetime() const
 				if((bOther < 0) or (bOther >= s.nInner))
 					continue;
 				wSumDP += mfPrime; //NOTE: not all bands may be included in DP sum
-				//Get internal magnetic field squared:
-				vector3<double> LfreqSq;
+				//Get internal magnetic field (DP) and spin mixing (EY) squared:
+				vector3<double> LfreqSq, SpinMixSqEY;
 				double LfreqSqSum = 0.;
 				for(int iDir=0; iDir<3; iDir++)
-				{   LfreqSq[iDir] = std::pow((s.E[bOther]-s.E[b]) * s.S[iDir](b,b).real(), 2);
-					LfreqSqSum += LfreqSq[iDir];  
+				{	LfreqSq[iDir] = std::pow((s.E[bOther]-s.E[b]) * s.S[iDir](b,b).real(), 2);
+					LfreqSqSum += LfreqSq[iDir];
+					//Project onto the degenerate subspace for a well defined direction in EY 
+					int bStart, bStop;
+                    			bStart = 0; bStop=s.nInner;
+                    			diagMatrix Edeg;
+                    			Edeg = s.E(bStart, bStop); 
+					matrix Sdeg = degProj(s.S[iDir](bStart, bStop, bStart, bStop), Edeg, degeneracyThreshold);
+					diagMatrix SS = diag(Sdeg*Sdeg);
+					SpinMixSqEY[iDir] = 0.5 * (1 - sqrt(SS[b]));
 				}
 				//Internal magnetic field perpendicular to each direction:
 				vector3<> OmegaSqDP;
@@ -490,6 +515,10 @@ void Lindblad::reportCarrierLifetime() const
 				//Collect DP results:
 				OmegaSqDPsum += mfPrime * OmegaSqDP;
 				tauInvSpinDPsum += (mfPrime / tauInv[b]) * OmegaSqDP;
+
+				//Collect spin-mixing for EY
+				SpinMixSqEYsum += mfPrime * SpinMixSqEY;           
+				tauInvSpinEYsum += (mfPrime * tauInv[b]) * SpinMixSqEY;   
 			}
 		}
 	}
@@ -498,15 +527,25 @@ void Lindblad::reportCarrierLifetime() const
 	mpiWorld->allReduce(tauInvSum, MPIUtil::ReduceSum);
 	logPrintf("tau(time-avg) = %lf fs\n", (tauSum / wSum) / fs);
 	logPrintf("tau(rate-avg) = %lf fs\n", (wSum / tauInvSum) / fs);
+
+	double tauRate = (wSum / tauInvSum) / fs;
 	if(spinorial)
 	{	mpiWorld->allReduce(wSumDP, MPIUtil::ReduceSum);
 		mpiWorld->allReduce(OmegaSqDPsum, MPIUtil::ReduceSum);
 		mpiWorld->allReduce(tauInvSpinDPsum, MPIUtil::ReduceSum);
+		mpiWorld->allReduce(SpinMixSqEYsum, MPIUtil::ReduceSum);
+		mpiWorld->allReduce(tauInvSpinEYsum, MPIUtil::ReduceSum);
 		vector3<> OmegaSqDP = OmegaSqDPsum / wSumDP, tauSpinDP;
+		vector3<> SpinMixSqEY = SpinMixSqEYsum / wSumDP, tauSpinEY;     
 		for(int iDir=0; iDir<3; iDir++)
-			tauSpinDP[iDir] = wSumDP / tauInvSpinDPsum[iDir];
+		{	tauSpinDP[iDir] = wSumDP / tauInvSpinDPsum[iDir];
+			tauSpinEY[iDir] = wSumDP / tauInvSpinEYsum[iDir]; //DP normalization for considering all spin pairs
+		}
 		logPrintf("OmegaSqDP [1/fs^2] = "); (OmegaSqDP / std::pow(fs, -2)).print(globalLog, " %lg ");
 		logPrintf("tauSpinDP [fs] = "); (tauSpinDP / fs).print(globalLog, " %lg ");
+		logPrintf("SpinMixSqEY = "); (SpinMixSqEY).print(globalLog, " %lg ");
+		logPrintf("tauSpinEY [fs] = "); (tauSpinEY/4/fs).print(globalLog, " %lg "); 
+		logPrintf("tauSpinEY(tauRateAvg) [fs] = %lg, %lg, %lg", tauRate/(SpinMixSqEY[0]*4), tauRate/(SpinMixSqEY[1]*4), tauRate/(SpinMixSqEY[2]*4)); 
 	}
 	watch.stop();
 }
