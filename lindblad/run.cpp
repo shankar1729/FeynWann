@@ -90,6 +90,7 @@ int main(int argc, char** argv)
 	lp.Bext = inputMap.getVector("Bext", vector3<>()) * Tesla; //constant external magnetic field post-initialization in Tesla
 	lp.spinEchoB = inputMap.getVector("spinEchoB", vector3<>()) * Tesla; //spin-echo perturbing field in Tesla
 	lp.spinEchoDelay = inputMap.get("spinEchoDelay", 0.) * fs; //spin-echo delay time in fs
+	lp.spinEchoOmega = inputMap.get("spinEchoOmega", 0.) * eV; //spin-echo Larmor frequency (x hbar) in eV (if zero, set based on Bext)
 	lp.dE = inputMap.get("dE") * eV; //energy resolution for distribution functions
 	const string ePhMode = inputMap.getString("ePhMode"); //must be Off or DiagK (add FullK in future)
 	if(ePhMode!="Off" and ePhMode!="DiagK")
@@ -151,6 +152,7 @@ int main(int argc, char** argv)
 	if(lp.spinEchoFlipTime)
 	{	logPrintf("spinEchoB = \n"); lp.spinEchoB.print(globalLog, " %lg ");
 		logPrintf("spinEchoDelay = %lg\n", lp.spinEchoDelay);
+		logPrintf("spinEchoOmega = %lg\n", lp.spinEchoOmega);
 		logPrintf("spinEchoFlipTime = %lg\n", lp.spinEchoFlipTime);
 	}
 	logPrintf("dE = %lg\n", lp.dE);

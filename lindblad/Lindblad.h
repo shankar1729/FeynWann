@@ -71,6 +71,7 @@ struct LindbladParams
 
 	vector3<> spinEchoB; //!< rotating magnetic field at t=0 in spin echo measurement (rotates about Bext)
 	double spinEchoDelay; //!< time delay between pi/2 and pi pulses in spin echo setup
+	double spinEchoOmega; //!< Larmor precession frequency for spin echo (if zero, set based on Bext)
 
 	double omegaMin, domega, omegaMax; //!< probe frequency grid
 	double tau; //!< probe width
@@ -97,7 +98,6 @@ struct LindbladParams
 	double invT; //!< inverse temperature
 	double nomega; //!< number of probe frequencies
 
-	double spinEchoOmega; //!< Larmor precession frequency for spin echo
 	double spinEchoFlipTime; //!< Flip time i.e. pi-pulse duration in spin echo setup
 	matrix3<> spinEchoRot; //!< Rotation matrix that takes x, z axes to spinEchoB, Bext directions
 	vector3<> spinEchoTransform(vector3<> v, double t) const; //!< convert v from lab to rotating frame at time t (or inverse at -t)

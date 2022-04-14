@@ -32,6 +32,8 @@ struct FeynWannParams
 	bool needPhonons; //!< whether to initialize phonon-related quantities (default: false)
 	bool needVelocity; //!< whether to initialize velocity (momentum) matrix elements
 	bool needSpin; //!< whether to initialize spin matrix elements (will be reset to false if not relativstic)
+	bool needL; //!< whether to initialize angular momentum matrix elements
+	bool needQ; //!< whether to initialize r*p electric quadrupole matrix elements
 	bool needLinewidth_ee; //!< whether to provide e-e line-width (default: false)
 	bool needLinewidth_ePh; //!< whether to provide e-ph line-width (default: false)
 	bool needLinewidthP_ePh; //!< whether to provide momentum-relaxation e-ph line-width (default: false)
@@ -47,7 +49,8 @@ struct FeynWannParams
 	double EzExt; //!< external electric field (added as a Stark perturbation to hamiltonian in FeynWann:setState)
 	double scissor; //!< scissor operator to move conduction band states up in energy to fix band gap in post-processing
 	double EshiftWeight; //!< if non-zero, apply this energy shift to the region of space selected by wannier slab weight (in mlwfW)
-	double enforceKramerDeg; //!< whether to enforce Kramer degeneracy in eigenvalues	
+	bool enforceKramerDeg; //!< whether to enforce Kramer degeneracy in eigenvalues	
+	double degeneracyThreshold; //!< threshold within which to treat Wannier bands as degenerate
 	
 	FeynWannParams(class InputMap* inputMap=0); //!< If specified, look for optional parameters Bext (in Tesla), EzExt (in eV/nm), scissor (in eV) and EshiftWeight (in eV) from in inputMap
 	void printParams() const; //!< Print the parameters read from inputMap (in atomic units)
@@ -76,6 +79,8 @@ public:
 		std::vector<vector3<>> vVec; //!< band velocities (diagonal part of v) in Cartesian coordinates, available if needVelocity = true
 		matrix S[3]; //!< Spin matrix elements in Cartesian coordinates, available if needSpin = true
 		std::vector<vector3<>> Svec; //!< band spins (diagonal part of S) in Cartesian coordinates, available if needSpin = true
+		matrix L[3]; //!< Angular momentum matrix elements in Cartesian coordinates, available if needL = true
+		matrix Q[5]; //!< Electric quadrupole r*p matrix elements (xy, yz, zx, xxr, yyr), available if needQ = true
 		diagMatrix ImSigma_ee; //!< e-e linewidth, available if needLinewidth_ee = true
 		double ImSigma_ePh(int n, double f) const; //!< get e-ph linewidth for band n given its occupation f, available if needLinewidth_ePh = true
 		double ImSigmaP_ePh(int n, double f) const; //!< get e-ph linewidth for band n given its occupation f, available if needLinewidthP_ePh = true
@@ -122,6 +127,8 @@ public:
 	//! Optional array mask selects which indices within the offset to actually calculate, skipping the rest for efficiency.
 	void eLoop(const vector3<>& k0, eProcessFunc eProcess, void* params, const std::vector<bool>* mask=0);
 	void eCalc(const vector3<>& k, StateE& e); //!< Calculate electronic properties for a single k and store results in e on group head
+	void eTransformNeeded(const vector3<>& k0); //!< Helper to transform all needed matrix elements at offset k0
+	void eComputeNeeded(const vector3<>& k); //!< Helper to compute all needed matrix elements at single k
 	size_t eCountPerOffset() const { return Hw->nkTot; } //!< number of k's sampled per offset = prod(offsetDim)
 	
 	//! Calculate phonon properties for each q-point in a mesh offset by q0
@@ -177,7 +184,8 @@ public:
 	//Electrons:
 	std::vector< vector3<int> > cellMap; //electron Wannier cell map
 	matrix cellWeights; //corresponding weights (nBands*nBands x nCells)
-	std::shared_ptr<DistributedMatrix> Hw, Pw, Sw, Zw; //Wannier hamiltonian, momentum, spin and z matrix elements
+	std::shared_ptr<DistributedMatrix> Hw, Pw, Sw, RPw, Zw; //Wannier hamiltonian, momentum, spin, R*P and z matrix elements
+	std::shared_ptr<DistributedMatrix> HprimeW[3]; //d/dk of Wannier hamiltonian in each Cartesian direction
 	std::shared_ptr<DistributedMatrix> ImSigma_eeW, ImSigma_ePhW, ImSigmaP_ePhW, ImSigma_DW, ImSigmaP_DW; //linewidths in wannier basis
 	void setState(StateE& state); //!< set requested properties for ik in state
 	void bcastState(StateE& state, MPIUtil* mpiUtil, int root); //!< broadcast specified state on specified MPI instance

@@ -11,23 +11,32 @@ void LindbladParams::initialize()
 	nomega = 1 + int(round((omegaMax-omegaMin)/domega));
 	
 	//Spin echo setup:
-	spinEchoOmega = 2.*Bext.length();
+	if(not spinEchoOmega)
+		spinEchoOmega = 2.*Bext.length();
 	if(spinEchoB.length_squared())
 	{
 		//Check specified magnetic fields:
 		const double tol = 1E-6;
 		if(not Bext.length_squared())
-			die("\nSpin echo requires non-zero magnetic field Bext.\n\n");
+			die("\nSpin echo requires non-zero magnetic field Bext.\n"
+				"If internal magnetic fields play the role of Bext,\n"
+				"set Bext to a small non-zero vector parallel to it.\n"
+				"This is needed to determine the precession axis.\n\n");
 		vector3<> BextHat = normalize(Bext); //unit vector of precession axis
 		vector3<> spinEchoBhat = normalize(spinEchoB); //unit vector of starting rotational field
 		if(fabs(dot(spinEchoBhat, BextHat)) >= tol)
 			die("\nspinEchoB must be perpendicular to Bext\n\n");
 		
 		//Ensure initial conditions:
-		if(not pumpBfield)
-			die("\nSpin echo requires initial spin state to be set with B-field pump mode.\n\n");
-		if(fabs(cross(pumpB, BextHat).length()) >= tol * pumpB.length())
-			die("\nSpin echo requires pumpB and Bext to be parallel.\n\n");
+		if(pumpBfield)
+		{	if(fabs(cross(pumpB, BextHat).length()) >= tol * pumpB.length())
+				die("\nSpin echo requires pumpB and Bext to be parallel.\n\n");
+		}
+		else
+			logPrintf(
+				"\nWARNING: Spin echo requires initial spin state to be parallel\n"
+				"to precession axis. This cam be checked internally only in B-field\n"
+				"pump mode; make sure laser pump creates appropriate initial spins.\n\n");
 		
 		//Compute rotation matrix and period:
 		spinEchoRot.set_col(0, spinEchoBhat);
@@ -93,8 +102,8 @@ Lindblad::Lindblad(const LindbladParams& lp)
 	spinorial = h.spinorial;
 	spinWeight = h.spinWeight;
 	R = h.R; Omega = fabs(det(R));
-	if(lp.ePhEnabled != h.ePhEnabled)
-		die("ePhEnabled = %s differs from the mode specified in lindbladInit.\n", boolMap.getString(lp.ePhEnabled));
+	if(lp.ePhEnabled and not h.ePhEnabled)
+		die("ePhEnabled = yes requires e-ph included in lindbladInit.\n");
 	if(lp.pumpBfield and (not spinorial))
 		die("Bfield pump mode requires spin matrix elements from a spinorial calculation.\n");
 	if(lp.Bext.isNonzero() and (not spinorial))
