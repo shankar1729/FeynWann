@@ -52,18 +52,35 @@ inline matrix3<> Real(const matrix3<complex>& M)
 	return ret;
 }
 
+inline vector3<complex> getVectorElement(const matrix M[3], int b1, int b2)
+{	vector3<complex> result;
+	for(int iDir=0; iDir<3; iDir++)
+		result[iDir] = M[iDir](b1, b2);
+	return result;
+}
+
+inline tensor3<complex> getTensorElement(const matrix M[5], int b1, int b2)
+{	tensor3<complex> result;
+	for(int iComp=0; iComp<5; iComp++)
+		result[iComp] = M[iComp](b1, b2);
+	return result;
+}
+
 //Collect circular dichroism contibutions using FeynWann callbacks:
 struct CollectCD
 {	double dmu, T, invT;
 	double domega, omegaMax;
+	bool spinAvailable;
 	std::vector<Histogram> CD, CDmd; //Total circular dichorism and magnetic momentum contributions alone (xx,yy,zz,yz,zx,xy components)
+	std::vector<Histogram> CDspin; //Spin contributions, if present
 	double prefac;
 	
-	CollectCD(double dmu, double T, double domega, double omegaMax)
-	: dmu(dmu), T(T), invT(1./T), domega(domega), omegaMax(omegaMax),
+	CollectCD(double dmu, double T, double domega, double omegaMax, bool spinAvailable)
+	: dmu(dmu), T(T), invT(1./T), domega(domega), omegaMax(omegaMax), spinAvailable(spinAvailable),
 		CD(6, Histogram(0, domega, omegaMax)),
 		CDmd(6, Histogram(0, domega, omegaMax))
 	{	logPrintf("Initialized frequency grid: 0 to %lg eV with %d points.\n", CD[0].Emax()/eV, CD[0].nE);
+		if(spinAvailable) CDspin.assign(6, Histogram(0, domega, omegaMax));
 	}
 	
 	void collectE(const FeynWann::StateE& state)
@@ -81,25 +98,15 @@ struct CollectCD
 				if(omega<domega || omega>=omegaMax) continue; //irrelevant event
 				if(fabs(F[b1] - F[b2]) < 1E-6) continue; //negligible weight below
 				//Collect relevant matrix elements:
-				//--- P
-				vector3<complex> P21;
-				for(int iDir=0; iDir<3; iDir++)
-					P21[iDir] = state.v[iDir](b1,b2);
-				//--- L
-				vector3<complex> L12;
-				for(int iDir=0; iDir<3; iDir++)
-					L12[iDir] = state.L[iDir](b2,b1);
-				//--- Q
-				tensor3<complex> Q12t;
-				for(int iComp=0; iComp<5; iComp++)
-					Q12t[iComp] = state.Q[iComp](b2,b1);
-				matrix3<complex> Q12(Q12t);
-				//Compute EQ and MD contributions:
-				//--- Magnetic Dipole (MD) contribution:
-				matrix3<> Gmd = Sym(Real(outer(P21,L12))) - Id*dot(P21,L12).real();
-				//--- Electric Quadrupole (EQ) contribution:
-				matrix3<> Geq = Sym(Real(Q12 * epsDot(P21)));
-				matrix3<> Gtot = Gmd + Geq;
+				vector3<complex> Pconj = getVectorElement(state.v, b2, b1); //b1 <-> b2 to get conjugate (P is Hermitian)
+				vector3<complex> L = getVectorElement(state.L, b1, b2), S2;
+				if(spinAvailable) S2 = getVectorElement(state.S, b1, b2); //2*S
+				matrix3<complex> Q(getTensorElement(state.Q, b1, b2));
+				//Compute contributions:
+				matrix3<> Feq = Sym(Real(epsDot(Pconj) * Q));
+				matrix3<> Fmd = Id*dot(Pconj, L).real() - Sym(Real(outer(Pconj, L))), Fspin;
+				if(spinAvailable) Fspin = Id*dot(Pconj, S2).real() - Sym(Real(outer(Pconj, S2)));
+				matrix3<> Ftot = Feq + Fmd + Fspin;
 				double weight = prefac * (F[b1] - F[b2]);
 				//Save contribution to appropriate frequency:
 				int iOmega; double tOmega; //coordinates of frequency on frequency grid
@@ -113,8 +120,9 @@ struct CollectCD
 						H[3].addEventPrecalc(iOmega, tOmega, weight*G(1,2)); \
 						H[4].addEventPrecalc(iOmega, tOmega, weight*G(2,0)); \
 						H[5].addEventPrecalc(iOmega, tOmega, weight*G(0,1));
-					addEventTensor(CD, Gtot);
-					addEventTensor(CDmd, Gmd);
+					addEventTensor(CD, Ftot);
+					addEventTensor(CDmd, Fmd);
+					if(spinAvailable) { addEventTensor(CDspin, Fspin); }
 					#undef addEventTensor
 				}
 			}
@@ -127,6 +135,7 @@ struct CollectCD
 	void allReduce()
 	{	for(Histogram& h: CD) h.allReduce(MPIUtil::ReduceSum);
 		for(Histogram& h: CDmd) h.allReduce(MPIUtil::ReduceSum);
+		if(spinAvailable) for(Histogram& h: CDspin) h.allReduce(MPIUtil::ReduceSum);
 	}
 	
 	void saveTensor(const std::vector<Histogram>& hArr, string fname, const FeynWann& fw)
@@ -162,6 +171,7 @@ struct CollectCD
 	void save(const FeynWann& fw)
 	{	saveTensor(CD, "CD.dat", fw);
 		saveTensor(CDmd, "CDmd.dat", fw);
+		if(spinAvailable) saveTensor(CDspin, "CDspin.dat", fw);
 	}
 };
 
@@ -192,6 +202,7 @@ int main(int argc, char** argv)
 	fwp.needVelocity = true;
 	fwp.needQ = true;
 	fwp.needL = true;
+	fwp.needSpin = true; //for spin contribution, if available
 	std::shared_ptr<FeynWann> fw = std::make_shared<FeynWann>(fwp);
 	size_t nKeff = nOffsets * fw->eCountPerOffset();
 	logPrintf("Effectively sampled nKpts: %lu\n", nKeff);
@@ -215,7 +226,7 @@ int main(int argc, char** argv)
 	int oInterval = std::max(1, int(round(noMine/50.))); //interval for reporting progress
 	
 	//Collect results:
-	CollectCD ccd(dmu, T, domega, omegaMax);
+	CollectCD ccd(dmu, T, domega, omegaMax, fwp.needSpin);
 	const double c = 137.035999084; //speed of light in atomic units = 1/(fine structure constant)
 	ccd.prefac = 4.*std::pow(M_PI/c,2) * fw->spinWeight / (nKeff*fabs(det(fw->R))); //frequency independent part of prefactor
 	
