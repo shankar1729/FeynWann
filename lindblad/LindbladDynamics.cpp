@@ -196,6 +196,12 @@ DM1 Lindblad::compute(double t, const DM1& drho)
 }
 
 
+//Compute x * log(x), handling the limit correctly:
+inline double xlogx(double x)
+{	return (x <= 0.) ? 0. : x * log(x);
+}
+
+
 void Lindblad::report(double t, const DM1& drho) const
 {	static StopWatch watch("Lindblad::report"); watch.start();
 	ostringstream ossID; ossID << stepID;
@@ -207,6 +213,7 @@ void Lindblad::report(double t, const DM1& drho) const
 	std::vector<Histogram> dist(nDist, Histogram(Emin, lp.dE, Emax));
 	const double prefac = spinWeight*(1./nkTot); //BZ integration weight
 	double Etot = 0., dfMax = 0.; vector3<> Stot;
+	double entropy = 0.;
 	for(const State& s: state)
 	{	setState(t, drho, (State&)s); //update Schrodinger-picture quantities
 		
@@ -221,6 +228,12 @@ void Lindblad::report(double t, const DM1& drho) const
 				dist[0].addEvent(Ecur, weight);
 			drhoData += (s.nInner+1); //advance to next diagonal entry
 		}
+		
+		//Entropy:
+		diagMatrix rhoEigs; matrix rhoEvecs;
+		s.rho.diagonalize(rhoEvecs, rhoEigs);
+		for(double r: rhoEigs)
+			entropy -= xlogx(r) + xlogx(1. - r);
 		
 		//Spin distribution (if available):
 		if(spinorial)
@@ -251,6 +264,7 @@ void Lindblad::report(double t, const DM1& drho) const
 	mpiWorld->reduce(Etot, MPIUtil::ReduceSum);
 	mpiWorld->reduce(Stot, MPIUtil::ReduceSum);
 	mpiWorld->reduce(dfMax, MPIUtil::ReduceMax);
+	mpiWorld->reduce(entropy, MPIUtil::ReduceSum);
 	for(Histogram& h: dist) h.reduce(MPIUtil::ReduceSum);
 	if(mpiWorld->isHead())
 	{	//Report step ID and energy:
@@ -258,6 +272,9 @@ void Lindblad::report(double t, const DM1& drho) const
 		if(spinorial) logPrintf("   S: [ %16.15lg %16.15lg %16.15lg ]", Stot[0],  Stot[1],  Stot[2]);
 		logPrintf("\n"); logFlush();
 		
+		//Report entropy:
+		logPrintf("Entropy: %21.15le\n", entropy);
+
 		//Report rotating frame spin in spin-echo setup:
 		if(lp.spinEchoFlipTime)
 		{	vector3<> Srot = lp.spinEchoTransform(Stot, t);
