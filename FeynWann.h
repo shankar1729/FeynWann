@@ -182,8 +182,8 @@ public:
 	int nModes; //!< number of phonon modes (polarizations)
 	
 	//Electrons:
-	std::vector< vector3<int> > cellMap; //electron Wannier cell map
-	matrix cellWeights; //corresponding weights (nBands*nBands x nCells)
+	std::vector<vector3<int>> cellMap; //electron Wannier cell map
+	std::vector<matrix> cellWeights; //corresponding weights (nBands x nBands for each cell)
 	std::shared_ptr<DistributedMatrix> Hw, Pw, Sw, RPw, Zw; //Wannier hamiltonian, momentum, spin, R*P and z matrix elements
 	std::shared_ptr<DistributedMatrix> HprimeW[3]; //d/dk of Wannier hamiltonian in each Cartesian direction
 	std::shared_ptr<DistributedMatrix> ImSigma_eeW, ImSigma_ePhW, ImSigmaP_ePhW, ImSigma_DW, ImSigmaP_DW; //linewidths in wannier basis
@@ -225,6 +225,8 @@ public:
 	
 private:
 	bool inEphLoop; //flag used internally by setState etc. for special handling of sum rule quantities within an ePhLoop
+	std::shared_ptr<MPIUtil> mpiInterGroup; //inter-group communicator used for matrix element initialization
+	std::shared_ptr<DistributedMatrix> readE(string varname, int nVars=1) const; //read electronic matrix elements (vetcor size nVars)
 };
 
 //Utility functions for printing with error estimates:

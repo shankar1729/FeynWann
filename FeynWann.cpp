@@ -90,7 +90,6 @@ FeynWann::FeynWann(FeynWannParams& fwp)
 : fwp(fwp), nAtoms(0), nSpins(0), nSpinor(0), spinWeight(0), mu(NAN), nElectrons(0), polar(false), ePhEstart(0.), ePhEstop(0.), tTransformByCompute(1), tTransformByComputeD(1), inEphLoop(false)
 {	
 	//Create inter-group communicator if requested:
-	std::shared_ptr<MPIUtil> mpiInterGroup;
 	const char* envFwSharedRead = getenv("FW_SHARED_READ");
 	if(envFwSharedRead and string(envFwSharedRead)=="yes")
 	{	int groupSizeMin = mpiGroup->nProcesses();
@@ -276,17 +275,7 @@ FeynWann::FeynWann(FeynWannParams& fwp)
 	logPrintf("\n");
 	
 	//Read cell weights:
-	fname = fwp.wannierPrefix + ".mlwfCellWeights" + spinSuffix;
-	logPrintf("Reading '%s' ... ", fname.c_str()); logFlush();
-	cellWeights.init(nBands*nBands, cellMap.size());
-	cellWeights.read_real(fname.c_str());
-	//--- split to matrix per cell:
-	std::vector<matrix> cellWeightsVec(cellMap.size());
-	for(size_t iCell=0; iCell<cellWeightsVec.size(); iCell++)
-	{	cellWeightsVec[iCell] = cellWeights(0,nBands*nBands, iCell,iCell+1);
-		cellWeightsVec[iCell].reshape(nBands,nBands);
-	}
-	logPrintf("done.\n");
+	cellWeights = readCellWeights(fwp.wannierPrefix + ".mlwfCellWeights" + spinSuffix, cellMap.size(), nBands, nBands);
 	
 	//Initialize phonon properties:
 	realPartOnly = (nSpinor==1);
@@ -363,9 +352,7 @@ FeynWann::FeynWann(FeynWannParams& fwp)
 			mpiGroup, 3*nBands*nBands, ePhCellMapSum, offsetDim, false, mpiInterGroup);
 		
 		//Read gradient matrix element for e-ph sum rule
-		fname = fwp.wannierPrefix + ".mlwfD" + spinSuffix;
-		Dw = std::make_shared<DistributedMatrix>(fname, realPartOnly,
-			mpiGroup, 3*nBands*nBands, cellMap, offsetDim, false, mpiInterGroup, &cellWeightsVec, &kfold);
+		Dw = readE("mlwfD", 3);
 		
 		//Check for polarity:
 		fname = fwp.wannierPrefix + ".out";
@@ -516,77 +503,36 @@ FeynWann::FeynWann(FeynWannParams& fwp)
 	
 	//Read wannier hamiltonian
 	fname = fwp.wannierPrefix + ".mlwfH" + spinSuffix;
-	Hw = std::make_shared<DistributedMatrix>(fname, realPartOnly,
-		mpiGroup, nBands*nBands, cellMap, offsetDim, false, mpiInterGroup, &cellWeightsVec, &kfold);
+	Hw = readE("mlwfH");
 	//--- optional offset by slab weights:
 	if(fwp.EshiftWeight)
-	{	DistributedMatrix Ww(fwp.wannierPrefix + ".mlwfW" + spinSuffix, realPartOnly,
-			mpiGroup, nBands*nBands, cellMap, offsetDim, false, mpiInterGroup, &cellWeightsVec, &kfold);
-		axpy(fwp.EshiftWeight, Ww.mat, Hw->mat);
+	{	std::shared_ptr<DistributedMatrix> Ww = readE("mlwfW");
+		axpy(fwp.EshiftWeight, Ww->mat, Hw->mat);
 	}
 	
 	//Velocity matrix elements
 	if(fwp.needVelocity or (fwp.needL or fwp.needQ)) //also needed for long-raneg correction of R*P
-	{	fname = fwp.wannierPrefix + ".mlwfP" + spinSuffix;
-		Pw = std::make_shared<DistributedMatrix>(fname, realPartOnly,
-			mpiGroup, 3*nBands*nBands, cellMap, offsetDim, false, mpiInterGroup, &cellWeightsVec, &kfold);
-	}
+		Pw = readE("mlwfP", 3);
 	//Spin matrix elements
 	if(not isRelativistic()) fwp.needSpin = false; //spin only available in relatvistic mode
-	if(fwp.needSpin)
-	{	fname = fwp.wannierPrefix + ".mlwfS" + spinSuffix;
-		Sw = std::make_shared<DistributedMatrix>(fname, realPartOnly,
-			mpiGroup, 3*nBands*nBands, cellMap, offsetDim, false, mpiInterGroup, &cellWeightsVec, &kfold);
-	}
+	if(fwp.needSpin) Sw = readE("mlwfS", 3);
 	//R*P matrix elements for angular momentum and/or electric quadrupole
 	if(fwp.needL or fwp.needQ)
-	{	fname = fwp.wannierPrefix + ".mlwfRP" + spinSuffix;
-		RPw = std::make_shared<DistributedMatrix>(fname, realPartOnly,
-			mpiGroup, 9*nBands*nBands, cellMap, offsetDim, false, mpiInterGroup, &cellWeightsVec, &kfold);
+	{	RPw = readE("mlwfRP", 9);
 		//Setup dH/dk for long-range correction:
 		for(int iDir=0; iDir<3; iDir++)
 			HprimeW[iDir] = std::make_shared<DistributedMatrix>("", realPartOnly, //data taken from Hw
-				mpiGroup, nBands*nBands, cellMap, offsetDim, false, mpiInterGroup, &cellWeightsVec, &kfold,
+				mpiGroup, nBands*nBands, cellMap, offsetDim, false, mpiInterGroup, &cellWeights, &kfold,
 				iDir, Hw.get(), &R);
 	}
 	//z position matrix elements
-	if(fwp.EzExt)
-	{	fname = fwp.wannierPrefix + ".mlwfZ" + spinSuffix;
-		Zw = std::make_shared<DistributedMatrix>(fname, realPartOnly,
-			mpiGroup, nBands*nBands, cellMap, offsetDim, false, mpiInterGroup, &cellWeightsVec, &kfold);
-	}
+	if(fwp.EzExt) Zw = readE("mlwfZ");
 	//Linewidths:
-	if(fwp.needLinewidth_ee)
-	{	//e-e:
-		fname = fwp.wannierPrefix + ".mlwfImSigma_ee" + spinSuffix;
-		ImSigma_eeW = std::make_shared<DistributedMatrix>(fname, realPartOnly,
-			mpiGroup, nBands*nBands, cellMap, offsetDim, false, mpiInterGroup, &cellWeightsVec, &kfold);
-	}
-	if(fwp.needLinewidth_ePh)
-	{	//e-ph:
-		fname = fwp.wannierPrefix + ".mlwfImSigma_ePh" + spinSuffix;
-		ImSigma_ePhW = std::make_shared<DistributedMatrix>(fname, realPartOnly,
-			mpiGroup, nBands*nBands*FeynWannParams::fGrid_ePh.size(), cellMap, offsetDim, false, mpiInterGroup, &cellWeightsVec, &kfold);
-	}
-	if(fwp.needLinewidthP_ePh)
-	{	//e-ph:
-		fname = fwp.wannierPrefix + ".mlwfImSigmaP_ePh" + spinSuffix;
-		ImSigmaP_ePhW = std::make_shared<DistributedMatrix>(fname, realPartOnly,
-			mpiGroup, nBands*nBands*FeynWannParams::fGrid_ePh.size(), cellMap, offsetDim, false, mpiInterGroup, &cellWeightsVec, &kfold);
-	}
-	if(fwp.needLinewidth_D.length())
-	{	//e-ph:
-		fname = fwp.wannierPrefix + ".mlwfImSigma_D_" + fwp.needLinewidth_D + spinSuffix;
-		ImSigma_DW = std::make_shared<DistributedMatrix>(fname, realPartOnly,
-			mpiGroup, nBands*nBands, cellMap, offsetDim, false, mpiInterGroup, &cellWeightsVec, &kfold);
-	}
-	if(fwp.needLinewidthP_D.length())
-	{	//e-ph:
-		fname = fwp.wannierPrefix + ".mlwfImSigmaP_D_" + fwp.needLinewidth_D + spinSuffix;
-		ImSigmaP_DW = std::make_shared<DistributedMatrix>(fname, realPartOnly,
-			mpiGroup, nBands*nBands, cellMap, offsetDim, false, mpiInterGroup, &cellWeightsVec, &kfold);
-	}
-	
+	if(fwp.needLinewidth_ee) ImSigma_eeW = readE("mlwfImSigma_ee");
+	if(fwp.needLinewidth_ePh) ImSigma_ePhW = readE("mlwfImSigma_ePh", FeynWannParams::fGrid_ePh.size());
+	if(fwp.needLinewidthP_ePh) ImSigmaP_ePhW = readE("mlwfImSigmaP_ePh", FeynWannParams::fGrid_ePh.size());
+	if(fwp.needLinewidth_D.length()) ImSigma_DW = readE("mlwfImSigma_D_" + fwp.needLinewidth_D);
+	if(fwp.needLinewidthP_D.length()) ImSigmaP_DW = readE("mlwfImSigmaP_D_" + fwp.needLinewidth_D);
 	logPrintf("\n");
 	
 	//Initialize q-mesh offsets that will cover k-mesh:
@@ -597,6 +543,12 @@ FeynWann::FeynWann(FeynWannParams& fwp)
 	for(iqOffset[1]=0; iqOffset[1]<kfoldSup[1]; iqOffset[1]++)
 	for(iqOffset[2]=0; iqOffset[2]<kfoldSup[2]; iqOffset[2]++)
 		qOffset.push_back(kfoldInv * iqOffset);
+}
+
+
+std::shared_ptr<DistributedMatrix> FeynWann::readE(string varname, int nVars) const
+{	return std::make_shared<DistributedMatrix>(fwp.wannierPrefix + "." + varname + spinSuffix, realPartOnly,
+			mpiGroup, nBands*nBands*nVars, cellMap, offsetDim, false, mpiInterGroup, &cellWeights, &kfold);
 }
 
 
