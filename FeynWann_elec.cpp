@@ -135,7 +135,7 @@ void FeynWann::setState(FeynWann::StateE& state)
 	{	state.vVec.resize(nBands);
 		for(int iDir=0; iDir<3; iDir++)
 		{	state.v[iDir] = complex(0,-1) //Since P was stored with -i omitted (to make it real when possible)
-				* (dagger(state.U) * getMatrix(Pw->getResult(state.ik), nBands, nBands, iDir) * state.U);
+				* state.getMatrixRotated(Pw, iDir);
 			//Extract diagonal parts for convenience:
 			for(int b=0; b<nBands; b++)
 				state.vVec[b][iDir] = state.v[iDir](b,b).real();
@@ -145,7 +145,7 @@ void FeynWann::setState(FeynWann::StateE& state)
 	if(fwp.needSpin)
 	{	state.Svec.resize(nBands);
 		for(int iDir=0; iDir<3; iDir++)
-		{	state.S[iDir] = dagger(state.U) * getMatrix(Sw->getResult(state.ik), nBands, nBands, iDir) * state.U;
+		{	state.S[iDir] = state.getMatrixRotated(Sw, iDir);
 			//Extract diagonal parts for convenience:
 			for(int b=0; b<nBands; b++)
 				state.Svec[b][iDir] = state.S[iDir](b,b).real();
@@ -157,10 +157,10 @@ void FeynWann::setState(FeynWann::StateE& state)
 		for(int iDir=0; iDir<3; iDir++)
 		{	for(int jDir=0; jDir<3; jDir++)
 				RP(iDir, jDir) = complex(0,-1) //Since RP was stored with -i omitted (to make it real when possible)
-					* (dagger(state.U) * getMatrix(RPw->getResult(state.ik), nBands, nBands, 3*iDir+jDir) * state.U);
+					* state.getMatrixRotated(RPw, 3*iDir+jDir);
 			//Long range correction:
 			//--- fetch dH/dk
-			matrix iDi = dagger(state.U) * getMatrix(HprimeW[iDir]->getResult(state.ik), nBands, nBands) * state.U;
+			matrix iDi = state.getMatrixRotated(HprimeW[iDir]);
 			//--- convert to i*D := i dU/dk in place:
 			{	complex* iDiData = iDi.data();
 				for(int bCol=0; bCol<nBands; bCol++) //note: column major storage
@@ -196,23 +196,23 @@ void FeynWann::setState(FeynWann::StateE& state)
 	}
 	//Linewidths, as needed:
 	if(fwp.needLinewidth_ee)
-		state.ImSigma_ee = diag(dagger(state.U) * getMatrix(ImSigma_eeW->getResult(state.ik), nBands, nBands) * state.U);
+		state.ImSigma_ee = diag(state.getMatrixRotated(ImSigma_eeW));
 	if(fwp.needLinewidth_ePh)
 	{	state.logImSigma_ePhArr.resize(FeynWannParams::fGrid_ePh.size());
 		for(unsigned iMat=0; iMat<state.logImSigma_ePhArr.size(); iMat++)
-			state.logImSigma_ePhArr[iMat] = diag(dagger(state.U) * getMatrix(ImSigma_ePhW->getResult(state.ik), nBands, nBands, iMat) * state.U);
+			state.logImSigma_ePhArr[iMat] = diag(state.getMatrixRotated(ImSigma_ePhW, iMat));
 	}
 	if(fwp.needLinewidthP_ePh)
 	{	state.logImSigmaP_ePhArr.resize(FeynWannParams::fGrid_ePh.size());
 		for(unsigned iMat=0; iMat<state.logImSigmaP_ePhArr.size(); iMat++)
-			state.logImSigmaP_ePhArr[iMat] = diag(dagger(state.U) * getMatrix(ImSigmaP_ePhW->getResult(state.ik), nBands, nBands, iMat) * state.U);
+			state.logImSigmaP_ePhArr[iMat] = diag(state.getMatrixRotated(ImSigmaP_ePhW, iMat));
 	}
 	if(fwp.needLinewidth_D.length())
-	{	state.ImSigma_D = diag(dagger(state.U) * getMatrix(ImSigma_DW->getResult(state.ik), nBands, nBands) * state.U);
+	{	state.ImSigma_D = diag(state.getMatrixRotated(ImSigma_DW));
 		for(double& ImSigma: state.ImSigma_D) ImSigma = exp(ImSigma); //ImSigma_D is interpolated logarithmically
 	}
 	if(fwp.needLinewidthP_D.length())
-	{	state.ImSigmaP_D = diag(dagger(state.U) * getMatrix(ImSigmaP_DW->getResult(state.ik), nBands, nBands) * state.U);
+	{	state.ImSigmaP_D = diag(state.getMatrixRotated(ImSigmaP_DW));
 		for(double& ImSigma: state.ImSigmaP_D) ImSigma = exp(ImSigma); //ImSigmaP_D is interpolated logarithmically
 	}
 	
@@ -221,8 +221,8 @@ void FeynWann::setState(FeynWann::StateE& state)
 	{	state.dHePhSum.init(nBands*nBands, 3);
 		complex* dHsumData = state.dHePhSum.dataPref();
 		for(int iDir=0; iDir<3; iDir++)
-		{	matrix D = dagger(state.U) * getMatrix(Dw->getResult(state.ik), nBands, nBands, iDir) * state.U;
-			matrix H = dagger(state.U) * getMatrix(HePhSumW->getResult(state.ik), nBands, nBands, iDir) * state.U;
+		{	matrix D = state.getMatrixRotated(Dw, iDir);
+			matrix H = state.getMatrixRotated(HePhSumW, iDir);
 			//Compute error in the sum rule:
 			const double Emag = 1e-3; //damp correction for energy differences >> Emag (to handle fringes of Wannier window)
 			const double expFac = -1./(Emag*Emag);
@@ -330,4 +330,9 @@ double FeynWann::StateE::ImSigma_ePh(int n, double f) const
 
 double FeynWann::StateE::ImSigmaP_ePh(int n, double f) const
 {	return exp(interpQuartic(logImSigmaP_ePhArr, n, f));
+}
+
+matrix FeynWann::StateE::getMatrixRotated(const std::shared_ptr<DistributedMatrix>& mat, int iMat) const
+{	int nBands = U.nRows();
+	return dagger(U) * getMatrix(mat->getResult(ik), nBands, nBands, iMat) * U;
 }

@@ -91,6 +91,7 @@ public:
 		std::vector<diagMatrix> logImSigmaP_ePhArr; //!< e-ph momentum-relaxation linewidth for each f in fGrid_ePh
 		matrix dHePhSum; //!< nBands*nBands x 3 matrix used internally to enforce e-ph matrix element sum rule at all k's
 		bool withinRange; //!< whether any bands in E are within ePhEstart and ePhEstop (used to filter ePhLoop)
+		matrix getMatrixRotated(const std::shared_ptr<DistributedMatrix>& mat, int iMat=0) const;
 		friend class FeynWann;
 	};
 	
