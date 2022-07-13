@@ -92,6 +92,12 @@ public:
 		matrix dHePhSum; //!< nBands*nBands x 3 matrix used internally to enforce e-ph matrix element sum rule at all k's
 		bool withinRange; //!< whether any bands in E are within ePhEstart and ePhEstop (used to filter ePhLoop)
 		matrix getMatrixRotated(const std::shared_ptr<DistributedMatrix>& mat, int iMat=0) const;
+		void computeLQ(const FeynWannParams& fwp,
+			const std::shared_ptr<DistributedMatrix> RPw,
+			const std::shared_ptr<DistributedMatrix> HprimeW[3]); //!< calculate L and Q
+		void compute_dHePhSum(const std::shared_ptr<DistributedMatrix> Dw,
+			const std::shared_ptr<DistributedMatrix> HePhSumW); //!< calculate phonon sum rule correction
+		
 		friend class FeynWann;
 	};
 	
@@ -179,7 +185,7 @@ public:
 	string spinSuffix; //filename suffix for current spin channel (if any)
 	double mu; //!< chemical potential if DFT calculation had smearing, else VBM
 	double nElectrons; //!< number of electrons per unit cell in DFT calculation
-	double eMinMain, eMaxMain; //!< energy range for main window (within which eigenvalues should be exact compared to DFT)
+	double EminInner, EmaxInner; //!< energy range for inner window (within which eigenvalues should be exact compared to DFT)
 	int nModes; //!< number of phonon modes (polarizations)
 	
 	//Electrons:

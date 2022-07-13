@@ -116,7 +116,7 @@ void FeynWann::setState(FeynWann::StateE& state)
 	if(fwp.scissor)
 	{	//Apply scissor operator (move up unoccupied states):
 		for(double& E: state.E)
-			if(E > symmThreshold)  // TODO: not use symm threshold here
+			if(E > fwp.degeneracyThreshold)
 				E += fwp.scissor;
 	}
 	//Check whether any states in range (only if not already masked out by initial value of withinRange):
@@ -152,48 +152,8 @@ void FeynWann::setState(FeynWann::StateE& state)
 		}
 	}
 	//R*P matrix elements for angular momentum and/or electric quadrupole:
-	if(fwp.needL or fwp.needQ)
-	{	matrix3<matrix> RP;
-		for(int iDir=0; iDir<3; iDir++)
-		{	for(int jDir=0; jDir<3; jDir++)
-				RP(iDir, jDir) = complex(0,-1) //Since RP was stored with -i omitted (to make it real when possible)
-					* state.getMatrixRotated(RPw, 3*iDir+jDir);
-			//Long range correction:
-			//--- fetch dH/dk
-			matrix iDi = state.getMatrixRotated(HprimeW[iDir]);
-			//--- convert to i*D := i dU/dk in place:
-			{	complex* iDiData = iDi.data();
-				for(int bCol=0; bCol<nBands; bCol++) //note: column major storage
-					for(int bRow=0; bRow<nBands; bRow++)
-					{	double Ediff = state.E[bCol] - state.E[bRow];
-						*(iDiData++) *= complex(0., (fabs(Ediff) < fwp.degeneracyThreshold) ? 0. : 1./Ediff);
-					}
-			}
-			//--- add correction
-			for(int jDir=0; jDir<3; jDir++)
-				RP(iDir, jDir) += iDi * state.v[jDir];
-		}
-		//Extract L if needed:
-		if(fwp.needL)
-		{	for(int kDir=0; kDir<3; kDir++)
-			{	int iDir = (kDir + 1) % 3;
-				int jDir = (kDir + 2) % 3;
-				state.L[kDir] = dagger_symmetrize(RP(iDir, jDir) - RP(jDir, iDir));
-			}
-		}
-		//Extract Q if needed:
-		if(fwp.needQ)
-		{	//xy, yz and zx components:
-			for(int iDir=0; iDir<3; iDir++)
-			{	int jDir = (iDir + 1) % 3;
-				state.Q[iDir] = dagger_symmetrize(RP(iDir, jDir) + RP(jDir, iDir));
-			}
-			//xx - r^2/3 and yy - r^2/3 components:
-			matrix traceTerm = (1./3) * trace(RP);
-			for(int iDir=0; iDir<2; iDir++)
-				state.Q[iDir+3] = 2.*dagger_symmetrize(RP(iDir, iDir) - traceTerm);
-		}
-	}
+	state.computeLQ(fwp, RPw, HprimeW);
+	
 	//Linewidths, as needed:
 	if(fwp.needLinewidth_ee)
 		state.ImSigma_ee = diag(state.getMatrixRotated(ImSigma_eeW));
@@ -218,29 +178,8 @@ void FeynWann::setState(FeynWann::StateE& state)
 	
 	//e-ph sum rule if needed:
 	if(inEphLoop)
-	{	state.dHePhSum.init(nBands*nBands, 3);
-		complex* dHsumData = state.dHePhSum.dataPref();
-		for(int iDir=0; iDir<3; iDir++)
-		{	matrix D = state.getMatrixRotated(Dw, iDir);
-			matrix H = state.getMatrixRotated(HePhSumW, iDir);
-			//Compute error in the sum rule:
-			const double Emag = 1e-3; //damp correction for energy differences >> Emag (to handle fringes of Wannier window)
-			const double expFac = -1./(Emag*Emag);
-			complex* Hdata = H.data();
-			const complex* Ddata = D.data();
-			for(int b2=0; b2<nBands; b2++)
-				for(int b1=0; b1<nBands; b1++)
-				{	double E12 = state.E[b1] - state.E[b2];
-					*Hdata -= (*(Ddata++)) * E12;
-					*Hdata *= exp(expFac*E12*E12); //damp correction based on energy difference
-					Hdata++;
-				}
-			//Rotate back to Wannier basis and store to HePhSum
-			H = state.U * H * dagger(state.U);
-			callPref(eblas_copy)(dHsumData, H.data(), H.nData());
-			dHsumData += H.nData();
-		}
-	}
+		state.compute_dHePhSum(Dw, HePhSumW);
+	
 	watchRotations.stop();
 }
 
@@ -332,7 +271,87 @@ double FeynWann::StateE::ImSigmaP_ePh(int n, double f) const
 {	return exp(interpQuartic(logImSigmaP_ePhArr, n, f));
 }
 
+
 matrix FeynWann::StateE::getMatrixRotated(const std::shared_ptr<DistributedMatrix>& mat, int iMat) const
 {	int nBands = U.nRows();
 	return dagger(U) * getMatrix(mat->getResult(ik), nBands, nBands, iMat) * U;
 }
+
+
+void FeynWann::StateE::computeLQ(const FeynWannParams& fwp,
+	const std::shared_ptr<DistributedMatrix> RPw,
+	const std::shared_ptr<DistributedMatrix> HprimeW[3])
+{
+	int nBands = E.nRows();
+	if(fwp.needL or fwp.needQ)
+	{	matrix3<matrix> RP;
+		for(int iDir=0; iDir<3; iDir++)
+		{	for(int jDir=0; jDir<3; jDir++)
+				RP(iDir, jDir) = complex(0,-1) //Since RP was stored with -i omitted (to make it real when possible)
+					* getMatrixRotated(RPw, 3*iDir+jDir);
+			//Long range correction:
+			//--- fetch dH/dk
+			matrix iDi = getMatrixRotated(HprimeW[iDir]);
+			//--- convert to i*D := i dU/dk in place:
+			{	complex* iDiData = iDi.data();
+				for(int bCol=0; bCol<nBands; bCol++) //note: column major storage
+					for(int bRow=0; bRow<nBands; bRow++)
+					{	double Ediff = E[bCol] - E[bRow];
+						*(iDiData++) *= complex(0., (fabs(Ediff) < fwp.degeneracyThreshold) ? 0. : 1./Ediff);
+					}
+			}
+			//--- add correction
+			for(int jDir=0; jDir<3; jDir++)
+				RP(iDir, jDir) += iDi * v[jDir];
+		}
+		//Extract L if needed:
+		if(fwp.needL)
+		{	for(int kDir=0; kDir<3; kDir++)
+			{	int iDir = (kDir + 1) % 3;
+				int jDir = (kDir + 2) % 3;
+				L[kDir] = dagger_symmetrize(RP(iDir, jDir) - RP(jDir, iDir));
+			}
+		}
+		//Extract Q if needed:
+		if(fwp.needQ)
+		{	//xy, yz and zx components:
+			for(int iDir=0; iDir<3; iDir++)
+			{	int jDir = (iDir + 1) % 3;
+				Q[iDir] = dagger_symmetrize(RP(iDir, jDir) + RP(jDir, iDir));
+			}
+			//xx - r^2/3 and yy - r^2/3 components:
+			matrix traceTerm = (1./3) * trace(RP);
+			for(int iDir=0; iDir<2; iDir++)
+				Q[iDir+3] = 2.*dagger_symmetrize(RP(iDir, iDir) - traceTerm);
+		}
+	}
+}
+
+void FeynWann::StateE::compute_dHePhSum(const std::shared_ptr<DistributedMatrix> Dw,
+	const std::shared_ptr<DistributedMatrix> HePhSumW)
+{
+	int nBands = E.nRows();
+	dHePhSum.init(nBands*nBands, 3);
+	complex* dHsumData = dHePhSum.dataPref();
+	for(int iDir=0; iDir<3; iDir++)
+	{	matrix D = getMatrixRotated(Dw, iDir);
+		matrix H = getMatrixRotated(HePhSumW, iDir);
+		//Compute error in the sum rule:
+		const double Emag = 1e-3; //damp correction for energy differences >> Emag (to handle fringes of Wannier window)
+		const double expFac = -1./(Emag*Emag);
+		complex* Hdata = H.data();
+		const complex* Ddata = D.data();
+		for(int b2=0; b2<nBands; b2++)
+			for(int b1=0; b1<nBands; b1++)
+			{	double E12 = E[b1] - E[b2];
+				*Hdata -= (*(Ddata++)) * E12;
+				*Hdata *= exp(expFac*E12*E12); //damp correction based on energy difference
+				Hdata++;
+			}
+		//Rotate back to Wannier basis and store to HePhSum
+		H = U * H * dagger(U);
+		callPref(eblas_copy)(dHsumData, H.data(), H.nData());
+		dHsumData += H.nData();
+	}
+}
+
