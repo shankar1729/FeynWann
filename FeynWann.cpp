@@ -31,7 +31,7 @@ FeynWannParams::FeynWannParams(InputMap* inputMap)
 : iSpin(0), totalEprefix("Wannier/totalE"), phononPrefix("Wannier/phonon"), wannierPrefix("Wannier/wannier"),
 needSymmetries(false), needPhonons(false), needVelocity(false), needSpin(false), needL(false), needQ(false),
 needLinewidth_ee(false), needLinewidth_ePh(false), needLinewidthP_ePh(false),
-ePhHeadOnly(false), maskOptimize(false),
+ePhHeadOnly(false), maskOptimize(false), bandSumLQ(false),
 EzExt(0.), scissor(0.), EshiftWeight(0.), enforceKramerDeg(0.), degeneracyThreshold(1E-4*eV)
 {
 	if(inputMap)
@@ -41,6 +41,7 @@ EzExt(0.), scissor(0.), EshiftWeight(0.), enforceKramerDeg(0.), degeneracyThresh
 		EzExt = inputMap->get("EzExt", 0.) * eV/nm;
 		scissor = inputMap->get("scissor", 0.) * eV;
 		EshiftWeight = inputMap->get("EshiftWeight", 0.) * eV;
+		bandSumLQ = inputMap->getBool("bandSumLQ", false);
 		enforceKramerDeg = inputMap->getBool("enforceKramerDeg", false);
 		degeneracyThreshold = inputMap->get("degeneracyThreshold", 1E-4) * eV;
 	}
@@ -52,6 +53,7 @@ void FeynWannParams::printParams() const
 	logPrintf("EzExt = %lg\n", EzExt);
 	logPrintf("scissor = %lg\n", scissor);
 	logPrintf("EshiftWeight = %lg\n", EshiftWeight);
+	logPrintf("bandSumLQ = %s\n", bandSumLQ ? "yes" : "no");
 	logPrintf("enforceKramerDeg = %s\n", enforceKramerDeg ? "yes" : "no");
 	logPrintf("degeneracyThreshold = %lg\n", degeneracyThreshold);
 }
@@ -517,7 +519,7 @@ FeynWann::FeynWann(FeynWannParams& fwp)
 	if(not isRelativistic()) fwp.needSpin = false; //spin only available in relatvistic mode
 	if(fwp.needSpin) Sw = readE("mlwfS", 3);
 	//R*P matrix elements for angular momentum and/or electric quadrupole
-	if(fwp.needL or fwp.needQ)
+	if(fwp.needRP())
 	{	RPw = readE("mlwfRP", 9);
 		//Setup dH/dk for long-range correction:
 		for(int iDir=0; iDir<3; iDir++)

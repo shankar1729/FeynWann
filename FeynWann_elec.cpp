@@ -64,7 +64,7 @@ void FeynWann::eTransformNeeded(const vector3<>& k0)
 {	Hw->transform(k0);
 	if(fwp.needVelocity or (fwp.needL or fwp.needQ)) Pw->transform(k0);
 	if(fwp.needSpin) Sw->transform(k0);
-	if(fwp.needL or fwp.needQ) { RPw->transform(k0); for(int iDir=0; iDir<3; iDir++) HprimeW[iDir]->transform(k0); }
+	if(fwp.needRP()) { RPw->transform(k0); for(int iDir=0; iDir<3; iDir++) HprimeW[iDir]->transform(k0); }
 	if(fwp.EzExt) Zw->transform(k0);
 	if(fwp.needLinewidth_ee) ImSigma_eeW->transform(k0);
 	if(fwp.needLinewidth_ePh) ImSigma_ePhW->transform(k0);
@@ -78,7 +78,7 @@ void FeynWann::eComputeNeeded(const vector3<>& k)
 {	Hw->compute(k);
 	if(fwp.needVelocity or (fwp.needL or fwp.needQ)) Pw->compute(k);
 	if(fwp.needSpin) Sw->compute(k);
-	if(fwp.needL or fwp.needQ) { RPw->compute(k); for(int iDir=0; iDir<3; iDir++) HprimeW[iDir]->compute(k); }
+	if(fwp.needRP()) { RPw->compute(k); for(int iDir=0; iDir<3; iDir++) HprimeW[iDir]->compute(k); }
 	if(fwp.EzExt) Zw->compute(k);
 	if(fwp.needLinewidth_ee) ImSigma_eeW->compute(k);
 	if(fwp.needLinewidth_ePh) ImSigma_ePhW->compute(k);
@@ -286,24 +286,43 @@ void FeynWann::StateE::computeLQ(const FeynWannParams& fwp,
 	if(fwp.needL or fwp.needQ)
 	{	matrix3<matrix> RP;
 		for(int iDir=0; iDir<3; iDir++)
-		{	for(int jDir=0; jDir<3; jDir++)
-				RP(iDir, jDir) = complex(0,-1) //Since RP was stored with -i omitted (to make it real when possible)
-					* getMatrixRotated(RPw, 3*iDir+jDir);
-			//Long range correction:
-			//--- fetch dH/dk
-			matrix iDi = getMatrixRotated(HprimeW[iDir]);
-			//--- convert to i*D := i dU/dk in place:
-			{	complex* iDiData = iDi.data();
+		{
+			if(fwp.bandSumLQ)
+			{	//Compute RP from sum over bands:
+				//--- compute r = i p / Delta E:
+				matrix ri = complex(0, -1) * v[iDir];
+				complex* riData = ri.data();
 				for(int bCol=0; bCol<nBands; bCol++) //note: column major storage
-					for(int bRow=0; bRow<nBands; bRow++)
-					{	double Ediff = E[bCol] - E[bRow];
-						*(iDiData++) *= complex(0., (fabs(Ediff) < fwp.degeneracyThreshold) ? 0. : 1./Ediff);
-					}
+				for(int bRow=0; bRow<nBands; bRow++)
+				{	double Ediff = E[bRow] - E[bCol];
+					*(riData++) *= (fabs(Ediff) < fwp.degeneracyThreshold ? 0. : 1./Ediff);
+				}
+				//--- set r * p
+				for(int jDir=0; jDir<3; jDir++)
+					RP(iDir, jDir) = ri * v[jDir];
 			}
-			//--- add correction
-			for(int jDir=0; jDir<3; jDir++)
-				RP(iDir, jDir) += iDi * v[jDir];
+			else
+			{	//Compute RP from Wannier interpolation with range-splitting:
+				for(int jDir=0; jDir<3; jDir++)
+					RP(iDir, jDir) = complex(0,-1) //Since RP was stored with -i omitted (to make it real when possible)
+						* getMatrixRotated(RPw, 3*iDir+jDir);
+				//Long range correction:
+				//--- fetch dH/dk
+				matrix iDi = getMatrixRotated(HprimeW[iDir]);
+				//--- convert to i*D := i dU/dk in place:
+				{	complex* iDiData = iDi.data();
+					for(int bCol=0; bCol<nBands; bCol++) //note: column major storage
+						for(int bRow=0; bRow<nBands; bRow++)
+						{	double Ediff = E[bCol] - E[bRow];
+							*(iDiData++) *= complex(0., (fabs(Ediff) < fwp.degeneracyThreshold) ? 0. : 1./Ediff);
+						}
+				}
+				//--- add correction
+				for(int jDir=0; jDir<3; jDir++)
+					RP(iDir, jDir) += iDi * v[jDir];
+			}
 		}
+		
 		//Extract L if needed:
 		if(fwp.needL)
 		{	for(int kDir=0; kDir<3; kDir++)
@@ -312,6 +331,7 @@ void FeynWann::StateE::computeLQ(const FeynWannParams& fwp,
 				L[kDir] = dagger_symmetrize(RP(iDir, jDir) - RP(jDir, iDir));
 			}
 		}
+		
 		//Extract Q if needed:
 		if(fwp.needQ)
 		{	//xy, yz and zx components:

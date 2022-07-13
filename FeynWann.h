@@ -31,7 +31,7 @@ struct FeynWannParams
 	bool needSymmetries; //!< whether to read symmetries from .sym file from JDFTx (default: false)
 	bool needPhonons; //!< whether to initialize phonon-related quantities (default: false)
 	bool needVelocity; //!< whether to initialize velocity (momentum) matrix elements
-	bool needSpin; //!< whether to initialize spin matrix elements (will be reset to false if not relativstic)
+	bool needSpin; //!< whether to initialize spin matrix elements (will be reset to false if not relativistic)
 	bool needL; //!< whether to initialize angular momentum matrix elements
 	bool needQ; //!< whether to initialize r*p electric quadrupole matrix elements
 	bool needLinewidth_ee; //!< whether to provide e-e line-width (default: false)
@@ -39,6 +39,8 @@ struct FeynWannParams
 	bool needLinewidthP_ePh; //!< whether to provide momentum-relaxation e-ph line-width (default: false)
 	bool ePhHeadOnly; //!< if true, only evaluate ePh callback function at head of each offset for debugging (default: false)
 	bool maskOptimize; //!< if true, optimize for heavily masked loops by switching between transform and compute based on a benchmark performed at startup
+	bool bandSumLQ; //!< if true, use sum over bands to compute L and Q
+	
 	static const std::vector<double> fGrid_ePh; //!< fillings grid used for e-ph linewidths
 	
 	string needDefect; //!< if non-null, read matrix elements for defect with name specified by this string
@@ -54,6 +56,8 @@ struct FeynWannParams
 	
 	FeynWannParams(class InputMap* inputMap=0); //!< If specified, look for optional parameters Bext (in Tesla), EzExt (in eV/nm), scissor (in eV) and EshiftWeight (in eV) from in inputMap
 	void printParams() const; //!< Print the parameters read from inputMap (in atomic units)
+	
+	inline bool needRP() const { return (needL or needQ) and (not bandSumLQ); } //!< whether Wannierized RP matrix elements are needed
 };
 
 //! Wannier interpolator for electrons and phonons
