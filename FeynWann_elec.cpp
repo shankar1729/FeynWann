@@ -20,6 +20,7 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 #include "FeynWann.h"
 #include "FeynWann_internal.h"
 #include <core/LatticeUtils.h>
+#include <core/Units.h>
 
 
 void FeynWann::eLoop(const vector3<>& k0, FeynWann::eProcessFunc eProcess, void* params, const std::vector<bool>* mask)
@@ -88,37 +89,33 @@ void FeynWann::eComputeNeeded(const vector3<>& k)
 }
 
 
+inline void enforceKramerDeg(diagMatrix& E)
+{	for(int b=0; b<E.nRows(); b+=2)
+	{	double Emid = 0.5*(E[b] + E[b+1]);
+		E[b] = Emid;
+		E[b+1] = Emid;
+	}
+}
+
+
+inline void rotateMatrix(matrix& mat, const matrix& U)
+{	mat = dagger(U) * mat * U;
+}
+
+
 void FeynWann::setState(FeynWann::StateE& state)
-{	static StopWatch watchRotations("FeynWann::setState:rotations");
+{	static StopWatch watchRotations1("FeynWann::setState:rotations1"),
+		watchPert("FeynWann::setState:perturb"),
+		watchRotations2("FeynWann::setState:rotations2");
+
 	//Get and diagonalize Hamiltonian:
 	matrix Hk = getMatrix(Hw->getResult(state.ik), nBands, nBands);
-	if(fwp.needSpin and fwp.Bext.length_squared())
-	{	//Add Zeeman perturbation:
-		for(int iDir=0; iDir<3; iDir++)
-			if(fwp.Bext[iDir]) Hk += fwp.Bext[iDir] * getMatrix(Sw->getResult(state.ik), nBands, nBands, iDir);
-	}
 	Hk.diagonalize(state.U, state.E);
-	if(fwp.enforceKramerDeg) //enforce Kramers degeneracy in the inversion symmetric cases
-	{	int bIn = 0;
-		while(bIn < nBands)
-		{       double Etemp = state.E[bIn];
-				state.E[bIn+1] = Etemp;
-				bIn += 2;
-		}
-	}
-	matrix HE = state.U * state.E * dagger(state.U);
-	//Add Stark perturbation:
-	if(fwp.EzExt) 
-	{	HE += fwp.EzExt * getMatrix(Zw->getResult(state.ik), nBands, nBands);
-		HE.diagonalize(state.U, state.E);	
-	}
+	if(fwp.enforceKramerDeg) enforceKramerDeg(state.E);
+	if(inEphLoop) state.compute_dHePhSum(Dw, HePhSumW); //e-ph sum rule on unperturbed H
 	for(double& E: state.E) E -= mu; //reference to Fermi level
-	if(fwp.scissor)
-	{	//Apply scissor operator (move up unoccupied states):
-		for(double& E: state.E)
-			if(E > fwp.degeneracyThreshold)
-				E += fwp.scissor;
-	}
+	if(fwp.scissor) fwp.applyScissor(state.E);
+	
 	//Check whether any states in range (only if not already masked out by initial value of withinRange):
 	if(state.withinRange and inEphLoop and (ePhEstart<ePhEstop))
 	{	state.withinRange = false;
@@ -129,32 +126,63 @@ void FeynWann::setState(FeynWann::StateE& state)
 			}
 	}
 	if(not state.withinRange) return; //Remaining quantities will never be used
-	watchRotations.start();
-	//Velocity matrix, if needed:
-	if(fwp.needVelocity or (fwp.needL or fwp.needQ))
-	{	state.vVec.resize(nBands);
-		for(int iDir=0; iDir<3; iDir++)
-		{	state.v[iDir] = complex(0,-1) //Since P was stored with -i omitted (to make it real when possible)
+	
+	//Initialize matrix elements needed for perturbations:
+	watchRotations1.start();
+	//--- velocity (also needed for L, Q calculation)
+	bool needV = fwp.needVelocity or (fwp.needL or fwp.needQ);
+	if(needV)
+	{	for(int iDir=0; iDir<3; iDir++)
+			state.v[iDir] = complex(0,-1) //Since P was stored with -i omitted (to make it real when possible)
 				* state.getMatrixRotated(Pw, iDir);
-			//Extract diagonal parts for convenience:
-			for(int b=0; b<nBands; b++)
-				state.vVec[b][iDir] = state.v[iDir](b,b).real();
-		}
 	}
-	//Spin matrix, if needed:
+	//--- spin
 	if(fwp.needSpin)
-	{	state.Svec.resize(nBands);
-		for(int iDir=0; iDir<3; iDir++)
-		{	state.S[iDir] = state.getMatrixRotated(Sw, iDir);
-			//Extract diagonal parts for convenience:
-			for(int b=0; b<nBands; b++)
-				state.Svec[b][iDir] = state.S[iDir](b,b).real();
-		}
+	{	for(int iDir=0; iDir<3; iDir++)
+			state.S[iDir] = state.getMatrixRotated(Sw, iDir);
 	}
-	//R*P matrix elements for angular momentum and/or electric quadrupole:
-	state.computeLQ(fwp, RPw, HprimeW);
+	//---- L, Q
+	if(fwp.needL or fwp.needQ)
+		state.computeLQ(fwp, RPw, HprimeW);
+	watchRotations1.stop();
+	
+	//Perturbations:
+	bool stark = fwp.EzExt;
+	bool zeeman = fwp.Bext.length_squared() and (fwp.needSpin or fwp.needL);
+	if(stark or zeeman)
+	{	//Construct perturbed Hamiltonian in unpeturbed eigenbasis:
+		watchPert.start();
+		matrix Hpert = state.E;
+		if(stark)
+			Hpert += fwp.EzExt * state.getMatrixRotated(Zw);
+		if(zeeman)
+			for(int iDir=0; iDir<3; iDir++)
+				if(fwp.Bext[iDir])
+				{	if(fwp.needSpin)
+						Hpert += (fwp.Bext[iDir] * bohrMagneton * gElectron * 0.5) * state.S[iDir];  //0.5 because |S| in [0, 1]
+					if(fwp.needL)
+						Hpert += (fwp.Bext[iDir] * bohrMagneton) * restrictInnerWindow(state.L[iDir], state.E);
+				}
+		
+		//Diagonalize perturbed Hamiltonian:
+		matrix Upert; //additional rotations due to perturbation
+		Hpert.diagonalize(Upert, state.E); //energies are now perturbed
+		state.U = state.U * Upert; //eigenvectors are now perturbed
+		
+		//Apply rotations to matrix elements computed above:
+		if(needV) for(int iDir=0; iDir<3; iDir++) rotateMatrix(state.v[iDir], Upert);
+		if(fwp.needSpin) for(int iDir=0; iDir<3; iDir++) rotateMatrix(state.S[iDir], Upert);
+		if(fwp.needL) for(int iDir=0; iDir<3; iDir++) rotateMatrix(state.L[iDir], Upert);
+		if(fwp.needQ) for(int iComp=0; iComp<5; iComp++) rotateMatrix(state.Q[iComp], Upert);
+		watchPert.stop();
+	}
+	
+	//Extract diagonal components for convenience, where needed:
+	if(fwp.needVelocity) StateE::extractDiagonal(state.v, state.vVec);
+	if(fwp.needSpin) StateE::extractDiagonal(state.S, state.Svec);
 	
 	//Linewidths, as needed:
+	watchRotations2.start();
 	if(fwp.needLinewidth_ee)
 		state.ImSigma_ee = diag(state.getMatrixRotated(ImSigma_eeW));
 	if(fwp.needLinewidth_ePh)
@@ -175,12 +203,7 @@ void FeynWann::setState(FeynWann::StateE& state)
 	{	state.ImSigmaP_D = diag(state.getMatrixRotated(ImSigmaP_DW));
 		for(double& ImSigma: state.ImSigmaP_D) ImSigma = exp(ImSigma); //ImSigmaP_D is interpolated logarithmically
 	}
-	
-	//e-ph sum rule if needed:
-	if(inEphLoop)
-		state.compute_dHePhSum(Dw, HePhSumW);
-	
-	watchRotations.stop();
+	watchRotations2.stop();
 }
 
 
@@ -283,69 +306,68 @@ void FeynWann::StateE::computeLQ(const FeynWannParams& fwp,
 	const std::shared_ptr<DistributedMatrix> HprimeW[3])
 {
 	int nBands = E.nRows();
-	if(fwp.needL or fwp.needQ)
-	{	matrix3<matrix> RP;
-		for(int iDir=0; iDir<3; iDir++)
-		{
-			if(fwp.bandSumLQ)
-			{	//Compute RP from sum over bands:
-				//--- compute r = i p / Delta E:
-				matrix ri = complex(0, -1) * v[iDir];
-				complex* riData = ri.data();
+	matrix3<matrix> RP;
+	for(int iDir=0; iDir<3; iDir++)
+	{
+		if(fwp.bandSumLQ)
+		{	//Compute RP from sum over bands:
+			//--- compute r = i p / Delta E:
+			matrix ri = complex(0, -1) * v[iDir];
+			complex* riData = ri.data();
+			for(int bCol=0; bCol<nBands; bCol++) //note: column major storage
+			for(int bRow=0; bRow<nBands; bRow++)
+			{	double Ediff = E[bRow] - E[bCol];
+				*(riData++) *= (fabs(Ediff) < fwp.degeneracyThreshold ? 0. : 1./Ediff);
+			}
+			//--- set r * p
+			for(int jDir=0; jDir<3; jDir++)
+				RP(iDir, jDir) = ri * v[jDir];
+		}
+		else
+		{	//Compute RP from Wannier interpolation with range-splitting:
+			for(int jDir=0; jDir<3; jDir++)
+				RP(iDir, jDir) = complex(0,-1) //Since RP was stored with -i omitted (to make it real when possible)
+					* getMatrixRotated(RPw, 3*iDir+jDir);
+			//Long range correction:
+			//--- fetch dH/dk
+			matrix iDi = getMatrixRotated(HprimeW[iDir]);
+			//--- convert to i*D := i dU/dk in place:
+			{	complex* iDiData = iDi.data();
 				for(int bCol=0; bCol<nBands; bCol++) //note: column major storage
-				for(int bRow=0; bRow<nBands; bRow++)
-				{	double Ediff = E[bRow] - E[bCol];
-					*(riData++) *= (fabs(Ediff) < fwp.degeneracyThreshold ? 0. : 1./Ediff);
-				}
-				//--- set r * p
-				for(int jDir=0; jDir<3; jDir++)
-					RP(iDir, jDir) = ri * v[jDir];
+					for(int bRow=0; bRow<nBands; bRow++)
+					{	double Ediff = E[bCol] - E[bRow];
+						*(iDiData++) *= complex(0., (fabs(Ediff) < fwp.degeneracyThreshold) ? 0. : 1./Ediff);
+					}
 			}
-			else
-			{	//Compute RP from Wannier interpolation with range-splitting:
-				for(int jDir=0; jDir<3; jDir++)
-					RP(iDir, jDir) = complex(0,-1) //Since RP was stored with -i omitted (to make it real when possible)
-						* getMatrixRotated(RPw, 3*iDir+jDir);
-				//Long range correction:
-				//--- fetch dH/dk
-				matrix iDi = getMatrixRotated(HprimeW[iDir]);
-				//--- convert to i*D := i dU/dk in place:
-				{	complex* iDiData = iDi.data();
-					for(int bCol=0; bCol<nBands; bCol++) //note: column major storage
-						for(int bRow=0; bRow<nBands; bRow++)
-						{	double Ediff = E[bCol] - E[bRow];
-							*(iDiData++) *= complex(0., (fabs(Ediff) < fwp.degeneracyThreshold) ? 0. : 1./Ediff);
-						}
-				}
-				//--- add correction
-				for(int jDir=0; jDir<3; jDir++)
-					RP(iDir, jDir) += iDi * v[jDir];
-			}
-		}
-		
-		//Extract L if needed:
-		if(fwp.needL)
-		{	for(int kDir=0; kDir<3; kDir++)
-			{	int iDir = (kDir + 1) % 3;
-				int jDir = (kDir + 2) % 3;
-				L[kDir] = dagger_symmetrize(RP(iDir, jDir) - RP(jDir, iDir));
-			}
-		}
-		
-		//Extract Q if needed:
-		if(fwp.needQ)
-		{	//xy, yz and zx components:
-			for(int iDir=0; iDir<3; iDir++)
-			{	int jDir = (iDir + 1) % 3;
-				Q[iDir] = dagger_symmetrize(RP(iDir, jDir) + RP(jDir, iDir));
-			}
-			//xx - r^2/3 and yy - r^2/3 components:
-			matrix traceTerm = (1./3) * trace(RP);
-			for(int iDir=0; iDir<2; iDir++)
-				Q[iDir+3] = 2.*dagger_symmetrize(RP(iDir, iDir) - traceTerm);
+			//--- add correction
+			for(int jDir=0; jDir<3; jDir++)
+				RP(iDir, jDir) += iDi * v[jDir];
 		}
 	}
+	
+	//Extract L if needed:
+	if(fwp.needL)
+	{	for(int kDir=0; kDir<3; kDir++)
+		{	int iDir = (kDir + 1) % 3;
+			int jDir = (kDir + 2) % 3;
+			L[kDir] = dagger_symmetrize(RP(iDir, jDir) - RP(jDir, iDir));
+		}
+	}
+	
+	//Extract Q if needed:
+	if(fwp.needQ)
+	{	//xy, yz and zx components:
+		for(int iDir=0; iDir<3; iDir++)
+		{	int jDir = (iDir + 1) % 3;
+			Q[iDir] = dagger_symmetrize(RP(iDir, jDir) + RP(jDir, iDir));
+		}
+		//xx - r^2/3 and yy - r^2/3 components:
+		matrix traceTerm = (1./3) * trace(RP);
+		for(int iDir=0; iDir<2; iDir++)
+			Q[iDir+3] = 2.*dagger_symmetrize(RP(iDir, iDir) - traceTerm);
+	}
 }
+
 
 void FeynWann::StateE::compute_dHePhSum(const std::shared_ptr<DistributedMatrix> Dw,
 	const std::shared_ptr<DistributedMatrix> HePhSumW)
@@ -375,3 +397,30 @@ void FeynWann::StateE::compute_dHePhSum(const std::shared_ptr<DistributedMatrix>
 	}
 }
 
+
+void FeynWann::StateE::extractDiagonal(const matrix (&X)[3], std::vector<vector3<>>& Xvec)
+{	int nBands = X[0].nRows();
+	Xvec.resize(nBands);
+	for(int iDir=0; iDir<3; iDir++)
+	{	for(int b=0; b<nBands; b++)
+			Xvec[b][iDir] = X[iDir](b,b).real();
+	}
+}
+
+
+matrix FeynWann::restrictInnerWindow(const matrix& mat, const diagMatrix& E) const
+{	//Construct mask for whether outside window:
+	std::vector<bool> isOutside;
+	for(double Ei: E)
+		isOutside.push_back((Ei >= EminInner) and (Ei <= EmaxInner));
+	//Project:
+	matrix M(mat);
+	complex* Mdata = M.data();
+	for(int bCol=0; bCol<nBands; bCol++) //note: column major storage
+	for(int bRow=0; bRow<nBands; bRow++)
+	{	if(isOutside[bCol] or isOutside[bRow])
+			*Mdata = 0.;
+		Mdata++;
+	}
+	return M;
+}

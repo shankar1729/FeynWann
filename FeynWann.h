@@ -58,6 +58,13 @@ struct FeynWannParams
 	void printParams() const; //!< Print the parameters read from inputMap (in atomic units)
 	
 	inline bool needRP() const { return (needL or needQ) and (not bandSumLQ); } //!< whether Wannierized RP matrix elements are needed
+	
+	//! Apply scissor operator correction to eigenvalues
+	inline void applyScissor(diagMatrix& E) const
+	{	for(double& Ei: E)
+			if(Ei > degeneracyThreshold)
+				E += scissor;
+	}
 };
 
 //! Wannier interpolator for electrons and phonons
@@ -101,7 +108,7 @@ public:
 			const std::shared_ptr<DistributedMatrix> HprimeW[3]); //!< calculate L and Q
 		void compute_dHePhSum(const std::shared_ptr<DistributedMatrix> Dw,
 			const std::shared_ptr<DistributedMatrix> HePhSumW); //!< calculate phonon sum rule correction
-		
+		static void extractDiagonal(const matrix (&X)[3], std::vector<vector3<>>& Xvec); //!< used to initialize vVev, Svec
 		friend class FeynWann;
 	};
 	
@@ -238,6 +245,7 @@ private:
 	bool inEphLoop; //flag used internally by setState etc. for special handling of sum rule quantities within an ePhLoop
 	std::shared_ptr<MPIUtil> mpiInterGroup; //inter-group communicator used for matrix element initialization
 	std::shared_ptr<DistributedMatrix> readE(string varname, int nVars=1) const; //read electronic matrix elements (vetcor size nVars)
+	matrix restrictInnerWindow(const matrix& mat, const diagMatrix& E) const; //prokect out contributions beyond the inner window
 };
 
 //Utility functions for printing with error estimates:

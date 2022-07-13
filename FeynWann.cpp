@@ -89,8 +89,10 @@ void FeynWann::finalize()
 
 
 FeynWann::FeynWann(FeynWannParams& fwp)
-: fwp(fwp), nAtoms(0), nSpins(0), nSpinor(0), spinWeight(0), mu(NAN), nElectrons(0), polar(false), ePhEstart(0.), ePhEstop(0.), tTransformByCompute(1), tTransformByComputeD(1), inEphLoop(false)
-{	
+: fwp(fwp), nAtoms(0), nSpins(0), nSpinor(0), spinWeight(0), mu(NAN), nElectrons(0),
+EminInner(-INFINITY), EmaxInner(+INFINITY), polar(false), ePhEstart(0.), ePhEstop(0.),
+tTransformByCompute(1), tTransformByComputeD(1), inEphLoop(false)
+{
 	//Create inter-group communicator if requested:
 	const char* envFwSharedRead = getenv("FW_SHARED_READ");
 	if(envFwSharedRead and string(envFwSharedRead)=="yes")
@@ -276,6 +278,27 @@ FeynWann::FeynWann(FeynWannParams& fwp)
 	logPrintf("nBands = %d\n", nBands);
 	logPrintf("\n");
 	
+	//Check for Wannier inner window:
+	fname = fwp.wannierPrefix + ".out";
+	logPrintf("\nReading '%s' ... ", fname.c_str()); logFlush();
+	ifs.open(fname); if (!ifs.is_open()) die("could not open file.\n");
+	while (!ifs.eof())
+	{	string line; getline(ifs, line);
+		if (line.find("wannier  \\") != string::npos)
+		{	//at start of wannier command print
+			string key, val;
+			while (key != "innerWindow" and(!ifs.eof()))
+				ifs >> key; //search for innerWindow keyword
+			ifs >> EminInner >> EmaxInner;
+			if (!ifs.good()) die("Failed to read innerWindow.\n");
+		}
+	}
+	ifs.close();
+	logPrintf("done.\n");
+	logPrintf("EminInner = %lg\nEmaxInner = %lg\n", EminInner, EmaxInner);
+	EminInner -= mu; //since energies will always be referenced against mu
+	EmaxInner -= mu; 
+
 	//Read cell weights:
 	cellWeights = readCellWeights(fwp.wannierPrefix + ".mlwfCellWeights" + spinSuffix, cellMap.size(), nBands, nBands);
 	
