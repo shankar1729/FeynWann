@@ -148,7 +148,7 @@ void FeynWann::setState(FeynWann::StateE& state)
 	
 	//Perturbations:
 	bool stark = fwp.EzExt;
-	bool zeeman = fwp.Bext.length_squared() and (fwp.needSpin or fwp.needL);
+	bool zeeman = fwp.Bext.length_squared() and (fwp.needSpin or fwp.orbitalZeeman);
 	if(stark or zeeman)
 	{	//Construct perturbed Hamiltonian in unpeturbed eigenbasis:
 		watchPert.start();
@@ -160,7 +160,7 @@ void FeynWann::setState(FeynWann::StateE& state)
 				if(fwp.Bext[iDir])
 				{	if(fwp.needSpin)
 						Hpert += (fwp.Bext[iDir] * bohrMagneton * gElectron * 0.5) * state.S[iDir];  //0.5 because |S| in [0, 1]
-					if(fwp.needL)
+					if(fwp.orbitalZeeman)
 						Hpert += (fwp.Bext[iDir] * bohrMagneton) * restrictInnerWindow(state.L[iDir], state.E);
 				}
 		

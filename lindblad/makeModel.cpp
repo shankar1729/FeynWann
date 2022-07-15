@@ -12,7 +12,6 @@ int main(int argc, char** argv)
 	//Get input parameters:
 	InputMap inputMap(ip.inputFilename);
 	const int nK = int(inputMap.get("nK")); //number of k-points
-	const double Tesla = Joule/(Ampere*meter*meter);
 	const vector3<> sigmaB = inputMap.getVector("sigmaB") * Tesla; //magnitude of internal magnetic field fluctuations per direction
 	const double scatterB = inputMap.get("scatterB") * Tesla; //magnitude of scattering terms written as a magnetic field
 	const int nBands = 2;

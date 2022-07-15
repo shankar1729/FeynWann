@@ -64,7 +64,6 @@ int main(int argc, char** argv)
 		die("\npumpMode must be 'Evolve' or 'Perturb' pr 'Bfield'\n");
 	lp.pumpEvolve = (pumpMode == "Evolve");
 	lp.pumpBfield = (pumpMode == "Bfield");
-	const double Tesla = Joule/(Ampere*meter*meter);
 	lp.pumpB = inputMap.getVector("pumpB", vector3<>()) * Tesla; //perturbing initial magnetic field in Tesla (used only in Bfield mode)
 	lp.pumpOmega = inputMap.get("pumpOmega", pumpMode=="Bfield" ? 0. : NAN) * eV; //pump frequency in eV (used only in Evolve/Perturb modes)
 	lp.pumpA0 = inputMap.get("pumpA0", pumpMode=="Bfield" ? 0. : NAN); //pump pulse amplitude / intensity (Units TBD)

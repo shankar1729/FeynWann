@@ -48,6 +48,7 @@ struct FeynWannParams
 	string needLinewidthP_D; //!< if non-null, provide e-defect momentum-relaxation line-width for defect with name specified by this string
 	
 	vector3<> Bext; //!< external magentic field (added as a Zeeman perturbation to hamiltonian in FeynWann:setState)
+	bool orbitalZeeman; //!< whether to include orbital magnetic moment from L in Zeeman perturbation
 	double EzExt; //!< external electric field (added as a Stark perturbation to hamiltonian in FeynWann:setState)
 	double scissor; //!< scissor operator to move conduction band states up in energy to fix band gap in post-processing
 	double EshiftWeight; //!< if non-zero, apply this energy shift to the region of space selected by wannier slab weight (in mlwfW)

@@ -61,8 +61,7 @@ LindbladSpectrum::LindbladSpectrum(const LindbladParams& lp)
 	//Compute spin and magnetic field vectors:
 	double Bmag = lp.pumpB.length(); //perturbation strength set by input, but all components calculated
 	if(not Bmag)
-	{	const double Tesla = Joule/(Ampere*meter*meter);
-		Bmag = 1.*Tesla;
+	{	Bmag = 1.*Tesla;
 		logPrintf("Setting test |B| = 1 Tesla for B-field perturbation matrix. (Use pumpB to override if needed.)\n");
 	}
 	logPrintf("Initializing spin matrix elements ... "); logFlush();

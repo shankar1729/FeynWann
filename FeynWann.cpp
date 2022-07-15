@@ -32,12 +32,17 @@ FeynWannParams::FeynWannParams(InputMap* inputMap)
 needSymmetries(false), needPhonons(false), needVelocity(false), needSpin(false), needL(false), needQ(false),
 needLinewidth_ee(false), needLinewidth_ePh(false), needLinewidthP_ePh(false),
 ePhHeadOnly(false), maskOptimize(false), bandSumLQ(false),
-EzExt(0.), scissor(0.), EshiftWeight(0.), enforceKramerDeg(0.), degeneracyThreshold(1E-4*eV)
+orbitalZeeman(false), EzExt(0.), scissor(0.), EshiftWeight(0.), enforceKramerDeg(0.), degeneracyThreshold(1E-4*eV)
 {
 	if(inputMap)
 	{	const double nm = 10*Angstrom;
-		const double Tesla = eV*sec/(meter*meter);
 		Bext = inputMap->getVector("Bext", vector3<>(0.,0.,0.)) * Tesla;
+		orbitalZeeman = inputMap->getBool("orbitalZeeman", false);
+		if(Bext.length_squared())
+		{	needSpin = true; //will be disabled by FeynWann for non-SOC mode
+			needL = orbitalZeeman;
+			logPrintf("Adding spin%s to requirements for non-zero Bext.\n", needL ? " and L" : "");
+		}
 		EzExt = inputMap->get("EzExt", 0.) * eV/nm;
 		scissor = inputMap->get("scissor", 0.) * eV;
 		EshiftWeight = inputMap->get("EshiftWeight", 0.) * eV;
@@ -50,6 +55,7 @@ EzExt(0.), scissor(0.), EshiftWeight(0.), enforceKramerDeg(0.), degeneracyThresh
 
 void FeynWannParams::printParams() const
 {	logPrintf("Bext = "); Bext.print(globalLog, " %lg ");
+	logPrintf("orbitalZeeman = %s\n", orbitalZeeman ? "yes" : "no");
 	logPrintf("EzExt = %lg\n", EzExt);
 	logPrintf("scissor = %lg\n", scissor);
 	logPrintf("EshiftWeight = %lg\n", EshiftWeight);
