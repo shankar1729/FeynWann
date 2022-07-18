@@ -288,15 +288,22 @@ tTransformByCompute(1), tTransformByComputeD(1), inEphLoop(false)
 	fname = fwp.wannierPrefix + ".out";
 	logPrintf("\nReading '%s' ... ", fname.c_str()); logFlush();
 	ifs.open(fname); if (!ifs.is_open()) die("could not open file.\n");
-	while (!ifs.eof())
+	while(!ifs.eof())
 	{	string line; getline(ifs, line);
-		if (line.find("wannier  \\") != string::npos)
-		{	//at start of wannier command print
-			string key, val;
-			while (key != "innerWindow" and(!ifs.eof()))
-				ifs >> key; //search for innerWindow keyword
-			ifs >> EminInner >> EmaxInner;
-			if (!ifs.good()) die("Failed to read innerWindow.\n");
+		if(line.find("wannier  \\") != string::npos)
+		{	//At start of wannier command print
+			while(!ifs.eof())
+			{	getline(ifs, line);
+				if(line[0] != '\t') break; //no longer within wannier command
+				//Parse key and values within:
+				istringstream iss(line);
+				string key;
+				iss >> key;
+				if(key == "innerWindow")
+				{	iss >> EminInner >> EmaxInner;
+					if(!iss.good()) die("Failed to parse innerWindow.\n");
+				}
+			}
 		}
 	}
 	ifs.close();
