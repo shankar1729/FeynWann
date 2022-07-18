@@ -594,10 +594,14 @@ void FeynWann::free()
 {	Hw = 0;
 	Pw = 0;
 	Sw = 0;
+	RPw = 0;
 	Zw = 0;
+	for(int iDir=0; iDir<3; iDir++) HprimeW[iDir] = 0;
 	ImSigma_eeW = 0;
 	ImSigma_ePhW = 0;
 	ImSigmaP_ePhW = 0;
+	ImSigma_DW = 0;
+	ImSigmaP_DW = 0;
 	OsqW = 0;
 	HePhW = 0;
 	HePhSumW = 0;
