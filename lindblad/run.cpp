@@ -87,6 +87,7 @@ int main(int argc, char** argv)
 	lp.tau = inputMap.get("tau", lp.pol.size() ? NAN : 0.) * fs; //Gaussian probe pulse width (sigma of amplitude) in fs
 	//--- general options
 	lp.Bext = inputMap.getVector("Bext", vector3<>()) * Tesla; //constant external magnetic field post-initialization in Tesla
+	lp.orbitalZeeman = inputMap.getBool("orbitalZeeman", false); //whether to include L.B coupling with orbital angular momentum
 	lp.spinEchoB = inputMap.getVector("spinEchoB", vector3<>()) * Tesla; //spin-echo perturbing field in Tesla
 	lp.spinEchoDelay = inputMap.get("spinEchoDelay", 0.) * fs; //spin-echo delay time in fs
 	lp.spinEchoOmega = inputMap.get("spinEchoOmega", 0.) * eV; //spin-echo Larmor frequency (x hbar) in eV (if zero, set based on Bext)
@@ -148,6 +149,7 @@ int main(int argc, char** argv)
 		logPrintf("tau = %lg\n", lp.tau);
 	}
 	logPrintf("Bext = "); lp.Bext.print(globalLog, " %lg ");
+	logPrintf("orbitalZeeman = %s\n", lp.orbitalZeeman ? "yes" : "no");
 	if(lp.spinEchoFlipTime)
 	{	logPrintf("spinEchoB = \n"); lp.spinEchoB.print(globalLog, " %lg ");
 		logPrintf("spinEchoDelay = %lg\n", lp.spinEchoDelay);

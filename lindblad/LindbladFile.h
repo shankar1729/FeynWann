@@ -57,6 +57,7 @@ namespace LindbladFile
 		bool ePhEnabled, spinorial; //whether e-ph and spinorial info are available
 		int spinWeight; //spin factor in BZ integration
 		matrix3<> R; //unit cell lattice vectors
+		bool haveL; //whether angular momentum is included in data
 		
 		size_t nBytes() const
 		{	return sizeof(char)*markerLen + sizeof(double)*5 + sizeof(size_t)*2 + sizeof(bool)*2 + sizeof(int) + sizeof(matrix3<>);
@@ -66,7 +67,8 @@ namespace LindbladFile
 			out.write((const char*)&dmuMin, sizeof(double)*5);
 			out.write((const char*)&nk, sizeof(size_t)*2);
 			out.write((const char*)&ePhEnabled, sizeof(bool)*2);
-			out.write((const char*)&spinWeight, sizeof(int));
+			int spinWeightFlags = encodeFlags();
+			out.write((const char*)&spinWeightFlags, sizeof(int));
 			out.write((const char*)&R, sizeof(matrix3<>));
 		}
 		void read(MPIUtil::File fp, const MPIUtil* mpiUtil)
@@ -81,8 +83,20 @@ namespace LindbladFile
 			mpiUtil->fread(&dmuMin, sizeof(double), 5, fp);
 			mpiUtil->fread(&nk, sizeof(size_t), 2, fp);
 			mpiUtil->fread(&ePhEnabled, sizeof(bool), 2, fp);
-			mpiUtil->fread(&spinWeight, sizeof(int), 1, fp);
+			int spinWeightFlags; mpiUtil->fread(&spinWeightFlags, sizeof(int), 1, fp);
+			decodeFlags(spinWeightFlags);
 			mpiUtil->fread(&R, sizeof(matrix3<>), 1, fp);
+		}
+		
+		//Encode flags with spinWeight for backward compatibility with old data files:
+		int encodeFlags() const
+		{	int result = spinWeight; //always 1 or 2
+			if(haveL) result |= 4;
+			return result;
+		}
+		void decodeFlags(int spinWeightFlags)
+		{	spinWeight = spinWeightFlags & 3; //lowest 2 bits contain spinWeight (1 or 2)
+			haveL = (spinWeightFlags & 4); //third bit encodes L flag
 		}
 	};
 	
@@ -183,6 +197,7 @@ namespace LindbladFile
 		diagMatrix E; //energies (dim: nOuter)
 		matrix P[3]; //momentum matrix elements (dim: nInner x nOuter each)
 		matrix S[3]; //spin matrix elements (dim: nInner x nInner each, only if spinorial)
+		matrix L[3]; //orbital anguler momentum matrix elements (dim: nInner x nInner each, only if haveL)
 		std::vector<GePhEntry> GePh; //e-ph matrix elements (only if ePhEnabled)
 		
 		size_t nBytes(const Header& h) const
@@ -191,6 +206,8 @@ namespace LindbladFile
 				+ 3*nInner*nOuter*sizeof(complex); //P
 			if(h.spinorial)
 				dataSize += 3*nInner*nInner*sizeof(complex); //S
+			if(h.haveL)
+				dataSize += 3*nInner*nInner*sizeof(complex); //L
 			if(h.ePhEnabled)
 			{	dataSize += sizeof(size_t); //to store number of g
 				for(const GePhEntry& g: GePh)
@@ -208,6 +225,10 @@ namespace LindbladFile
 			if(h.spinorial)
 			{	for(int iDir=0; iDir<3; iDir++)
 					out.write((const char*)S[iDir].data(), sizeof(complex)*S[iDir].nData());
+			}
+			if(h.haveL)
+			{	for(int iDir=0; iDir<3; iDir++)
+					out.write((const char*)L[iDir].data(), sizeof(complex)*L[iDir].nData());
 			}
 			if(h.ePhEnabled)
 			{	size_t Gsize = GePh.size();
@@ -237,6 +258,12 @@ namespace LindbladFile
 			{	for(int iDir=0; iDir<3; iDir++)
 				{	S[iDir] = zeroes(nInner, nInner);
 					mpiUtil->freadData(S[iDir], fp);
+				}
+			}
+			if(h.haveL)
+			{	for(int iDir=0; iDir<3; iDir++)
+				{	L[iDir] = zeroes(nInner, nInner);
+					mpiUtil->freadData(L[iDir], fp);
 				}
 			}
 			if(h.ePhEnabled)

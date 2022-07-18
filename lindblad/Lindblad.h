@@ -68,6 +68,7 @@ struct LindbladParams
 	bool pumpBfield; //!< whether the "pump" is a magnetic field initialization
 	vector3<> pumpB; //!< initialization magnetic field
 	vector3<> Bext; //!< constant external magnetic field applied post-initialization
+	bool orbitalZeeman; //!< whether to include orbital zeeman coupling with magnetic fields
 
 	vector3<> spinEchoB; //!< rotating magnetic field at t=0 in spin echo measurement (rotates about Bext)
 	double spinEchoDelay; //!< time delay between pi/2 and pi pulses in spin echo setup

@@ -453,6 +453,9 @@ struct LindbladInit
 		if(fw.nSpinor == 2)
 			for(int iDir=0; iDir<3; iDir++)
 				kp.S[iDir] = state.S[iDir](innerOffset,innerOffset+kp.nInner, innerOffset,innerOffset+kp.nInner);
+		if(fw.fwp.needL)
+			for(int iDir=0; iDir<3; iDir++)
+				kp.L[iDir] = state.L[iDir](innerOffset,innerOffset+kp.nInner, innerOffset,innerOffset+kp.nInner);
 	}
 	static void initKpoint(const FeynWann::StateE& state, void* params)
 	{	((LindbladInit*)params)->initKpoint(state);
@@ -559,6 +562,7 @@ struct LindbladInit
 		h.spinorial = (fw.nSpinor==2);
 		h.spinWeight = fw.spinWeight;
 		h.R = fw.R;
+		h.haveL = fw.fwp.orbitalZeeman;
 		
 		//Loop over offsets in current group:
 		logPrintf("\nGenerating matrix elements: "); logFlush();
@@ -795,6 +799,7 @@ int main(int argc, char** argv)
 	//Initialize FeynWann:
 	fwp.needVelocity = true;
 	fwp.needSpin = true;
+	fwp.needL = fwp.orbitalZeeman;
 	fwp.needPhonons = ePhEnabled;
     if(defectEnabled)
 		fwp.needDefect = defectName;

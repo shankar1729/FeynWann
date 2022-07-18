@@ -103,7 +103,9 @@ Lindblad::Lindblad(const LindbladParams& lp)
 	spinWeight = h.spinWeight;
 	R = h.R; Omega = fabs(det(R));
 	if(lp.ePhEnabled and not h.ePhEnabled)
-		die("ePhEnabled = yes requires e-ph included in lindbladInit.\n");
+		die("ePhEnabled = yes requires e-ph included in lindblad/init.\n");
+	if(lp.orbitalZeeman and not h.haveL)
+		die("orbitalZeeman = yes requires L included in lindblad/init (set orbitalZeeman in init input).\n");
 	if(lp.pumpBfield and (not spinorial))
 		die("Bfield pump mode requires spin matrix elements from a spinorial calculation.\n");
 	if(lp.Bext.isNonzero() and (not spinorial))
