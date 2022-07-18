@@ -106,10 +106,10 @@ Lindblad::Lindblad(const LindbladParams& lp)
 		die("ePhEnabled = yes requires e-ph included in lindblad/init.\n");
 	if(lp.orbitalZeeman and not h.haveL)
 		die("orbitalZeeman = yes requires L included in lindblad/init (set orbitalZeeman in init input).\n");
-	if(lp.pumpBfield and (not spinorial))
-		die("Bfield pump mode requires spin matrix elements from a spinorial calculation.\n");
-	if(lp.Bext.isNonzero() and (not spinorial))
-		die("Bext requires spin matrix elements from a spinorial calculation.\n");
+	if(lp.pumpBfield and (not (spinorial or lp.orbitalZeeman)))
+		die("Bfield pump mode requires spin matrix elements from a spinorial calculation, or orbital Zeeman coupling.\n");
+	if(lp.Bext.isNonzero() and (not (spinorial or lp.orbitalZeeman)))
+		die("Bext requires spin matrix elements from a spinorial calculation, or orbital Zeeman coupling.\n");
 	if(lp.spinEchoFlipTime and (not spinorial))
 		die("Spin echo measurement requires spin matrix elements from a spinorial calculation.\n");
 	
@@ -161,10 +161,12 @@ Lindblad::Lindblad(const LindbladParams& lp)
 		
 		//Initialize H0 used for interaction picture:
 		s.E0 = s.E(s.innerStart, s.innerStop); //default: diagonal using energies from data file
-		if(lp.Bext.length_squared() and spinorial)
+		if(lp.Bext.isNonzero())
 		{	matrix H0(s.E0);
 			for(int iDir=0; iDir<3; iDir++) //Add Zeeman Hamiltonian
-				H0 -= lp.Bext[iDir] * s.S[iDir];
+			{	if(spinorial) H0 += (lp.Bext[iDir] * bohrMagneton * gElectron * 0.5) * s.S[iDir];  //0.5 because |S| in [0, 1]
+				if(lp.orbitalZeeman) H0 += (lp.Bext[iDir] * bohrMagneton) * s.L[iDir];
+			}
 			H0.diagonalize(s.V0, s.E0); //now have diagonal basis for off-diagonal H0
 		}
 		
@@ -175,7 +177,6 @@ Lindblad::Lindblad(const LindbladParams& lp)
 	}
 	mpiWorld->fclose(fp);
 	if(lp.valleyMode != ValleyNone) mpiWorld->allReduceData(isKall, MPIUtil::ReduceMax);
-
 	
 	//Synchronize energy range:
 	mpiWorld->allReduce(Emin, MPIUtil::ReduceMin);

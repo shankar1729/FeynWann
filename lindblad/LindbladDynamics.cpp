@@ -54,7 +54,9 @@ void Lindblad::applyPump()
 		{	//Construct Hamiltonian including magnetic field contribution:
 			matrix Htot(s.E(s.innerStart, s.innerStart+s.nInner));
 			for(int iDir=0; iDir<3; iDir++) //Add Zeeman Hamiltonian
-				Htot -= lp.pumpB[iDir] * s.S[iDir];
+			{	if(spinorial) Htot += (lp.pumpB[iDir] * bohrMagneton * gElectron * 0.5) * s.S[iDir];  //0.5 because |S| in [0, 1]
+				if(lp.orbitalZeeman) Htot += (lp.pumpB[iDir] * bohrMagneton) * s.L[iDir];
+			}
 			//Set rho to Fermi function of this perturbed Hamiltonian:
 			diagMatrix Epert; matrix Vpert;
 			Htot.diagonalize(Vpert, Epert);
@@ -157,8 +159,11 @@ DM1 Lindblad::compute(double t, const DM1& drho)
 		
 		//Time-dependent magnetic field contribution:
 		if(Bcur.isNonzero())
-		{	assert(spinorial);
-			matrix deltaH = s.S[0]*Bcur[0] + s.S[1]*Bcur[1] + s.S[2]*Bcur[2];
+		{	matrix deltaH;
+			for(int iDir=0; iDir<3; iDir++) //Add Zeeman Hamiltonian
+			{	if(spinorial) deltaH += (Bcur[iDir] * bohrMagneton * gElectron * 0.5) * s.S[iDir];  //0.5 because |S| in [0, 1]
+				if(lp.orbitalZeeman) deltaH += (Bcur[iDir] * bohrMagneton) * s.L[iDir];
+			}
 			s.rhoDot += complex(0, 1) * s.rho * deltaH; //+HC added by getRhoDot() completes commutator
 		}
 	}
