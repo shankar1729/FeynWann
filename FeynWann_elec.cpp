@@ -237,7 +237,7 @@ void FeynWann::bcastState(FeynWann::StateE& state, MPIUtil* mpiUtil, int root)
 	}
 	//Electric quadrupole r*p matrix, if needed:
 	if(fwp.needQ)
-	{	for(int iComp=0; iComp<3; iComp++)
+	{	for(int iComp=0; iComp<5; iComp++)
 			bcast(state.Q[iComp], nBands, nBands, mpiUtil, root);
 	}
 	//Linewidths, if needed:
