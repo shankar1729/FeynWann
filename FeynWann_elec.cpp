@@ -412,7 +412,7 @@ matrix FeynWann::restrictInnerWindow(const matrix& mat, const diagMatrix& E) con
 {	//Construct mask for whether outside window:
 	std::vector<bool> isOutside;
 	for(double Ei: E)
-		isOutside.push_back((Ei >= EminInner) and (Ei <= EmaxInner));
+		isOutside.push_back((Ei < EminInner) or (Ei > EmaxInner));
 	//Project:
 	matrix M(mat);
 	complex* Mdata = M.data();
