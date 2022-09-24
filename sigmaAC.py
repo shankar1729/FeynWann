@@ -73,17 +73,21 @@ sP, cP = np.sin(polPhi), np.cos(polPhi)
 pol = np.array([sT * cP, sT * sP, cT])
 
 
-# Evaluate scattering rate for various frequencies:
 def b(x):
     beta_x = np.copysign(np.maximum(beta * abs(x), 1E-6), x)
     return -beta_x / np.expm1(-beta_x)
 
 
-bDen = (np.einsum(
-    'q, qa, oqa -> o', wq, Gph, b(omega[:, None, None] + omegaPh[None, ...])
-) / (wq @ Gph.sum(axis=1)))
-tauInv = (2 * np.pi / (gEf * bDen)) * np.einsum(
-    'q, qa, oqa -> o', wq, Gph, b(omega[:, None, None] - omegaPh[None, ...])
+# Evaluate scattering rate for various frequencies:
+pm = np.array([+1, -1])
+nPh = 1.0 / np.expm1(beta * np.maximum(omegaPh, 1E-6))
+nPh_mp = np.array([nPh, nPh + 1.0])
+b_pm = b(
+    omega[:, None, None, None] + pm[None, :, None, None] * omegaPh[None, None]
+)
+tauInv = (
+    np.einsum('q, qa, osqa, sqa -> o', wq, Gph, b_pm, nPh_mp)
+    / (gEf * b(omega))
 )
 # --- save data:
 outDat = np.array([omega/eV, (1./tauInv)/fs]).T
@@ -94,7 +98,6 @@ omegaReg = np.maximum(omega, 1e-6)
 epsDrude = 1. - (4*np.pi) * (pol @ vv @ pol) / (
     Omega * omegaReg * (omegaReg + 1j*tauInv)
 )
-
 # --- save data:
 outDat = np.array([omega/eV, np.real(epsDrude)]).T
 np.savetxt('ReEpsDrude.dat', outDat, header='omega[eV] ReEpsDrude')
