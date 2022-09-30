@@ -49,6 +49,10 @@ orbitalZeeman(false), EzExt(0.), scissor(0.), EshiftWeight(0.), enforceKramerDeg
 		bandSumLQ = inputMap->getBool("bandSumLQ", false);
 		enforceKramerDeg = inputMap->getBool("enforceKramerDeg", false);
 		degeneracyThreshold = inputMap->get("degeneracyThreshold", 1E-4) * eV;
+		if(inputMap->has("tdepInput")) tdepInput = inputMap->getString("tdepInput");
+		#ifndef TDEP_ENABLED
+		if(tdep()) die("Must link with TDEP code to use tdepInput.\n");
+		#endif
 	}
 }
 
@@ -358,18 +362,26 @@ tTransformByCompute(1), tTransformByComputeD(1), inEphLoop(false)
 		//Read phonon basis:
 		invsqrtM = readPhononBasis(fwp.totalEprefix + ".phononBasis");
 		
-		//Read phonon cell map:
-		fname = fwp.totalEprefix + ".phononCellMap";
-		if(fileSize((fname + "Corr").c_str()) > 0) //corrected force matrix cell map exists
-			fname += "Corr";
-		phononCellMap = readCellMap(fname);
-		
-		//Read phonon force matrix
-		fname = fwp.totalEprefix + ".phononOmegaSq";
-		if(fileSize((fname + "Corr").c_str()) > 0) //corrected force matrix exists
-			fname += "Corr";
-		OsqW = std::make_shared<DistributedMatrix>(fname, true, //phonon omegaSq is always real
-			mpiGroup, nModes*nModes, phononCellMap, offsetDim, false, mpiInterGroup);
+		if(fwp.tdep())
+		{
+			#ifdef TDEP_ENABLED
+			//TODO: Initialize TDEP using input file
+			#endif
+		}
+		else
+		{	//Read phonon cell map:
+			fname = fwp.totalEprefix + ".phononCellMap";
+			if(fileSize((fname + "Corr").c_str()) > 0) //corrected force matrix cell map exists
+				fname += "Corr";
+			phononCellMap = readCellMap(fname);
+			
+			//Read phonon force matrix
+			fname = fwp.totalEprefix + ".phononOmegaSq";
+			if(fileSize((fname + "Corr").c_str()) > 0) //corrected force matrix exists
+				fname += "Corr";
+			OsqW = std::make_shared<DistributedMatrix>(fname, true, //phonon omegaSq is always real
+				mpiGroup, nModes*nModes, phononCellMap, offsetDim, false, mpiInterGroup);
+		}
 		
 		//Read cell maps for electron-phonon matrix elements and sum rule:
 		ePhCellMap = readCellMap(fwp.wannierPrefix + ".mlwfCellMapPh" + spinSuffix);

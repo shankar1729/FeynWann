@@ -1,0 +1,18 @@
+find_library(TDEP_LIBRARY NAMES tdep PATHS ${TDEP_PATH} ${TDEP_PATH}/lib ${TDEP_PATH}/lib64 NO_DEFAULT_PATH)
+find_library(TDEP_LIBRARY NAMES tdep)
+
+if(TDEP_LIBRARY)
+	set(TDEP_FOUND TRUE)
+endif()
+
+if(TDEP_FOUND)
+	if(NOT TDEP_FIND_QUIETLY)
+		message(STATUS "Found TDEP: ${TDEP_LIBRARY}")
+	endif()
+else()
+	if(TDEP_FIND_REQUIRED)
+		if(NOT TDEP_LIBRARY)
+			message(FATAL_ERROR "Could not find TDEP shared libraries (Add -D TDEP_PATH=<path> to the cmake commandline for a non-standard installation)")
+		endif()
+	endif()
+endif()

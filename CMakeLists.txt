@@ -81,6 +81,12 @@ if(EnableLibXC)
 	add_definitions("-DLIBXC_ENABLED")
 endif()
 
+option(EnableTDEP "Use TDEP to replace phonon dispersion relations with finite T versions.")
+if(EnableTDEP)
+	find_package(TDEP REQUIRED)
+	add_definitions("-DTDEP_ENABLED")
+endif()
+
 configure_file(${CMAKE_SOURCE_DIR}/config.in.h ${CMAKE_BINARY_DIR}/config.h)
 include_directories("${JDFTX_SRC}")
 include_directories(${CMAKE_SOURCE_DIR})
@@ -110,7 +116,7 @@ endif()
 file(GLOB FEYNWANN_SOURCES FeynWann*.cpp)
 add_library(FeynWann ${LINK_TYPE} ${FEYNWANN_SOURCES} DistributedMatrix.cpp InputMap.cpp Histogram.cpp Interp1.cpp BlockCyclicMatrix.cpp ${F_FILES})
 find_library(JDFTX_LIBRARY jdftx PATHS ${JDFTX_BUILD} NO_DEFAULT_PATH)
-target_link_libraries(FeynWann ${JDFTX_LIBRARY} ${FFTW3_MPI_LIBRARY} ${FFTW3_THREADS_LIBRARY} ${FFTW3_LIBRARY} ${MPI_CXX_LIBRARIES} ${EXTRA_LIBRARIES})
+target_link_libraries(FeynWann ${JDFTX_LIBRARY} ${FFTW3_MPI_LIBRARY} ${FFTW3_THREADS_LIBRARY} ${FFTW3_LIBRARY} ${MPI_CXX_LIBRARIES} ${EXTRA_LIBRARIES} ${TDEP_LIBRARIES})
 
 #Executables linked to above library
 macro(add_FeynWann_executable targetName)
