@@ -32,7 +32,7 @@ FeynWannParams::FeynWannParams(InputMap* inputMap)
 needSymmetries(false), needPhonons(false), needVelocity(false), needSpin(false), needL(false), needQ(false),
 needLinewidth_ee(false), needLinewidth_ePh(false), needLinewidthP_ePh(false),
 ePhHeadOnly(false), maskOptimize(false), bandSumLQ(false),
-orbitalZeeman(false), EzExt(0.), scissor(0.), EshiftWeight(0.), enforceKramerDeg(0.), degeneracyThreshold(1E-4*eV)
+orbitalZeeman(false), EzExt(0.), scissor(0.), EshiftWeight(0.), enforceKramerDeg(0.), degeneracyThreshold(1E-4*eV), tdep(false)
 {
 	if(inputMap)
 	{	const double nm = 10*Angstrom;
@@ -49,9 +49,9 @@ orbitalZeeman(false), EzExt(0.), scissor(0.), EshiftWeight(0.), enforceKramerDeg
 		bandSumLQ = inputMap->getBool("bandSumLQ", false);
 		enforceKramerDeg = inputMap->getBool("enforceKramerDeg", false);
 		degeneracyThreshold = inputMap->get("degeneracyThreshold", 1E-4) * eV;
-		if(inputMap->has("tdepInput")) tdepInput = inputMap->getString("tdepInput");
+		tdep = inputMap->getBool("tdep", false);
 		#ifndef TDEP_ENABLED
-		if(tdep()) die("Must link with TDEP code to use tdepInput.\n");
+		if(tdep) die("Must link with TDEP code to use tdep.\n");
 		#endif
 	}
 }
@@ -362,10 +362,10 @@ tTransformByCompute(1), tTransformByComputeD(1), inEphLoop(false)
 		//Read phonon basis:
 		invsqrtM = readPhononBasis(fwp.totalEprefix + ".phononBasis");
 		
-		if(fwp.tdep())
+		if(fwp.tdep)
 		{
 			#ifdef TDEP_ENABLED
-			//TODO: Initialize TDEP using input file
+			//TODO: Initialize TDEP
 			#endif
 		}
 		else

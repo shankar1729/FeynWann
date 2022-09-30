@@ -26,7 +26,7 @@ void FeynWann::phLoop(const vector3<>& q0, FeynWann::phProcessFunc phProcess, vo
 {	static StopWatch watchCallback("FeynWann::phLoop:callback");
 	assert(fwp.needPhonons);
 	//Run Fourier transforms with this offset:
-	if(not fwp.tdep()) OsqW->transform(q0);
+	if(not fwp.tdep) OsqW->transform(q0);
 	//Call phProcess for q-points on present process:
 	int iq = OsqW->ikStart;
 	int iqStop = iq + OsqW->nk;
@@ -44,7 +44,7 @@ void FeynWann::phLoop(const vector3<>& q0, FeynWann::phProcessFunc phProcess, vo
 void FeynWann::phCalc(const vector3<>& q, FeynWann::StatePh& ph)
 {	assert(fwp.needPhonons);
 	//Compute Fourier versions for this q:
-	if(not fwp.tdep()) OsqW->compute(q);
+	if(not fwp.tdep) OsqW->compute(q);
 	//Prepare state on group head:
 	ph.iq = 0;
 	ph.q = q;
@@ -101,7 +101,7 @@ void FeynWann::ePhLoop(const vector3<>& k01, const vector3<>& k02, FeynWann::ePh
 	
 	//Prepare phonon states:
 	vector3<> q0 = k01 - k02;
-	if(not fwp.tdep()) OsqW->transform(q0);
+	if(not fwp.tdep) OsqW->transform(q0);
 	std::vector<StatePh> ph(prodOffsetDim);
 	{	int iq = OsqW->ikStart;
 		int iqStop = iq + OsqW->nk;
@@ -192,7 +192,7 @@ void FeynWann::ePhCalc(const FeynWann::StateE& e1, const FeynWann::StateE& e2, c
 void FeynWann::setState(FeynWann::StatePh& state)
 {	assert(fwp.needPhonons);
 	
-	if(fwp.tdep())
+	if(fwp.tdep)
 	{
 		#ifdef TDEP_ENABLED
 		//TODO: Bypass below code and set state.omega and state.U from TDEP

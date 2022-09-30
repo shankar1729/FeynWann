@@ -54,8 +54,7 @@ struct FeynWannParams
 	double EshiftWeight; //!< if non-zero, apply this energy shift to the region of space selected by wannier slab weight (in mlwfW)
 	bool enforceKramerDeg; //!< whether to enforce Kramer degeneracy in eigenvalues	
 	double degeneracyThreshold; //!< threshold within which to treat Wannier bands as degenerate
-	string tdepInput; //!< filename for initializing TDEP bypass of phonons
-	inline bool tdep() const { return tdepInput.length(); } //!< check if TDEP is available
+	bool tdep; //!< use TDEP interface to compute phonon frequencies and eigenvectors
 	
 	FeynWannParams(class InputMap* inputMap=0); //!< If specified, look for optional parameters Bext (in Tesla), EzExt (in eV/nm), scissor (in eV) and EshiftWeight (in eV) from in inputMap
 	void printParams() const; //!< Print the parameters read from inputMap (in atomic units)
