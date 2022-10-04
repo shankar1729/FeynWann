@@ -180,7 +180,7 @@ public:
 	void symmetrize(matrix3<>& m) const; //!< symmetrize a tensor in Cartesian coordinates (available if needSymmetries = true)
 	
 	//DFT / Wannier / Phonon parameters:
-	matrix3<> R; //!< lattice vectors
+	matrix3<> R, GT; //!< lattice vectors and reciprocal lattice vectors (in columns)
 	std::vector<vector3<>> atpos; //!< atomic positions
 	std::vector<string> atNames; //!< atom species names
 	int nAtoms; //number of atoms

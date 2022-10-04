@@ -25,7 +25,10 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 #include <wannier/WannierMinimizer.h>
 #include <fftw3-mpi.h>
 #include "config.h"
+
+#ifdef TDEP_ENABLED
 #include "tdep_wrapper.h"
+#endif
 
 
 FeynWannParams::FeynWannParams(InputMap* inputMap)
@@ -138,6 +141,7 @@ tTransformByCompute(1), tTransformByComputeD(1), inEphLoop(false)
 			{	getline(ifs, line);
 				sscanf(line.c_str(), "[ %lf %lf %lf ]", &R(j,0), &R(j,1), &R(j,2));
 			}
+			GT = (2.*M_PI) * inv(~R); //reciprocal lattice vectors in columns
 			Omega = fabs(det(R));
 		}
 		else if(line.find("kpoint-folding") != string::npos)
