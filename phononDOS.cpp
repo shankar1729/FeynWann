@@ -51,6 +51,7 @@ int main(int argc, char** argv)
 	const double Tstep = inputMap.get("Tstep") * Kelvin; //lattice temperature grid spacing
 	const double vL = inputMap.get("vL", 0.) * meter/sec; //longitudinal speed of sound (optional for Debye model)
 	const double vT = inputMap.get("vT", vL) * meter/sec; //transverse speed of sound (assumed x2, optional for Debye model)
+	FeynWannParams fwp(&inputMap);
 	
 	logPrintf("\nInputs after conversion to atomic units:\n");
 	logPrintf("nOffsets = %lu\n", nOffsets);
@@ -60,9 +61,9 @@ int main(int argc, char** argv)
 	logPrintf("Tstep = %lg\n", Tstep);
 	if(vL) logPrintf("vL = %lg\n", vL);
 	if(vT) logPrintf("vT = %lg\n", vT);
+	fwp.printParams();
 	
 	//Initialize FeynWann:
-	FeynWannParams fwp;
 	fwp.needPhonons = true;
 	FeynWann fw(fwp);
 	size_t nKpts = nOffsets * fw.phCountPerOffset();

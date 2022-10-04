@@ -20,6 +20,7 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 #include "FeynWann.h"
 #include "FeynWann_internal.h"
 #include <wannier/WannierMinimizer.h>
+#include "tdep_wrapper.h"
 
 
 void FeynWann::phLoop(const vector3<>& q0, FeynWann::phProcessFunc phProcess, void* params)
@@ -195,7 +196,12 @@ void FeynWann::setState(FeynWann::StatePh& state)
 	if(fwp.tdep)
 	{
 		#ifdef TDEP_ENABLED
-		//TODO: Bypass below code and set state.omega and state.U from TDEP
+		state.omega.resize(nModes);
+		state.U = zeroes(nModes, nModes);
+		matrix3<> G = (2.*M_PI)*inv(R);
+		matrix3<> GT = ~G;
+		vector3<> qCart = GT * state.q;
+		tdep_compute_(&qCart[0], state.omega.data(), state.U.data());
 		return;
 		#endif
 	}

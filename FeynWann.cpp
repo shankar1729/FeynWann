@@ -25,6 +25,7 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 #include <wannier/WannierMinimizer.h>
 #include <fftw3-mpi.h>
 #include "config.h"
+#include "tdep_wrapper.h"
 
 
 FeynWannParams::FeynWannParams(InputMap* inputMap)
@@ -66,6 +67,7 @@ void FeynWannParams::printParams() const
 	logPrintf("bandSumLQ = %s\n", bandSumLQ ? "yes" : "no");
 	logPrintf("enforceKramerDeg = %s\n", enforceKramerDeg ? "yes" : "no");
 	logPrintf("degeneracyThreshold = %lg\n", degeneracyThreshold);
+	logPrintf("tdep = %s\n", tdep ? "yes" : "no");
 }
 
 
@@ -365,10 +367,11 @@ tTransformByCompute(1), tTransformByComputeD(1), inEphLoop(false)
 		if(fwp.tdep)
 		{
 			#ifdef TDEP_ENABLED
-			//TODO: Initialize TDEP
+			logPrintf("\n---------- TDEP Initialization ----------\n");
+			tdep_initialize_();
+			logPrintf("\n");
 			#endif
 		}
-		else
 		{	//Read phonon cell map:
 			fname = fwp.totalEprefix + ".phononCellMap";
 			if(fileSize((fname + "Corr").c_str()) > 0) //corrected force matrix cell map exists
