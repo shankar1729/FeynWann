@@ -85,6 +85,12 @@ option(EnableTDEP "Use TDEP to replace phonon dispersion relations with finite T
 if(EnableTDEP)
 	find_package(TDEP REQUIRED)
 	add_definitions("-DTDEP_ENABLED")
+	enable_language(Fortran)
+	set(TDEP_F90_FILES tdep_wrapper.f90)
+	include_directories(${TDEP_INCLUDE_DIR})
+
+	find_package(HDF5 COMPONENTS C Fortran REQUIRED)
+	set(TDEP_LIBRARIES ${TDEP_LIBRARIES} ${HDF5_LIBRARIES})
 endif()
 
 configure_file(${CMAKE_SOURCE_DIR}/config.in.h ${CMAKE_BINARY_DIR}/config.h)
@@ -108,13 +114,13 @@ if(EnableScaLAPACK)
 	add_definitions("-DSCALAPACK_ENABLED")
 	include_directories(/opt/intel/mkl/include ${MKL_PATH}/include) #needed for c function definitions
 	enable_language(Fortran)
-	file(GLOB F_FILES scalapack/*.f)
+	file(GLOB SCALAPACK_F_FILES scalapack/*.f)
 	#JDFTx must be built with scalapack support for this to work (not tested in this cmake script)
 endif()
 
 #Main library for FeynWann containing all the auxiliary functionality
 file(GLOB FEYNWANN_SOURCES FeynWann*.cpp)
-add_library(FeynWann ${LINK_TYPE} ${FEYNWANN_SOURCES} DistributedMatrix.cpp InputMap.cpp Histogram.cpp Interp1.cpp BlockCyclicMatrix.cpp ${F_FILES})
+add_library(FeynWann ${LINK_TYPE} ${FEYNWANN_SOURCES} DistributedMatrix.cpp InputMap.cpp Histogram.cpp Interp1.cpp BlockCyclicMatrix.cpp ${SCALAPACK_F_FILES} ${TDEP_F90_FILES})
 find_library(JDFTX_LIBRARY jdftx PATHS ${JDFTX_BUILD} NO_DEFAULT_PATH)
 target_link_libraries(FeynWann ${JDFTX_LIBRARY} ${FFTW3_MPI_LIBRARY} ${FFTW3_THREADS_LIBRARY} ${FFTW3_LIBRARY} ${MPI_CXX_LIBRARIES} ${EXTRA_LIBRARIES} ${TDEP_LIBRARIES})
 
