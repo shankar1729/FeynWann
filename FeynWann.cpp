@@ -368,7 +368,8 @@ tTransformByCompute(1), tTransformByComputeD(1), inEphLoop(false)
 		{
 			#ifdef TDEP_ENABLED
 			logPrintf("\n---------- TDEP Initialization ----------\n");
-			tdep_initialize_();
+			int verbosity = mpiWorld->isHead() ? 2 : -10;
+			tdep_initialize_(&verbosity);
 			logPrintf("\n");
 			#endif
 		}

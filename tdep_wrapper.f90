@@ -17,12 +17,13 @@ module globals
         type(lo_phonon_dispersions_qpoint) :: p
 end module
 
-subroutine tdep_initialize()
+subroutine tdep_initialize(verbosity)
         use globals
         implicit none
+        integer verbosity
         call mem%init()
-        call uc%readfromfile('infile.ucposcar', verbosity=2)
-        call fc%readfromfile(uc, 'infile.forceconstant', mem, verbosity=2)
+        call uc%readfromfile('infile.ucposcar', verbosity=verbosity)
+        call fc%readfromfile(uc, 'infile.forceconstant', mem, verbosity=verbosity)
 end subroutine
 
 subroutine tdep_compute(qcart, omega, U)
@@ -37,20 +38,3 @@ subroutine tdep_compute(qcart, omega, U)
         call dcopy(N, p%omega, 1, omega, 1)
         call zcopy(N*N, p%egv, 1, U, 1)
 end subroutine
-
-!program tdep_test
-!        use globals
-!        implicit none
-!        real(r8), dimension(3) :: qcart
-!        real(r8), dimension(6) :: omega
-!        complex(r8), dimension(6,6) :: U
-!        call tdep_initialize()
-!        qcart(1) = 0.0
-!        qcart(2) = 0.0
-!        qcart(3) = 0.0
-!
-!        call tdep_compute(qcart,omega, U)
-!
-!        PRINT *, omega
-!        PRINT *, U
-!end program

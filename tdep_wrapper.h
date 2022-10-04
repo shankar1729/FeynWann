@@ -2,6 +2,6 @@
 
 extern "C"
 {
-	int tdep_initialize_();
+	int tdep_initialize_(int* verbosity);
 	int tdep_compute_(double* qcart, double* omega, complex* U);
 }
