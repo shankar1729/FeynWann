@@ -1,3 +1,8 @@
 .kdev*
 .directory
+# vim swap files
 *.swp
+# clang-generated compilation commands (for autocompletion)
+compile_commands.json
+# clang cache
+.cache/*

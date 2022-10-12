@@ -199,7 +199,7 @@ void FeynWann::setState(FeynWann::StatePh& state)
 	if(fwp.tdep)
 	{
 		#ifdef TDEP_ENABLED
-		vector3<> qCart = GT * state.q; //TDEP uses Cartesian q
+		vector3<> qCart = GT * -state.q / (2*M_PI); //TDEP uses Cartesian q
 		state.omega.resize(nModes);
 		state.U = zeroes(nModes, nModes);
 		tdep_compute_(&qCart[0], state.omega.data(), state.U.data());
