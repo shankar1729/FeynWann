@@ -42,7 +42,7 @@ void LindbladParams::initialize()
 		spinEchoRot.set_col(0, spinEchoBhat);
 		spinEchoRot.set_col(1, cross(BextHat, spinEchoBhat));
 		spinEchoRot.set_col(2, BextHat);
-		spinEchoFlipTime = M_PI/(2.*spinEchoB.length());
+		spinEchoFlipTime = M_PI/((gElectron/2)*spinEchoB.length());
 	}
 	else spinEchoFlipTime = 0.; //can use as a flag to check if spin echo being used
 }
