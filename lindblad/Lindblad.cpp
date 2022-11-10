@@ -12,7 +12,7 @@ void LindbladParams::initialize()
 	
 	//Spin echo setup:
 	if(not spinEchoOmega)
-		spinEchoOmega = 2.*Bext.length();
+		spinEchoOmega = (-gElectron/2)*Bext.length();
 	if(spinEchoB.length_squared())
 	{
 		//Check specified magnetic fields:
