@@ -150,11 +150,11 @@ int main(int argc, char** argv)
 	}
 	logPrintf("Bext = "); lp.Bext.print(globalLog, " %lg ");
 	logPrintf("orbitalZeeman = %s\n", lp.orbitalZeeman ? "yes" : "no");
-	if(lp.spinEchoFlipTime)
+	if(lp.spinEchoB.length_squared())
 	{	logPrintf("spinEchoB = \n"); lp.spinEchoB.print(globalLog, " %lg ");
 		logPrintf("spinEchoDelay = %lg\n", lp.spinEchoDelay);
-		logPrintf("spinEchoOmega = %lg\n", lp.spinEchoOmega);
-		logPrintf("spinEchoFlipTime = %lg\n", lp.spinEchoFlipTime);
+		logPrintf("spinEchoOmega = %lg (may be overrided later)\n", lp.spinEchoOmega);
+		logPrintf("spinEchoFlipTime = %lg (calculated later)\n", lp.spinEchoFlipTime);
 	}
 	logPrintf("dE = %lg\n", lp.dE);
 	logPrintf("ePhMode = %s\n", ePhMode.c_str());

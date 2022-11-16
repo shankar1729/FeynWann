@@ -11,8 +11,6 @@ void LindbladParams::initialize()
 	nomega = 1 + int(round((omegaMax-omegaMin)/domega));
 	
 	//Spin echo setup:
-	if(not spinEchoOmega)
-		spinEchoOmega = (-gElectron/2)*Bext.length();
 	if(spinEchoB.length_squared())
 	{
 		//Check specified magnetic fields:
@@ -42,9 +40,8 @@ void LindbladParams::initialize()
 		spinEchoRot.set_col(0, spinEchoBhat);
 		spinEchoRot.set_col(1, cross(BextHat, spinEchoBhat));
 		spinEchoRot.set_col(2, BextHat);
-		spinEchoFlipTime = M_PI/((gElectron/2)*spinEchoB.length());
 	}
-	else spinEchoFlipTime = 0.; //can use as a flag to check if spin echo being used
+	spinEchoFlipTime = 0.; //initialized after determining average g-factor
 }
 
 
@@ -127,6 +124,7 @@ Lindblad::Lindblad(const LindbladParams& lp)
 	
 	//Read k-point info and initialize states:
 	mpiWorld->fseek(fp, byteOffsets[ikStart], SEEK_SET);
+	double spinEchoOmegaNum = 0., spinEchoOmegaDen = 0.; //for calculating average Larmor frequency
 	for(size_t ikMine=0; ikMine<nkMine; ikMine++)
 	{	State& s = state[ikMine];
 		s.ik = ikStart + ikMine;
@@ -162,12 +160,21 @@ Lindblad::Lindblad(const LindbladParams& lp)
 		//Initialize H0 used for interaction picture:
 		s.E0 = s.E(s.innerStart, s.innerStop); //default: diagonal using energies from data file
 		if(lp.Bext.isNonzero())
-		{	matrix H0(s.E0);
+		{	matrix Hpert;
 			for(int iDir=0; iDir<3; iDir++) //Add Zeeman Hamiltonian
-			{	if(spinorial) H0 += (lp.Bext[iDir] * bohrMagneton * gElectron * 0.5) * s.S[iDir];  //0.5 because |S| in [0, 1]
-				if(lp.orbitalZeeman) H0 += (lp.Bext[iDir] * bohrMagneton) * s.L[iDir];
+			{	if(spinorial) Hpert += (lp.Bext[iDir] * bohrMagneton * gElectron * 0.5) * s.S[iDir];  //0.5 because |S| in [0, 1]
+				if(lp.orbitalZeeman) Hpert += (lp.Bext[iDir] * bohrMagneton) * s.L[iDir];
 			}
+			matrix H0 = s.E0 + Hpert;
 			H0.diagonalize(s.V0, s.E0); //now have diagonal basis for off-diagonal H0
+			
+			//Compute average Larmor frequency
+			diagMatrix Omega = diag(dagger(s.V0) * Hpert * s.V0);
+			for(int b=0; b<s.nInner; b++)
+			{	double weight = fermiPrime((s.E0[b] - lp.dmu) * lp.invT);
+				spinEchoOmegaNum -= 2 * weight * fabs(Omega[b]);
+				spinEchoOmegaDen += weight;
+			}
 		}
 		
 		//Initialize density matrix and time derivative:
@@ -177,6 +184,26 @@ Lindblad::Lindblad(const LindbladParams& lp)
 	}
 	mpiWorld->fclose(fp);
 	if(lp.valleyMode != ValleyNone) mpiWorld->allReduceData(isKall, MPIUtil::ReduceMax);
+	
+	//Update Larmor frequency if needed:
+	if(lp.Bext.isNonzero())
+	{	mpiWorld->allReduce(spinEchoOmegaNum, MPIUtil::ReduceSum);
+		mpiWorld->allReduce(spinEchoOmegaDen, MPIUtil::ReduceSum);
+		double spinEchoOmega = spinEchoOmegaNum / spinEchoOmegaDen;
+		
+		//Set larmor frequency if not specified in input:
+		LindbladParams& lpOut = (LindbladParams&)lp;
+		if(not lp.spinEchoOmega)
+		{	lpOut.spinEchoOmega = spinEchoOmega;
+			logPrintf("spinEchoOmega = %lg\n", lp.spinEchoOmega);
+		}
+		
+		//Determine pi-pulse time if using spin-echo setup:
+		if(lp.spinEchoB.length())
+		{	lpOut.spinEchoFlipTime = M_PI * lp.Bext.length() / (fabs(spinEchoOmega)  * lp.spinEchoB.length());
+			logPrintf("spinEchoFlipTime = %lg\n", lp.spinEchoFlipTime);
+		}
+	}
 	
 	//Synchronize energy range:
 	mpiWorld->allReduce(Emin, MPIUtil::ReduceMin);
