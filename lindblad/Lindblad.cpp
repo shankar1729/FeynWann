@@ -124,7 +124,7 @@ Lindblad::Lindblad(const LindbladParams& lp)
 	
 	//Read k-point info and initialize states:
 	mpiWorld->fseek(fp, byteOffsets[ikStart], SEEK_SET);
-	double spinEchoOmegaNum = 0., spinEchoOmegaDen = 0.; //for calculating average Larmor frequency
+	double spinEchoOmegaNum = 0., spinEchoOmegaSqNum = 0., spinEchoOmegaDen = 0.; //for calculating average Larmor frequency
 	for(size_t ikMine=0; ikMine<nkMine; ikMine++)
 	{	State& s = state[ikMine];
 		s.ik = ikStart + ikMine;
@@ -172,7 +172,8 @@ Lindblad::Lindblad(const LindbladParams& lp)
 			diagMatrix Omega = diag(dagger(s.V0) * Hpert * s.V0);
 			for(int b=0; b<s.nInner; b++)
 			{	double weight = fermiPrime((s.E0[b] - lp.dmu) * lp.invT);
-				spinEchoOmegaNum -= 2 * weight * fabs(Omega[b]);
+				spinEchoOmegaNum -= weight * 2 * fabs(Omega[b]);
+				spinEchoOmegaSqNum += weight * std::pow(2 * Omega[b], 2);
 				spinEchoOmegaDen += weight;
 			}
 		}
@@ -188,8 +189,16 @@ Lindblad::Lindblad(const LindbladParams& lp)
 	//Update Larmor frequency if needed:
 	if(lp.Bext.isNonzero())
 	{	mpiWorld->allReduce(spinEchoOmegaNum, MPIUtil::ReduceSum);
+		mpiWorld->allReduce(spinEchoOmegaSqNum, MPIUtil::ReduceSum);
 		mpiWorld->allReduce(spinEchoOmegaDen, MPIUtil::ReduceSum);
 		double spinEchoOmega = spinEchoOmegaNum / spinEchoOmegaDen;
+		double spinEchoOmegaStd = sqrt(spinEchoOmegaSqNum / spinEchoOmegaDen - std::pow(spinEchoOmega, 2));
+		
+		//Report g-factor statistics:
+		double gByOmega = 2. / lp.Bext.length();
+		double gEff = fabs(spinEchoOmega) * gByOmega;
+		double gStd = spinEchoOmegaStd * gByOmega;
+		logPrintf("Effective |g|: %lg +/- %lg\n", gEff, gStd);
 		
 		//Set larmor frequency if not specified in input:
 		LindbladParams& lpOut = (LindbladParams&)lp;
