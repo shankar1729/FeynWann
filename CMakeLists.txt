@@ -114,6 +114,7 @@ if(EnableScaLAPACK)
 	add_definitions("-DSCALAPACK_ENABLED")
 	include_directories(/opt/intel/mkl/include ${MKL_PATH}/include) #needed for c function definitions
 	enable_language(Fortran)
+	set(CMAKE_Fortran_FLAGS "${CMAKE_Fortran_FLAGS} -fallow-argument-mismatch")
 	file(GLOB SCALAPACK_F_FILES scalapack/*.f)
 	#JDFTx must be built with scalapack support for this to work (not tested in this cmake script)
 endif()
