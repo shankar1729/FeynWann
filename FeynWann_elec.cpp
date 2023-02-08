@@ -63,6 +63,7 @@ void FeynWann::eCalc(const vector3<>& k, FeynWann::StateE& e)
 
 void FeynWann::eTransformNeeded(const vector3<>& k0)
 {	Hw->transform(k0);
+	if(energyOnly) return;
 	if(fwp.needVelocity or (fwp.needL or fwp.needQ)) Pw->transform(k0);
 	if(fwp.needSpin) Sw->transform(k0);
 	if(fwp.needRP()) { RPw->transform(k0); for(int iDir=0; iDir<3; iDir++) HprimeW[iDir]->transform(k0); }
@@ -77,6 +78,7 @@ void FeynWann::eTransformNeeded(const vector3<>& k0)
 
 void FeynWann::eComputeNeeded(const vector3<>& k)
 {	Hw->compute(k);
+	if(energyOnly) return;
 	if(fwp.needVelocity or (fwp.needL or fwp.needQ)) Pw->compute(k);
 	if(fwp.needSpin) Sw->compute(k);
 	if(fwp.needRP()) { RPw->compute(k); for(int iDir=0; iDir<3; iDir++) HprimeW[iDir]->compute(k); }
@@ -125,7 +127,7 @@ void FeynWann::setState(FeynWann::StateE& state)
 				break;
 			}
 	}
-	if(not state.withinRange) return; //Remaining quantities will never be used
+	if(energyOnly or (not state.withinRange)) return; //Remaining quantities will never be used
 	
 	//Initialize matrix elements needed for perturbations:
 	watchRotations1.start();
@@ -214,7 +216,7 @@ void FeynWann::bcastState(FeynWann::StateE& state, MPIUtil* mpiUtil, int root)
 	//Energy and eigenvectors:
 	bcast(state.E, nBands, mpiUtil, root);
 	mpiUtil->bcast(state.withinRange, root);
-	if(not state.withinRange) return; //Remaining quantities will never be used
+	if(energyOnly or (not state.withinRange)) return; //Remaining quantities will never be used
 	bcast(state.U, nBands, nBands, mpiUtil, root);
 	//Velocity matrix, if needed:
 	if(fwp.needVelocity)

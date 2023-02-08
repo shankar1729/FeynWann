@@ -104,7 +104,7 @@ void FeynWann::finalize()
 
 
 FeynWann::FeynWann(FeynWannParams& fwp)
-: fwp(fwp), nAtoms(0), nSpins(0), nSpinor(0), spinWeight(0), mu(NAN), nElectrons(0),
+: fwp(fwp), energyOnly(false), nAtoms(0), nSpins(0), nSpinor(0), spinWeight(0), mu(NAN), nElectrons(0),
 EminInner(-INFINITY), EmaxInner(+INFINITY), polar(false), ePhEstart(0.), ePhEstop(0.),
 tTransformByCompute(1), tTransformByComputeD(1), inEphLoop(false)
 {

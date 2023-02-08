@@ -141,6 +141,7 @@ public:
 	typedef void (*phProcessFunc)(const StatePh& state, void* params); //!< Callback function pointer for phLoop()
 	typedef void (*ePhProcessFunc)(const MatrixEph& mat, void* params); //!< Callback function pointer for ePhLoop()
 	typedef void (*defectProcessFunc)(const MatrixDefect& mat, void* params); //!< Callback function pointer for defectLoop()
+	bool energyOnly; //!< approximate energies and suppress matrix element calculation to speed up initial eLoop passes
 	
 	//! Calculate electronic properties for each k-point in a mesh offset by k0
 	//! Calls provided callback function eProcess on each of them, along with provided params
@@ -150,7 +151,7 @@ public:
 	void eTransformNeeded(const vector3<>& k0); //!< Helper to transform all needed matrix elements at offset k0
 	void eComputeNeeded(const vector3<>& k); //!< Helper to compute all needed matrix elements at single k
 	size_t eCountPerOffset() const { return Hw->nkTot; } //!< number of k's sampled per offset = prod(offsetDim)
-	
+
 	//! Calculate phonon properties for each q-point in a mesh offset by q0
 	//! Calls provided callback function phProcess on each of them, along with provided params
 	void phLoop(const vector3<>& q0, phProcessFunc phProcess, void* params);

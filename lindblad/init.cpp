@@ -429,7 +429,7 @@ struct LindbladInit
 		size_t ik; if(not findK(kp.k, ik)) return;
 		
 		//Determine energy ranges:
-		const double *Ebegin = E.data()+ik*fw.nBands, *Eend = Ebegin+fw.nBands;
+		const double *Ebegin = state.E.data(), *Eend = Ebegin+fw.nBands;
 		//--- pump-active (inner) energy range:
 		int innerOffset = 0; //offset from original bands to inner window
 		activeOffsets(Ebegin, Eend, Estart, Estop, innerOffset, kp.nInner);
@@ -844,7 +844,9 @@ int main(int argc, char** argv)
 	LindbladInit lb(fw, NkFine, dmuMin, dmuMax, Tmax, pumpOmegaMax, probeOmegaMax, ePhEnabled, ePhDelta, defectEnabled);
 	
 	//First pass (e only): select k-points
-	lb.kpointSelect(k0);
+	fw.energyOnly = true;
+	lb.kpointSelect(k0); //only screens energies (coarsely, without E, B perturbations included)
+	fw.energyOnly = false;
 	if(mpiWorld->isHead()) logPrintf("%lu active q-mesh offsets parallelized over %d process groups.\n", lb.offKuniq.size(), mpiGroupHead->nProcesses());
 	
 	if(ip.dryRun)
