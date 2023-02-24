@@ -5,6 +5,10 @@
 
 //---- implementation of class LindbladParams ----
 
+double LindbladParams::pumpA0_sq() const
+{	const double c = 137.035999084; //speed of light in atomic units = 1/(fine structure constant)
+	return 8 * M_PI * pumpI/(c * std::pow(pumpOmega, 2));
+}
 
 void LindbladParams::initialize()
 {	invT = 1./T;
@@ -141,13 +145,13 @@ Lindblad::Lindblad(const LindbladParams& lp)
 		//--- Pump matrix elements with energy conservation
 		if(not lp.pumpBfield)
 		{	s.pumpPD = dot(s.P, lp.pumpPol)(0,s.nInner, s.innerStart,s.innerStop); //restrict to inner active
-			double normFac = sqrt(lp.pumpTau/sqrt(M_PI));
+			double normFac = sqrt(lp.pumpA0_sq() / (lp.pumpSigma * sqrt(2*M_PI)));
 			complex* PDdata = s.pumpPD.data();
 			for(int b2=s.innerStart; b2<s.innerStop; b2++)
 				for(int b1=s.innerStart; b1<s.innerStop; b1++)
 				{	//Multiply energy conservation:
-					double tauDeltaE = lp.pumpTau*(s.E[b1] - s.E[b2] - lp.pumpOmega);
-					*(PDdata++) *= normFac * exp(-0.5*tauDeltaE*tauDeltaE);
+					double deltaE_by_sigma = (s.E[b1] - s.E[b2] - lp.pumpOmega) / lp.pumpSigma;
+					*(PDdata++) *= normFac * exp(-0.25 * deltaE_by_sigma*deltaE_by_sigma); //sqrt(standard gaussian)
 				}
 		}
 		if(lp.valleyMode != ValleyNone) isKall[s.ik] = isKvalley(s.k);
@@ -274,7 +278,6 @@ Lindblad::Lindblad(const LindbladParams& lp)
 	}
 	logPrintf("\n"); logFlush();
 }
-
 
 bool Lindblad::readCheckpoint(double& t)
 {	//Check checkpoimnt availability:
