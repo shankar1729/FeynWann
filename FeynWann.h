@@ -65,7 +65,7 @@ struct FeynWannParams
 	inline void applyScissor(diagMatrix& E) const
 	{	for(double& Ei: E)
 			if(Ei > degeneracyThreshold)
-				E += scissor;
+				Ei += scissor;
 	}
 };
 
