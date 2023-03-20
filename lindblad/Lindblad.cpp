@@ -435,23 +435,24 @@ void Lindblad::writeImEps(string fname) const
 }
 
 // Helper functions for projecting spin on the degenerate subspac
-inline matrix degProj(const matrix& M, const diagMatrix& E, double degeneracyThreshold){
-	matrix Mdeg(E.size(), E.size());
+inline matrix degProj(const matrix& M, const diagMatrix& E, double degeneracyThreshold)
+{	matrix Mdeg = zeroes(E.size(), E.size());
 	complex *MdegData = Mdeg.data();
 	for (int b2 = 0; b2 < E.nRows(); b2++)
-	for (int b1 = 0; b1 < E.nRows(); b1++){
-		if (fabs(E[b1] - E[b2]) < degeneracyThreshold) *MdegData = M(b1, b2);
+	for (int b1 = 0; b1 < E.nRows(); b1++)
+	{	if(fabs(E[b1] - E[b2]) < degeneracyThreshold)
+			*MdegData = M(b1, b2);
 		MdegData++;
 	}
 	return Mdeg;
-	}
+}
 
 
 void Lindblad::reportCarrierLifetime() const
 {	static StopWatch watch("Lindblad::reportCarrierLifetime");
 	if(not lp.ePhEnabled) return;
 	watch.start();
-    	double degeneracyThreshold = 1e-6*eV; // for EY degenerate subspace 
+	double degeneracyThreshold = 1e-6*eV; // for EY degenerate subspace 
 	//Scattering rate data for all k on this process:
 	int iProc = mpiWorld->iProcess();
 	size_t ikStart = kDivision.start(iProc);
@@ -526,11 +527,12 @@ void Lindblad::reportCarrierLifetime() const
 	for(const State& s: state)
 	{	const diagMatrix& f = s.rho0;
 		const double* tauInv = &tauInv_i[nInnerPrev[s.ik] - iEallStart];
+		const diagMatrix Einner = s.E(s.innerStart, s.innerStop);
 		//Determine parity (starting at odd/even) of spin-split bands in inner window
 		int bSpinStart = 0;
 		if(spinorial and s.nInner>2)
-		{	double dE01 = s.E[1] - s.E[0];
-			double dE12 = s.E[2] - s.E[1];
+		{	double dE01 = Einner[1] - Einner[0];
+			double dE12 = Einner[2] - Einner[1];
 			bSpinStart = (dE01 < dE12 ? 0 : 1); //assume spin split smaller than band split
 		}
 		for(int b=0; b<s.nInner; b++)
@@ -545,19 +547,17 @@ void Lindblad::reportCarrierLifetime() const
 					continue;
 				wSumDP += mfPrime; //NOTE: not all bands may be included in DP sum
 				//Get internal magnetic field (DP) and spin mixing (EY) squared:
-				vector3<double> LfreqSq, SpinMixSqEY;
+				vector3<> LfreqSq, SpinMixSqEY;
 				double LfreqSqSum = 0.;
 				for(int iDir=0; iDir<3; iDir++)
-				{	LfreqSq[iDir] = std::pow((s.E[bOther]-s.E[b]) * s.S[iDir](b,b).real(), 2);
+				{	LfreqSq[iDir] = std::pow((Einner[bOther] - Einner[b]) * s.S[iDir](b,b).real(), 2);
 					LfreqSqSum += LfreqSq[iDir];
 					//Project onto the degenerate subspace for a well defined direction in EY 
-					int bStart, bStop;
-                    			bStart = 0; bStop=s.nInner;
-                    			diagMatrix Edeg;
-                    			Edeg = s.E(bStart, bStop); 
+					int bStart = std::min(b, bOther), bStop = bStart + 2;
+					diagMatrix Edeg = Einner(bStart, bStop); 
 					matrix Sdeg = degProj(s.S[iDir](bStart, bStop, bStart, bStop), Edeg, degeneracyThreshold);
-					diagMatrix SS = diag(Sdeg*Sdeg);
-					SpinMixSqEY[iDir] = 0.5 * (1 - sqrt(SS[b]));
+					diagMatrix SS = diag(Sdeg * Sdeg);
+					SpinMixSqEY[iDir] = 0.5 * (1 - sqrt(SS[b - bStart]));
 				}
 				//Internal magnetic field perpendicular to each direction:
 				vector3<> OmegaSqDP;
