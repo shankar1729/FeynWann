@@ -569,7 +569,7 @@ void Lindblad::reportCarrierLifetime() const
 
 				//Collect spin-mixing for EY
 				SpinMixSqEYsum += mfPrime * SpinMixSqEY;           
-				tauInvSpinEYsum += (mfPrime * tauInv[b]) * SpinMixSqEY;   
+				tauInvSpinEYsum += (mfPrime * tauInv[b]) * SpinMixSqEY * 4;   
 			}
 		}
 	}
@@ -579,7 +579,6 @@ void Lindblad::reportCarrierLifetime() const
 	logPrintf("tau(time-avg) = %lf fs\n", (tauSum / wSum) / fs);
 	logPrintf("tau(rate-avg) = %lf fs\n", (wSum / tauInvSum) / fs);
 
-	double tauRate = (wSum / tauInvSum) / fs;
 	if(spinorial)
 	{	mpiWorld->allReduce(wSumDP, MPIUtil::ReduceSum);
 		mpiWorld->allReduce(OmegaSqDPsum, MPIUtil::ReduceSum);
@@ -587,16 +586,17 @@ void Lindblad::reportCarrierLifetime() const
 		mpiWorld->allReduce(SpinMixSqEYsum, MPIUtil::ReduceSum);
 		mpiWorld->allReduce(tauInvSpinEYsum, MPIUtil::ReduceSum);
 		vector3<> OmegaSqDP = OmegaSqDPsum / wSumDP, tauSpinDP;
-		vector3<> SpinMixSqEY = SpinMixSqEYsum / wSumDP, tauSpinEY;     
+		vector3<> SpinMixSqEY = SpinMixSqEYsum / wSumDP, tauSpinEY, tauSpinEYrate;     
 		for(int iDir=0; iDir<3; iDir++)
 		{	tauSpinDP[iDir] = wSumDP / tauInvSpinDPsum[iDir];
 			tauSpinEY[iDir] = wSumDP / tauInvSpinEYsum[iDir]; //DP normalization for considering all spin pairs
+			tauSpinEYrate[iDir] = (wSum / tauInvSum) / (SpinMixSqEY[iDir] * 4);
 		}
 		logPrintf("OmegaSqDP [1/fs^2] = "); (OmegaSqDP / std::pow(fs, -2)).print(globalLog, " %lg ");
 		logPrintf("tauSpinDP [fs] = "); (tauSpinDP / fs).print(globalLog, " %lg ");
 		logPrintf("SpinMixSqEY = "); (SpinMixSqEY).print(globalLog, " %lg ");
-		logPrintf("tauSpinEY [fs] = "); (tauSpinEY/4/fs).print(globalLog, " %lg "); 
-		logPrintf("tauSpinEY(tauRateAvg) [fs] = %lg, %lg, %lg", tauRate/(SpinMixSqEY[0]*4), tauRate/(SpinMixSqEY[1]*4), tauRate/(SpinMixSqEY[2]*4)); 
+		logPrintf("tauSpinEY [fs] = "); (tauSpinEY/fs).print(globalLog, " %lg "); 
+		logPrintf("tauSpinEY(tauRateAvg) [fs] = ");  (tauSpinEYrate/fs).print(globalLog, " %lg "); 
 	}
 	watch.stop();
 }
