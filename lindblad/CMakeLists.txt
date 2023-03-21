@@ -8,6 +8,7 @@ endif()
 
 add_FeynWann_executable(init)
 add_FeynWann_executable(makeModel)
+add_FeynWann_executable(makeModelEY)
 
 #Combined linear/nonlinar dynamics executable:
 add_executable(run run.cpp Lindblad.cpp LindbladDynamics.cpp LindbladNonlinear.cpp LindbladMatrix.cpp LindbladLinear.cpp LindbladSpectrum.cpp)
