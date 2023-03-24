@@ -431,6 +431,14 @@ int main(int argc, char** argv)
 			ofs << e.tArr[it]/fs << '\t' << e.fArr[it].back()/Kelvin << '\n';
 		ofs.close();
 		
+		//Pump perturbation distribution [dimensionless]
+		ofs.open((e.runName+".dfPert").c_str());
+		ofs.precision(10);
+		ofs << "#E[ev]\\tdfPert\n";
+		for(int ie=0; ie<e.nE; ie++)
+			ofs << e.Egrid(ie)/eV << '\t' << e.dfPert[ie] << '\n';
+		ofs.close();
+		
 		//Distributions [dimensionless]
 		ofs.open((e.runName+".f").c_str());
 		ofs.precision(10);
