@@ -32,6 +32,7 @@ struct ePhRelax : public Integrator<diagMatrix>
 	double De, scaledDe; //De, and De scaled by g(eF)**-3
 	double pumpFWHM; //Pump full-width at half maximum
 	bool pumpCW; //If true, CW excitation: ignore pumpFWHM and treat Uabs as absorbed power density
+	bool fixedTl; //If true, hold lattice temperature fixed
 	double scatterFactor; //Artificially increase the electron-phonon and electron-electron scattering rate by this value
 	diagMatrix hInt; //energy resolved electron-phonon coupling
 	diagMatrix Mee; //energy resolved electron-electron matrix element
@@ -87,6 +88,7 @@ struct ePhRelax : public Integrator<diagMatrix>
 		maxEcut = inputMap.get("maxEcut", +DBL_MAX)*eV; //energy cutoff above which electrons can be injected
 		pInject = inputMap.get("pInject", 0.); //probability of injection for carriers outside (minEcut, maxEcut)
 		De = inputMap.get("De") / eV; //quadratic e-e lifetime coefficient in eV^-1
+		fixedTl = inputMap.getBool("fixedTl", false); //If true, hold Tl fixed (an infinite thermal conductance contact)
 		pumpCW = inputMap.getBool("pumpCW", false); //If true, pump is CW: ignore pumpFWHM and interpret Uabs as absorbed power density in Watt/meter^3
 		pumpFWHM = inputMap.get("pumpFWHM", 0.) * fs; //Gaussian pump pulse width in fs (default: 0 => treat pump as instantaneous)
 		double Uabs_unit = Joule/std::pow(meter,3); //Uabs is energy density for Gaussian pulses,
@@ -109,6 +111,7 @@ struct ePhRelax : public Integrator<diagMatrix>
 		logPrintf("(minEcut,maxEcut) = (%lg, %lg)\n", minEcut, maxEcut);
 		logPrintf("pInject: %lg\n", pInject);
 		logPrintf("De = %lg\n", De);
+		logPrintf("fixedTl = %s\n", (fixedTl ? "yes" : "no"));
 		logPrintf("pumpCW = %s\n", (pumpCW ? "yes" : "no"));
 		logPrintf("pumpFWHM = %lg\n", pumpFWHM);
 		logPrintf("Uabs = %lg\n", Uabs);
@@ -324,7 +327,7 @@ struct ePhRelax : public Integrator<diagMatrix>
 			fdot[i] += ElDot_i / (dE*dE*g[i]);
 			fdot[i+1] -= ElDot_i / (dE*dE*g[i+1]);
 		}
-		TlDot = ElDot / Cl(Tl);
+		TlDot = fixedTl ? 0.0 : ElDot / Cl(Tl);
 		
 		//Pump evolution:
 		if(pumpCW or pumpFWHM)
