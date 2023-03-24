@@ -10,8 +10,8 @@
 #include <fstream>
 
 //Smooth v with a nearest-neighbor filter n times
-void smooth(diagMatrix& v, int n)
-{	diagMatrix vOut(v);
+void smooth(std::vector<double>& v, int n)
+{	std::vector<double> vOut(v);
 	for(int repeat=0; repeat<n; repeat++)
 	{	for(size_t i=1; i<v.size()-1; i++)
 			vOut[i] = 0.5 * v[i] + 0.25 * (v[i-1] + v[i+1]);
@@ -94,6 +94,7 @@ struct ePhRelax : public Integrator<diagMatrix>
 		const double Uabs = inputMap.get("Uabs") * Uabs_unit; //absorbed energy or power density in J/m^3 or W/m^3
 		const double Eplasmon = inputMap.get("Eplasmon") * eV; //incident photon energy in eV
 		scatterFactor= inputMap.get("scatterFactor", 1.); //Increase the e-e and e-ph scattering rate by this factor (dafeult: 1 => no scaling)
+		const int nSmooth = (int)inputMap.get("nSmooth", 0.); //smoothing of energy-functions to stabilize dynamics (default: off)
 		const string MeeFile = inputMap.getString("MeeFile"); //energy-dependent matrix element filename (use None to disable)
 		eeStride = (int)inputMap.get("eeStride", 1.); //coarse graining stride used to accelerate e-e calculation
 		runName = inputMap.getString("runName"); //prefix to use for output files
@@ -113,6 +114,7 @@ struct ePhRelax : public Integrator<diagMatrix>
 		logPrintf("Uabs = %lg\n", Uabs);
 		logPrintf("Eplasmon = %lg\n", Eplasmon);
 		logPrintf("scatterFactor = %lg\n", scatterFactor);
+		logPrintf("nSmooth = %d\n", nSmooth);
 		logPrintf("MeeFile = %s\n", MeeFile.c_str());
 		logPrintf("eeStride = %d\n", eeStride);
 		logPrintf("runName = %s\n", runName.c_str());
@@ -121,6 +123,7 @@ struct ePhRelax : public Integrator<diagMatrix>
 		
 		//Read electron and phonon DOS (and convert to atomic units and per-unit volume):
 		dos.init("eDOS.dat", eV, 1./(detR*eV));
+		smooth(dos.yGrid[0], nSmooth);
 		dosPh.init("phDOS.dat", eV, 1./(detR*eV));
 		nE = dos.xGrid.size();
 		dE = dos.dx;
@@ -202,7 +205,7 @@ struct ePhRelax : public Integrator<diagMatrix>
 				ieMax = std::max(ieMax, ie);
 			}
 		}
-		smooth(dfPert, 2);
+		smooth(dfPert, nSmooth);
 		dfPert *= Uabs / Upert; //normalize to match absorbed laser energy per unit volume
 		dZ *= detR * Uabs / Upert; //correspondingly normalize (but per unit cell)
 		logPrintf("Change in electrons/cell: %lg\n", dZ);
@@ -213,7 +216,7 @@ struct ePhRelax : public Integrator<diagMatrix>
 		hInt.resize(nE-1);
 		for(int ie=0; ie<nE-1; ie++)
 			hInt[ie] = hIntInterp(Egrid(ie)+0.5*dE);
-		smooth(hInt, 2);
+		smooth(hInt, nSmooth);
 		
 		//Divide active energy grid for e-e scattering calculation:
 		//--- make length commensurate with eeStride
