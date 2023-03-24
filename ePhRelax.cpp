@@ -9,6 +9,17 @@
 #include <core/matrix.h>
 #include <fstream>
 
+//Smooth v with a nearest-neighbor filter n times
+void smooth(diagMatrix& v, int n)
+{	diagMatrix vOut(v);
+	for(int repeat=0; repeat<n; repeat++)
+	{	for(size_t i=1; i<v.size()-1; i++)
+			vOut[i] = 0.5 * v[i] + 0.25 * (v[i-1] + v[i+1]);
+		v = vOut;
+	}
+}
+
+
 struct ePhRelax : public Integrator<diagMatrix>
 {
 	Interp1 dos, dosPh;
@@ -191,6 +202,7 @@ struct ePhRelax : public Integrator<diagMatrix>
 				ieMax = std::max(ieMax, ie);
 			}
 		}
+		smooth(dfPert, 2);
 		dfPert *= Uabs / Upert; //normalize to match absorbed laser energy per unit volume
 		dZ *= detR * Uabs / Upert; //correspondingly normalize (but per unit cell)
 		logPrintf("Change in electrons/cell: %lg\n", dZ);
@@ -201,6 +213,7 @@ struct ePhRelax : public Integrator<diagMatrix>
 		hInt.resize(nE-1);
 		for(int ie=0; ie<nE-1; ie++)
 			hInt[ie] = hIntInterp(Egrid(ie)+0.5*dE);
+		smooth(hInt, 2);
 		
 		//Divide active energy grid for e-e scattering calculation:
 		//--- make length commensurate with eeStride
