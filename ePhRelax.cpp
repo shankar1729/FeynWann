@@ -20,6 +20,7 @@ struct ePhRelax : public Integrator<diagMatrix>
 	double pInject; //probability that a carrier gets injected to substrate
 	double De, scaledDe; //De, and De scaled by g(eF)**-3
 	double pumpFWHM; //Pump full-width at half maximum
+	bool pumpCW; //If true, CW excitation: ignore pumpFWHM and treat Uabs as absorbed power density
 	double scatterFactor; //Artificially increase the electron-phonon and electron-electron scattering rate by this value
 	diagMatrix hInt; //energy resolved electron-phonon coupling
 	diagMatrix Mee; //energy resolved electron-electron matrix element
@@ -74,10 +75,13 @@ struct ePhRelax : public Integrator<diagMatrix>
 		minEcut = inputMap.get("minEcut", -DBL_MAX)*eV; // energy cutoff below which holes can be injected
 		maxEcut = inputMap.get("maxEcut", +DBL_MAX)*eV; //energy cutoff above which electrons can be injected
 		pInject = inputMap.get("pInject", 0.); //probability of injection for carriers outside (minEcut, maxEcut)
-		const double Uabs = inputMap.get("Uabs") * Joule/std::pow(meter,3); //absorbed laser energy per unit volume in Joule/meter^3
-		const double Eplasmon = inputMap.get("Eplasmon") * eV; //incident photon energy in eV
 		De = inputMap.get("De") / eV; //quadratic e-e lifetime coefficient in eV^-1
+		pumpCW = inputMap.getBool("pumpCW", false); //If true, pump is CW: ignore pumpFWHM and interpret Uabs as absorbed power density in Watt/meter^3
 		pumpFWHM = inputMap.get("pumpFWHM", 0.) * fs; //Gaussian pump pulse width in fs (default: 0 => treat pump as instantaneous)
+		double Uabs_unit = Joule/std::pow(meter,3); //Uabs is energy density for Gaussian pulses,
+		if(pumpCW) Uabs_unit *= 1/sec; // ... and power density for CW
+		const double Uabs = inputMap.get("Uabs") * Uabs_unit; //absorbed energy or power density in J/m^3 or W/m^3
+		const double Eplasmon = inputMap.get("Eplasmon") * eV; //incident photon energy in eV
 		scatterFactor= inputMap.get("scatterFactor", 1.); //Increase the e-e and e-ph scattering rate by this factor (dafeult: 1 => no scaling)
 		const string MeeFile = inputMap.getString("MeeFile"); //energy-dependent matrix element filename (use None to disable)
 		eeStride = (int)inputMap.get("eeStride", 1.); //coarse graining stride used to accelerate e-e calculation
@@ -92,10 +96,11 @@ struct ePhRelax : public Integrator<diagMatrix>
 		logPrintf("T = %lg\n", T);
 		logPrintf("(minEcut,maxEcut) = (%lg, %lg)\n", minEcut, maxEcut);
 		logPrintf("pInject: %lg\n", pInject);
+		logPrintf("De = %lg\n", De);
+		logPrintf("pumpCW = %s\n", (pumpCW ? "yes" : "no"));
+		logPrintf("pumpFWHM = %lg\n", pumpFWHM);
 		logPrintf("Uabs = %lg\n", Uabs);
 		logPrintf("Eplasmon = %lg\n", Eplasmon);
-		logPrintf("De = %lg\n", De);
-		logPrintf("pumpFWHM = %lg\n", pumpFWHM);
 		logPrintf("scatterFactor = %lg\n", scatterFactor);
 		logPrintf("MeeFile = %s\n", MeeFile.c_str());
 		logPrintf("eeStride = %d\n", eeStride);
@@ -159,7 +164,7 @@ struct ePhRelax : public Integrator<diagMatrix>
 			die("Plasmon energy is out of the range available in carrierDistribDirect.dat")
 		if(Eplasmon < distribPhonon.omegaMin || Eplasmon > distribPhonon.omegaMin + (distribPhonon.nomega-1)*distribPhonon.domega)
 			die("Plasmon energy is out of the range available in carrierDistribPhonon.dat")
-		//--- interpolate to required photon energy and carrier eenergy grid:
+		//--- interpolate to required photon energy and carrier energy grid:
 		dfPert.resize(nE);
 		double Upert = 0.;
 		double dZ = 0.;
@@ -306,11 +311,16 @@ struct ePhRelax : public Integrator<diagMatrix>
 		TlDot = ElDot / Cl(Tl);
 		
 		//Pump evolution:
-		if(pumpFWHM)
-		{	double sigma = pumpFWHM/2.355;
-			double gaussian = exp((-1.*t*t)/(2*sigma*sigma))/(sigma*sqrt(2*M_PI));
+		if(pumpCW or pumpFWHM)
+		{	double prefactor;
+			if(pumpCW)
+				prefactor = 1.0; //CW
+			else
+			{	double sigma = pumpFWHM / 2.355;
+				prefactor = exp(-0.5*std::pow(t/sigma, 2)) / (sigma * sqrt(2*M_PI));
+			}
 			for(int i=0; i<nE; i++)
-				fdot[i] += gaussian*dfPert[i];
+				fdot[i] += prefactor * dfPert[i];
 		}
 		
 		mpiWorld->bcastData(fdot); //Ensure consistency on all processes
@@ -385,14 +395,17 @@ int main(int argc, char** argv)
 	e.El0 = e.El(e.T);
 	diagMatrix f = e.f0; f.push_back(e.T); //Initial distribution
 	double t;
-	if(e.pumpFWHM == 0.)
+	if(e.pumpCW)
+	{	t = 0.; //CW pump applied during integration (and no extra time needed at start)
+	}
+	else if(e.pumpFWHM == 0.)
 	{	e.report(-e.dt, f);
 		//Apply pump instanteneously:
 		t = 0.;
 		f = e.f0 + e.dfPert; f.push_back(e.T);
 	}
 	else
-	{	t = -e.dt * ceil(2.*e.pumpFWHM/e.dt); //start earlier to accomodate pump (applied during integration)
+	{	t = -e.dt * ceil(2.*e.pumpFWHM/e.dt); //start earlier to accomodate Gaussian pump (applied during integration)
 	}
 	e.integrateAdaptive(f, t, e.tMax, 1e-4, e.dt);
 	watchSolve.stop();
