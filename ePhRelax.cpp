@@ -195,6 +195,9 @@ struct ePhRelax : public Integrator<diagMatrix>
 			{	double w = exp(-(jE*jE)/18.) / (sqrt(2*M_PI)*3); //gauss smoothing kernel with width 3*dE
 				dni += w * (distribDirect.interp1(Ei+jE*dE, Eplasmon) + distribPhonon.interp1(Ei+jE*dE, Eplasmon));
 			}
+			//Smoothly truncate any spurious contributions beyond photon energy:
+			if(fabs(Ei) > Eplasmon)
+				dni *= exp(-0.5*std::pow((fabs(Ei) - Eplasmon)/(3*dE), 2));
 			Upert += dni * Ei * dE; //calculate energy of perturbation
 			if (Ei < minEcut || Ei > maxEcut)
 			{	double dniInjected = dni * pInject;
