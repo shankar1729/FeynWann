@@ -73,35 +73,30 @@ int main(int argc, char** argv)
 	//Add defect matrix elements (effect controlled by defectFraction in lindblad run)
 	double sigmaDiag = 1.0 / sqrt(fracNZ * tauP * (4 * M_PI));
 	double sigmaFlip = sigmaDiag * sqrt(spinMixSq);
+	std::vector<LindbladFile::Kpoint*> kPair(2);
 	for(int ik1=0; ik1<nK; ik1++)
-	{	LindbladFile::Kpoint& k1 = kArray[ik1];
+	{	kPair[0] = &kArray[ik1];
 		for(int ik2=0; ik2<ik1; ik2++)
 			if(Random::uniform() < fracNZ) //sparsity
-			{	LindbladFile::Kpoint& k2 = kArray[ik2];
-				//Create matrix element set connecting these k:
-				LindbladFile::GePhEntry M12, M21;
-				M12.jk = ik2;
-				M21.jk = ik1;
-				M12.omegaPh = 0.; //defect (not e-ph)
-				M21.omegaPh = 0.; //defect (not e-ph)
-				M12.G.init(nBands, nBands);
-				M21.G.init(nBands, nBands);
-				//Diagonal carrier-scattering matrix elements:
-				complex M = sigmaDiag * Random::normal();  //in-phase by alignment of S operators, so real
-				for(int b=0; b<nBands; b++)
-				{	M12.G.push_back(SparseEntry{b, b, M});
-					M21.G.push_back(SparseEntry{b, b, M.conj()});
+			{	kPair[1] = &kArray[ik2];
+
+				//Create 2x2 random scattering matrix:
+				matrix M = sigmaDiag * Random::normal() * eye(2);
+				for(int i=0; i<3; i++)
+					M += sigmaFlip * Random::normal() * pauli[i];
+
+				//Add matrix elements to each k in pair:
+				for(int iPair=0; iPair<2; iPair++)
+				{	LindbladFile::GePhEntry g;
+					g.jk = (iPair ? ik1 : ik2);  //partner k index
+					g.omegaPh = 0.; //defect (not e-ph)
+					g.G.init(nBands, nBands);
+					for(int iBand=0; iBand<nBands; iBand++)
+						for(int jBand=0; jBand<nBands; jBand++)
+							g.G.push_back(SparseEntry{iBand, jBand, M(iBand, jBand)});
+					kPair[iPair]->GePh.push_back(g);
+					M = dagger(M); //set h.c. for opposite direction
 				}
-				//Off-diagonal spin flip matrix elements:
-				M = sigmaFlip * Random::normalComplex();
-				for(int b=0; b<nBands; b++)
-				{	M12.G.push_back(SparseEntry{b, 1-b, M});
-					M21.G.push_back(SparseEntry{b, 1-b, M.conj()});
-					M = M.conj();
-				}
-				//Add to kpoints:
-				k1.GePh.push_back(M12);
-				k2.GePh.push_back(M21);
 			}
 	}
 
