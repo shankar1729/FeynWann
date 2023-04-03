@@ -68,7 +68,9 @@ struct CollectImEps
 	//Optional emission collection (only for first dmu):
 	const bool emission;
 	const double emissionPrefac; //prefactor to omega^3 in ratio of emission to ImEps phase-space prefactors
+	const double selfEmissionPrefac; //prefactor to omega in ratio of self-emission to ImEps phase-space prefactors
 	std::shared_ptr<Histogram2D> Emission_E; //carrier and frequency-resolved emission rate
+	std::shared_ptr<Histogram2D> selfEmission_E; //carrier and frequency-resolved self-emission rate (from unscattered carriers)
 	
 	CollectImEps(const std::vector<double>& dmu, double T, double domega, double omegaFull, double omegaMax, bool needLW, double dv, double vMax, bool emission)
 	: dmu(dmu), T(T), invT(1./T), domega(domega), omegaFull(omegaFull), omegaMax(omegaMax), needLW(needLW), dv(dv), vMax(vMax),
@@ -77,11 +79,16 @@ struct CollectImEps
 		breadthDen(dmu.size(), Histogram(0, domega, omegaFull)),
 		ImEps_E(-omegaMax, domega, omegaMax,  0, domega, omegaFull),
 		ImEps_v(-vMax, dv, vMax,  0, domega, omegaFull),
-		emission(emission), emissionPrefac(1.0 / (std::pow(M_PI, 2), std::pow(c, 3)))
+		emission(emission),
+		emissionPrefac(1.0 / (std::pow(M_PI, 2) * std::pow(c, 3))),
+		selfEmissionPrefac(4.0 / std::pow(c, 3))
 	{	logPrintf("Initialized frequency grid: 0 to %lg eV with %d points.\n", ImEps[0].Emax()/eV, ImEps[0].nE);
 		EvMax = *std::max_element(dmu.begin(), dmu.end()) + 10*T;
 		EcMin = *std::min_element(dmu.begin(), dmu.end()) - 10*T;
-		if(emission) Emission_E = std::make_shared<Histogram2D>(-omegaMax, domega, omegaMax,  0, domega, omegaMax);
+		if(emission)
+		{	Emission_E = std::make_shared<Histogram2D>(-omegaMax, domega, omegaMax,  0, domega, omegaMax);
+			selfEmission_E = std::make_shared<Histogram2D>(-omegaMax, domega, omegaMax,  0, domega, omegaMax);
+		}
 	}
 	
 	void calcStateRelated(const FeynWann::StateE& state, std::vector<diagMatrix>& F, std::vector<diagMatrix>& ImE)
@@ -133,6 +140,12 @@ struct CollectImEps
 				{	double weight = weight_F * emissionPrefac * std::pow(omega, 3);
 					Emission_E->addEvent(E[v], omega, -weight * F[0][c]); //hole
 					Emission_E->addEvent(E[c], omega, +weight * (1.-F[0][v])); //electron
+				}
+				if(relevantEmission and relevantImEps)
+				{	double weight = weight_F * (F[0][v]-F[0][c]) //ImEps part
+						* selfEmissionPrefac * omega * P(c,v).norm(); //emission part
+					selfEmission_E->addEvent(E[v], omega, weight * F[0][c]); //hole
+					selfEmission_E->addEvent(E[c], omega, weight * (1.-F[0][v])); //electron
 				}
 			}
 		}
@@ -387,6 +400,11 @@ int main(int argc, char** argv)
 	if(emission)
 	{	cie.Emission_E->allReduce(MPIUtil::ReduceSum);
 		cie.Emission_E->print("emission"+fileSuffix+".dat", 1./eV, 1./eV, 1.);
+		//Self-emission part for direct contributions:
+		if(contribType == Direct)
+		{	cie.selfEmission_E->allReduce(MPIUtil::ReduceSum);
+			cie.selfEmission_E->print("selfEmission"+fileSuffix+".dat", 1./eV, 1./eV, 1.);
+		}
 	}
 	logPrintf("done.\n"); logFlush();
 	
