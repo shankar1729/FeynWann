@@ -465,18 +465,14 @@ tTransformByCompute(1), tTransformByComputeD(1), inEphLoop(false)
 		//Benchmark e-ph transform and compute to optimize masked computations, if needed:
 		if(fwp.maskOptimize)
 		{	logPrintf("Benchmarking e-ph transform and single-point compute: "); logFlush();
-			const double tMin = 0.5; //time for at least 0.5 s
-			const int nMin = 3; //time at least 3 evaluations
+			const int nRepeat = 5;
 			#define TIMErepeated(funcName) \
 				double funcName##Time = 0.; \
-				{	double tStart = clock_sec(), t=0.; \
-					int nTries = 0; \
-					while(nTries<nMin or t<tMin) \
+				{	double tStart = clock_sec(); \
+					for(int iRepeat=0; iRepeat < nRepeat; iRepeat++) \
 					{	HePhW->funcName(vector3<>(), vector3<>()); \
-						nTries++; \
-						t = clock_sec()-tStart; \
 					} \
-					funcName##Time = t / nTries; \
+					funcName##Time = (clock_sec() - tStart) / nRepeat; \
 				}
 			TIMErepeated(compute)
 			TIMErepeated(transform)
