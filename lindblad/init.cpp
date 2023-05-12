@@ -46,6 +46,14 @@ struct membuf: std::streambuf // derive because std::streambuf constructor is pr
 {	membuf(std::vector<char>& buf) { setp(buf.data(), buf.data()+buf.size()); } // set start end end pointers
 };
 
+
+enum BandSelection {ElectronsOnly, HolesOnly, AllBands};
+EnumStringMap<BandSelection> bandSelectionMap(
+	ElectronsOnly, "electrons-only",
+	HolesOnly, "holes-only",
+	AllBands, "all-bands"
+);
+
 //Lindblad initialization using FeynWann callback
 struct LindbladInit
 {	
@@ -54,6 +62,7 @@ struct LindbladInit
 	const size_t nkTot; //!< total k-points effectively used in BZ sampling
 	
 	const double dmuMin, dmuMax, Tmax;
+	const BandSelection bandSelection; //!< which sets of bands to include (e, h or all)
 	const double pumpOmegaMax, probeOmegaMax;
 	
 	const bool ePhEnabled; //!< whether e-ph coupling is enabled
@@ -62,10 +71,11 @@ struct LindbladInit
 	const bool defectEnabled; //!< if defect scattering is enabled with phonons
 	
 	LindbladInit(FeynWann& fw, const vector3<int>& NkFine,
-		double dmuMin, double dmuMax, double Tmax, double pumpOmegaMax, double probeOmegaMax,
+		double dmuMin, double dmuMax, double Tmax, BandSelection bandSelection,
+		double pumpOmegaMax, double probeOmegaMax,
 		bool ePhEnabled, double ePhDelta, bool defectEnabled)
 	: fw(fw), NkFine(NkFine), nkTot(NkFine[0]*NkFine[1]*NkFine[2]),
-		dmuMin(dmuMin), dmuMax(dmuMax), Tmax(Tmax),
+		dmuMin(dmuMin), dmuMax(dmuMax), Tmax(Tmax), bandSelection(bandSelection),
 		pumpOmegaMax(pumpOmegaMax), probeOmegaMax(probeOmegaMax),
 		ePhEnabled(ePhEnabled), ePhDelta(ePhDelta), defectEnabled(defectEnabled)
 	{
@@ -158,10 +168,25 @@ struct LindbladInit
 		logPrintf("done.\n"); logFlush();
 		mpiWorld->allReduce(EvMax, MPIUtil::ReduceMax);
 		mpiWorld->allReduce(EcMin, MPIUtil::ReduceMin);
+		logPrintf("Max occupied energy across dmu range: %.3lf eV\n", EvMax/eV);
+		logPrintf("Min unoccupied energy across dmu range: %.3lf eV\n", EcMin/eV);
 		//--- add margins of max phonon energy, energy conservation width and fermiPrime width
 		double Emargin =7.*Tmax; //neglect below 10^-3 occupation deviation from equilibrium
 		Estart = std::min(EcMin - pumpOmegaMax, EvMax) - Emargin;
 		Estop = std::max(EvMax + pumpOmegaMax, EcMin) + Emargin;
+		//--- apply band selections if any
+		double Emid = 0.5 * (EvMax + EcMin);
+		switch(bandSelection)
+		{	case ElectronsOnly:
+				Estart = Emid;
+				logPrintf("Restricting lower end of energy range to only include electrons.\n");
+				break;
+			case HolesOnly:
+				Estop = Emid;
+				logPrintf("Restricting upper end of energy range to only include holes.\n");
+				break;
+			default:;
+		}
 		logPrintf("Active energy range: %.3lf to %.3lf eV\n", Estart/eV, Estop/eV);
 		
 		//Select k-points:
@@ -770,6 +795,11 @@ int main(int argc, char** argv)
 	const double dmuMin = inputMap.get("dmuMin", 0.) * eV; //optional: lowest shift in fermi level from neutral value / VBM in eV (default: 0)
 	const double dmuMax = inputMap.get("dmuMax", 0.) * eV; //optional: highest shift in fermi level from neutral value / VBM in eV (default: 0)
 	const double Tmax = inputMap.get("Tmax") * Kelvin; //maximum temperature in Kelvin (ambient phonon T = initial electron T)
+	//--- which bands to use
+	const string bandSelectionStr = inputMap.has("bandSelection") ? inputMap.getString("bandSelection") : "all-bands";
+	BandSelection bandSelection;
+	if(not bandSelectionMap.getEnum(bandSelectionStr.c_str(), bandSelection))
+		die("bandSelection must be one of %s\n", bandSelectionMap.optionList().c_str());
 	//--- pump
 	const double pumpOmegaMax = inputMap.get("pumpOmegaMax") * eV; //maximum pump frequency in eV
 	const double probeOmegaMax = inputMap.get("probeOmegaMax") * eV; //maximum probe frequency in eV
@@ -787,6 +817,7 @@ int main(int argc, char** argv)
 	logPrintf("dmuMin = %lg\n", dmuMin);
 	logPrintf("dmuMax = %lg\n", dmuMax);
 	logPrintf("Tmax = %lg\n", Tmax);
+	logPrintf("bandSelection = %s\n", bandSelectionMap.getString(bandSelection));
 	logPrintf("pumpOmegaMax = %lg\n", pumpOmegaMax);
 	logPrintf("probeOmegaMax = %lg\n", probeOmegaMax);
 	logPrintf("ePhMode = %s\n", ePhMode.c_str());
@@ -841,7 +872,7 @@ int main(int argc, char** argv)
 	}
 	
 	//Create and initialize lindblad calculator:
-	LindbladInit lb(fw, NkFine, dmuMin, dmuMax, Tmax, pumpOmegaMax, probeOmegaMax, ePhEnabled, ePhDelta, defectEnabled);
+	LindbladInit lb(fw, NkFine, dmuMin, dmuMax, Tmax, bandSelection, pumpOmegaMax, probeOmegaMax, ePhEnabled, ePhDelta, defectEnabled);
 	
 	//First pass (e only): select k-points
 	fw.energyOnly = true;
