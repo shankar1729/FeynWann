@@ -17,6 +17,8 @@ struct LindbladModify
 	TaskDivision kDivision;
 	size_t ikStart, ikStop, nkMine; //!< range and number of selected k-points on this process
 	std::vector<LindbladFile::Kpoint> kpoints;
+	FeynWannParams fwp;
+	double mu;
 	
 	LindbladModify(int argc, char** argv)
 	{
@@ -28,22 +30,28 @@ struct LindbladModify
 		prefix = inputMap.getString("prefix"); //file prefix to read/write DFT information from
 		inFile = inputMap.getString("inFile"); //input lindblad data file name
 		outFile = inputMap.getString("outFile"); //output lindblad data file name
+		fwp = FeynWannParams(&inputMap); //need settings like scissor to match energies
 		
 		logPrintf("\nInputs after conversion to atomic units:\n");
 		logPrintf("prefix = %s\n", prefix.c_str());
 		logPrintf("inFile = %s\n", inFile.c_str());
 		logPrintf("outFile = %s\n", outFile.c_str());
+		fwp.printParams();
+		
+		//Get key DFT parameters using FeynWann:
+		FeynWann fw(fwp);
+		mu = fw.mu;
 	}
 	
 	void run()
 	{	read();
-		
 		if(dryRun)
-		{	print_kpoint_list();
+		{	printKpointList();
+			logPrintf("Use JDFTx to generate eigenvals, momenta, L and S (if applicable) for the above kpoints.\n\n");
 			logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
 			return;
 		}
-		
+		updateMatrixElements();
 		write();
 	}
 	
@@ -74,7 +82,7 @@ struct LindbladModify
 		logPrintf("done.\n");
 	}
 	
-	void print_kpoint_list()
+	void printKpointList()
 	{	//Compile list of all k-points:
 		std::vector<vector3<>> k(h.nk);
 		for(size_t ik=ikStart; ik<ikStop; ik++)
@@ -90,11 +98,94 @@ struct LindbladModify
 			fprintf(fp, "symmetries none\n");
 			double wk = 1.0 / h.nk;
 			for(const vector3<>& ki: k)
-				fprintf(fp, "kpoint %+15.12lf %+15.12lf %+15.12lf %.12lf\n",
+				fprintf(fp, "kpoint %+15.12lf %+15.12lf %+15.12lf %.15le\n",
 					ki[0], ki[1], ki[2], wk);
 			fclose(fp);
 		}
 		logPrintf("done.\n");
+	}
+	
+	void updateMatrixElements()
+	{	//Get number of DFT bands from eigenvals size:
+		int nBands = int(fileSize((prefix + ".eigenvals").c_str()) / (h.nk * sizeof(double)));
+		size_t sizeE = nBands * sizeof(double); //size per k-point
+		size_t sizeP = 3 * nBands * nBands * sizeof(complex); //size per k-point, same for L and S
+		
+		//Open all relevant matrix element files:
+		MPIUtil::File fpE, fpP, fpL, fpS;
+		mpiWorld->fopenRead(fpE, (prefix + ".eigenvals").c_str(), h.nk * sizeE);
+		mpiWorld->fopenRead(fpP, (prefix + ".momenta").c_str(), h.nk * sizeP);
+		mpiWorld->fopenRead(fpL, (prefix + ".L").c_str(), h.nk * sizeP);
+		if(h.spinorial) mpiWorld->fopenRead(fpS, (prefix + ".S").c_str(), h.nk * sizeP);
+		
+		//Process each k-point separately:
+		mpiWorld->fseek(fpE, ikStart * sizeE, SEEK_SET);
+		mpiWorld->fseek(fpP, ikStart * sizeP, SEEK_SET);
+		mpiWorld->fseek(fpL, ikStart * sizeP, SEEK_SET);
+		if(h.spinorial) mpiWorld->fseek(fpS, ikStart * sizeP, SEEK_SET);
+		//--- allocate common variables for all DFT input
+		diagMatrix E(nBands);
+		std::vector<matrix> P(3, zeroes(nBands, nBands)), L(3, zeroes(nBands, nBands)), S;
+		if(h.spinorial) S.assign(3, zeroes(nBands, nBands));
+		//--- collect error statistics in matrix elements
+		double maeE = 0.0, maeP = 0.0, maeS = 0.0, maeL = 0.0;
+		for(LindbladFile::Kpoint& kpoint: kpoints)
+		{
+			//Read DFT matrix elements:
+			mpiWorld->freadData(E, fpE);
+			for(matrix& Pi: P) mpiWorld->freadData(Pi, fpP);
+			for(matrix& Li: L) mpiWorld->freadData(Li, fpL);
+			if(h.spinorial) for(matrix& Si: S) mpiWorld->freadData(Si, fpS);
+			
+			//Shift DFT energies to same scale as FeynWann:
+			for(double& Ei: E) Ei -= mu;
+			if(fwp.scissor) fwp.applyScissor(E);
+			
+			//Align DFT energies with those in data file (find window offsets):
+			int outerStart = 0;
+			double maeEcur = DBL_MAX;
+			for(int bStart=0; bStart<(nBands - kpoint.nOuter); bStart++)
+			{	double maeEtest = 0.0;
+				for(int b=0; b<kpoint.nOuter; b++)
+					maeEtest += fabs(E[bStart + b] - kpoint.E[b]);
+				maeEtest *= (1.0 / kpoint.nOuter);
+				if(maeEtest < maeEcur)
+				{	maeEcur = maeEtest;
+					outerStart = bStart;
+				}
+			}
+			maeE += maeEcur;
+			int outerStop = outerStart + kpoint.nOuter;
+			int innerStart = outerStart + kpoint.innerStart; //start of inner window in DFT set
+			int innerStop = innerStart + kpoint.nInner;
+			
+			//Select active energy window matrix elements from DFT:
+			diagMatrix Esub = E(outerStart, outerStop);
+			std::vector<matrix> Psub(3), Lsub(3), Ssub(3);
+			for(int iDir=0; iDir<3; iDir++)
+			{	Psub[iDir] = P[iDir](innerStart, innerStop, outerStart, outerStop);
+				Lsub[iDir] = L[iDir](innerStart, innerStop, innerStart, innerStop);
+				if(h.spinorial)
+					Ssub[iDir] = S[iDir](innerStart, innerStop, innerStart, innerStop);
+			}
+			
+			logPrintf("\nk: ");
+			kpoint.k.print(globalLog, " %lg ");
+			Esub.print(globalLog);
+			kpoint.E.print(globalLog);
+		}
+		
+		//Report matrix element error statistics:
+		mpiWorld->allReduce(maeE, MPIUtil::ReduceSum); maeE /= h.nk; logPrintf("MAE(E): %le\n", maeE);
+		mpiWorld->allReduce(maeP, MPIUtil::ReduceSum); maeP /= h.nk; logPrintf("MAE(P): %le\n", maeP);
+		if(h.spinorial) { mpiWorld->allReduce(maeS, MPIUtil::ReduceSum); maeS /= h.nk; logPrintf("MAE(S): %le\n", maeS); }
+		if(h.haveL) { mpiWorld->allReduce(maeL, MPIUtil::ReduceSum); maeL /= h.nk; logPrintf("MAE(L): %le\n", maeL); }
+		
+		//Close matrix element files:
+		mpiWorld->fclose(fpE);
+		mpiWorld->fclose(fpP);
+		mpiWorld->fclose(fpL);
+		if(h.spinorial) mpiWorld->fclose(fpS);
 	}
 	
 	void write()
