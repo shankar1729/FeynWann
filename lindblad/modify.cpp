@@ -16,6 +16,17 @@ double mean_abs(const matrix& X)
 	return sum_abs / X.nData();
 }
 
+//Elementwise multiply X.conj * Y (used for phase matching)
+matrix elementwise_multiply_conj(const matrix& X, const matrix& Y)
+{	assert(X.nData() == Y.nData());
+	matrix result(Y); //modifiable copy
+	complex* resultData = result.data();
+	const complex* Xdata = X.data();
+	for(size_t i=0; i<X.nData(); i++)
+		resultData[i] *= Xdata[i].conj();
+	return result;
+}
+
 
 struct LindbladModify
 {
@@ -140,8 +151,11 @@ struct LindbladModify
 		if(h.spinorial) S.assign(3, zeroes(nBands, nBands));
 		//--- collect error statistics in matrix elements
 		double maeE = 0.0, maeP = 0.0, maeS = 0.0, maeL = 0.0;
-		for(LindbladFile::Kpoint& kpoint: kpoints)
-		{
+		logPrintf("Updating matrix elements: "); logFlush();
+		size_t ikInterval = std::max(1, int(round(nkMine/50.))); //interval for reporting progress
+		for(size_t ik=0; ik<nkMine; ik++)
+		{	LindbladFile::Kpoint& kpoint = kpoints[ik];
+			
 			//Read DFT matrix elements:
 			mpiWorld->freadData(E, fpE);
 			for(matrix& Pi: P) mpiWorld->freadData(Pi, fpP);
@@ -236,8 +250,30 @@ struct LindbladModify
 				bStart = bStop;
 			}
 			for(matrix& Pi: Pinner) Pi = dagger(Vinner) * Pi * Vinner;
-			for(matrix& Li: Pinner) Li = dagger(Vinner) * Li * Vinner;
-			if(h.spinorial) for(matrix& Si: Pinner) Si = dagger(Vinner) * Si * Vinner;
+			for(matrix& Li: Linner) Li = dagger(Vinner) * Li * Vinner;
+			if(h.spinorial) for(matrix& Si: Sinner) Si = dagger(Vinner) * Si * Vinner;
+			
+			//Fix relative phases of states (for off-diagonal matrix elements):
+			matrix conjProduct = zeroes(kpoint.nInner, kpoint.nInner);
+			for(int iDir=0; iDir<3; iDir++)
+			{	// conjProduct += elementwise_multiply_conj(Pinner[iDir], PinnerW[iDir]);
+				if(h.spinorial) conjProduct += elementwise_multiply_conj(Sinner[iDir], kpoint.S[iDir]);
+			}
+			//--- The phase of each off-diagonal element in conjProduct is now the best fit relative phase for that state pair.
+			//--- Now find a consistent phase for each state that best matches these pair relative phases.
+			std::vector<complex> phase(kpoint.nInner, complex(1.0)); //WLOG let first state have zero phase (storing cis(phase))
+			for(int b1=1; b1<kpoint.nInner; b1++)
+			{	//Reference phase to all previous cases:
+				complex conjProductSum;
+				for(int b2=0; b2<b1; b2++)
+					conjProductSum += phase[b2].conj() * conjProduct(b2, b1);
+				phase[b1] = conjProductSum / conjProductSum.abs(); //make unit complex number
+			}
+			//--- apply phase
+			matrix phaseMat(phase);
+			for(matrix& Pi: Pinner) Pi = dagger(phaseMat) * Pi * phaseMat;
+			for(matrix& Li: Linner) Li = dagger(phaseMat) * Li * phaseMat;
+			if(h.spinorial) for(matrix& Si: Sinner) Si = dagger(phaseMat) * Si * phaseMat;
 			
 			//Replace matrix elements with DFT versions wherever possible:
 			kpoint.E = Eouter;
@@ -252,7 +288,11 @@ struct LindbladModify
 				if(h.haveL) maeL += mean_abs(Linner[iDir] - kpoint.L[iDir]) / 3;
 				kpoint.L[iDir] = Linner[iDir];
 			}
+			
+			//Print progress:
+			if((ik+1)%ikInterval==0) { logPrintf("%d%% ", int(round((ik+1)*100./nkMine))); logFlush(); }
 		}
+		logPrintf("done.\n"); logFlush();
 		
 		//Report matrix element error statistics:
 		mpiWorld->allReduce(maeE, MPIUtil::ReduceSum); maeE /= h.nk; logPrintf("MAE(E): %le\n", maeE);
