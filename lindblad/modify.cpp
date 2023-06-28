@@ -8,6 +8,7 @@
 
 struct LindbladModify
 {
+	bool dryRun;
 	string prefix;
 	string inFile;
 	string outFile;
@@ -20,7 +21,8 @@ struct LindbladModify
 	LindbladModify(int argc, char** argv)
 	{
 		InitParams ip = FeynWann::initialize(argc, argv, "Modify Lindblad sparse matrices to include DFT matrix elements");
-
+		dryRun = ip.dryRun;
+		
 		//Get the system parameters:
 		InputMap inputMap(ip.inputFilename);
 		prefix = inputMap.getString("prefix"); //file prefix to read/write DFT information from
@@ -35,6 +37,13 @@ struct LindbladModify
 	
 	void run()
 	{	read();
+		
+		if(dryRun)
+		{	print_kpoint_list();
+			logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
+			return;
+		}
+		
 		write();
 	}
 	
@@ -62,7 +71,29 @@ struct LindbladModify
 		{	LindbladFile::Kpoint& kpoint = kpoints[ikMine];
 			kpoint.read(fp, mpiWorld, h);
 		}
+		logPrintf("done.\n");
+	}
+	
+	void print_kpoint_list()
+	{	//Compile list of all k-points:
+		std::vector<vector3<>> k(h.nk);
+		for(size_t ik=ikStart; ik<ikStop; ik++)
+			k[ik] = kpoints[ik - ikStart].k;
+		mpiWorld->allReduceData(k, MPIUtil::ReduceSum);
 		
+		//Write file in bandstruct.kpoints format:
+		string fname = prefix + ".kpoints";
+		logPrintf("Writing %s ... ", fname.c_str()); logFlush();
+		if(mpiWorld->isHead())
+		{	FILE* fp = fopen(fname.c_str(), "w");
+			fprintf(fp, "kpoint-folding 1 1 1\n");
+			fprintf(fp, "symmetries none\n");
+			double wk = 1.0 / h.nk;
+			for(const vector3<>& ki: k)
+				fprintf(fp, "kpoint %+15.12lf %+15.12lf %+15.12lf %.12lf\n",
+					ki[0], ki[1], ki[2], wk);
+			fclose(fp);
+		}
 		logPrintf("done.\n");
 	}
 	
