@@ -41,11 +41,6 @@ template<typename ArrayType> struct IndexCompare
 	template<typename Integer> bool operator()(Integer i1, Integer i2) const { return array[i1] < array[i2]; }
 };
 
-//Helper class to use ostream functions on a memory buffer
-struct membuf: std::streambuf // derive because std::streambuf constructor is protected
-{	membuf(std::vector<char>& buf) { setp(buf.data(), buf.data()+buf.size()); } // set start end end pointers
-};
-
 
 enum BandSelection {ElectronsOnly, HolesOnly, AllBands};
 EnumStringMap<BandSelection> bandSelectionMap(

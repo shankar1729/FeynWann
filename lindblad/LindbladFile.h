@@ -277,4 +277,9 @@ namespace LindbladFile
 	};
 }
 
+//Helper class to use ostream functions on a memory buffer
+struct membuf: std::streambuf // derive because std::streambuf constructor is protected
+{	membuf(std::vector<char>& buf) { setp(buf.data(), buf.data()+buf.size()); } // set start end end pointers
+};
+
 #endif //FEYNWANN_LINDBLADFILE_H
