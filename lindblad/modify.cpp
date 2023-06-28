@@ -6,6 +6,17 @@
 #include <InputMap.h>
 #include <lindblad/LindbladFile.h>
 
+
+//Mean absolute value of matrix
+double mean_abs(const matrix& X)
+{	double sum_abs = 0.0;
+	const complex* Xdata = X.data();
+	for(size_t i=0; i<X.nData(); i++)
+		sum_abs += Xdata[i].abs();
+	return sum_abs / X.nData();
+}
+
+
 struct LindbladModify
 {
 	bool dryRun;
@@ -160,19 +171,87 @@ struct LindbladModify
 			int innerStop = innerStart + kpoint.nInner;
 			
 			//Select active energy window matrix elements from DFT:
-			diagMatrix Esub = E(outerStart, outerStop);
-			std::vector<matrix> Psub(3), Lsub(3), Ssub(3);
+			diagMatrix Eouter = E(outerStart, outerStop);
+			diagMatrix Einner = E(innerStart, innerStop);
+			std::vector<matrix> PinnerW(3), Pinner(3), Linner(3), Sinner(3);
 			for(int iDir=0; iDir<3; iDir++)
-			{	Psub[iDir] = P[iDir](innerStart, innerStop, outerStart, outerStop);
-				Lsub[iDir] = L[iDir](innerStart, innerStop, innerStart, innerStop);
+			{	PinnerW[iDir] = kpoint.P[iDir](
+					0, kpoint.nInner, kpoint.innerStart, kpoint.innerStart + kpoint.nInner
+				); //Wannier version in data file has optional outer components dropped here
+				Pinner[iDir] = P[iDir](innerStart, innerStop, innerStart, innerStop);
+				Linner[iDir] = L[iDir](innerStart, innerStop, innerStart, innerStop);
 				if(h.spinorial)
-					Ssub[iDir] = S[iDir](innerStart, innerStop, innerStart, innerStop);
+					Sinner[iDir] = S[iDir](innerStart, innerStop, innerStart, innerStop);
 			}
 			
-			logPrintf("\nk: ");
-			kpoint.k.print(globalLog, " %lg ");
-			Esub.print(globalLog);
-			kpoint.E.print(globalLog);
+			//Resolve degeneracies within inner window using all available matrix elements:
+			matrix Vinner(eye(kpoint.nInner)); //dgenerate-subspace rotations of DFT to match Wannier
+			for(int bStart=0; bStart<kpoint.nInner;)
+			{	int bStop = bStart + 1;
+				while(
+					(bStop < kpoint.nInner) and
+					(Einner[bStop] < Einner[bStart] + fwp.degeneracyThreshold)
+				)
+					bStop++;
+				int bSize = bStop - bStart; //size of current degenerate subspace
+				if(bSize > + 1)
+				{	//Find best of several random perturbations at resolving degeneracy:
+					double deig_best = 0.0; //highest eigenvalue separation introduced by perturbation
+					matrix VdftBest, VwBest;
+					for(int iRepeat=0; iRepeat<10; iRepeat++)
+					{	matrix Hdft = zeroes(bSize, bSize), Hw = zeroes(bSize, bSize);
+						double wSqSum = 0.0;
+						for(int iDir=0; iDir<3; iDir++)
+						{	//Use P matrix elements:
+							double w = Random::normal();
+							Hdft += w * Pinner[iDir](bStart, bStop, bStart, bStop);
+							Hw += w * PinnerW[iDir](bStart, bStop, bStart, bStop);
+							wSqSum += w * w;
+							//Use S matrix elements if available:
+							if(h.spinorial)
+							{	w = Random::normal();
+								Hdft += w * Sinner[iDir](bStart, bStop, bStart, bStop);
+								Hw += w * kpoint.S[iDir](bStart, bStop, bStart, bStop);
+								wSqSum += w * w;
+							}
+						}
+						double normFac = 1.0 / sqrt(wSqSum);
+						Hdft *= normFac;
+						Hw *= normFac;
+						
+						//Diagonalize and check extent of degeneracy resolution:
+						diagMatrix Edft, Ew; matrix Vdft;
+						Hdft.diagonalize(Vdft, Edft);
+						double deig = DBL_MAX;
+						for(int b=0; b<bSize-1; b++)
+							deig = std::min(deig, Edft[b+1] - Edft[b]);
+						if(deig > deig_best)
+						{	deig_best = deig;
+							VdftBest = Vdft;
+							Hw.diagonalize(VwBest, Ew);
+						}
+					}
+					Vinner.set(bStart, bStop, bStart, bStop, VdftBest * dagger(VwBest));
+				}
+				bStart = bStop;
+			}
+			for(matrix& Pi: Pinner) Pi = dagger(Vinner) * Pi * Vinner;
+			for(matrix& Li: Pinner) Li = dagger(Vinner) * Li * Vinner;
+			if(h.spinorial) for(matrix& Si: Pinner) Si = dagger(Vinner) * Si * Vinner;
+			
+			//Replace matrix elements with DFT versions wherever possible:
+			kpoint.E = Eouter;
+			for(int iDir=0; iDir<3; iDir++)
+			{	maeP += mean_abs(Pinner[iDir] - PinnerW[iDir]) / 3;
+				if(kpoint.nInner == kpoint.nOuter) //only replace P when no outer bands
+					kpoint.P[iDir] = Pinner[iDir];
+				if(h.spinorial)
+				{	maeS += mean_abs(Sinner[iDir] - kpoint.S[iDir]) / 3;
+					kpoint.S[iDir] = Sinner[iDir];
+				}
+				if(h.haveL) maeL += mean_abs(Linner[iDir] - kpoint.L[iDir]) / 3;
+				kpoint.L[iDir] = Linner[iDir];
+			}
 		}
 		
 		//Report matrix element error statistics:
@@ -186,6 +265,7 @@ struct LindbladModify
 		mpiWorld->fclose(fpP);
 		mpiWorld->fclose(fpL);
 		if(h.spinorial) mpiWorld->fclose(fpS);
+		h.haveL = true; //L matrix elements have been set now, even if originally not present
 	}
 	
 	void write()
