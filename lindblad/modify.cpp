@@ -199,7 +199,7 @@ struct LindbladModify
 			}
 			
 			//Resolve degeneracies within inner window using all available matrix elements:
-			matrix Vinner(eye(kpoint.nInner)); //dgenerate-subspace rotations of DFT to match Wannier
+			matrix Vdft(eye(kpoint.nInner)), Vw(eye(kpoint.nInner)); //matching DFT and Wannier degenerate-subspace rotations
 			for(int bStart=0; bStart<kpoint.nInner;)
 			{	int bStop = bStart + 1;
 				while(
@@ -208,10 +208,10 @@ struct LindbladModify
 				)
 					bStop++;
 				int bSize = bStop - bStart; //size of current degenerate subspace
-				if(bSize > + 1)
+				if(bSize > 1)
 				{	//Find best of several random perturbations at resolving degeneracy:
 					double deig_best = 0.0; //highest eigenvalue separation introduced by perturbation
-					matrix VdftBest, VwBest;
+					matrix VdftSubBest, VwSubBest;
 					for(int iRepeat=0; iRepeat<10; iRepeat++)
 					{	matrix Hdft = zeroes(bSize, bSize), Hw = zeroes(bSize, bSize);
 						double wSqSum = 0.0;
@@ -234,31 +234,37 @@ struct LindbladModify
 						Hw *= normFac;
 						
 						//Diagonalize and check extent of degeneracy resolution:
-						diagMatrix Edft, Ew; matrix Vdft;
-						Hdft.diagonalize(Vdft, Edft);
+						diagMatrix EdftSub, EwSub; matrix VdftSub;
+						Hdft.diagonalize(VdftSub, EdftSub);
 						double deig = DBL_MAX;
 						for(int b=0; b<bSize-1; b++)
-							deig = std::min(deig, Edft[b+1] - Edft[b]);
+							deig = std::min(deig, EdftSub[b+1] - EdftSub[b]);
 						if(deig > deig_best)
 						{	deig_best = deig;
-							VdftBest = Vdft;
-							Hw.diagonalize(VwBest, Ew);
+							VdftSubBest = VdftSub;
+							Hw.diagonalize(VwSubBest, EwSub);
 						}
 					}
-					Vinner.set(bStart, bStop, bStart, bStop, VdftBest * dagger(VwBest));
+					Vdft.set(bStart, bStop, bStart, bStop, VdftSubBest);
+					Vw.set(bStart, bStop, bStart, bStop, VwSubBest);
 				}
 				bStart = bStop;
 			}
-			for(matrix& Pi: Pinner) Pi = dagger(Vinner) * Pi * Vinner;
-			for(matrix& Li: Linner) Li = dagger(Vinner) * Li * Vinner;
-			if(h.spinorial) for(matrix& Si: Sinner) Si = dagger(Vinner) * Si * Vinner;
 			
 			//Fix relative phases of states (for off-diagonal matrix elements):
 			matrix conjProduct = zeroes(kpoint.nInner, kpoint.nInner);
 			for(int iDir=0; iDir<3; iDir++)
-			{	// conjProduct += elementwise_multiply_conj(Pinner[iDir], PinnerW[iDir]);
-				if(h.spinorial) conjProduct += elementwise_multiply_conj(Sinner[iDir], kpoint.S[iDir]);
+			{	conjProduct += elementwise_multiply_conj(
+					dagger(Vdft) * Pinner[iDir] * Vdft,
+					dagger(Vw) * PinnerW[iDir] * Vw
+				);
+				if(h.spinorial)
+					conjProduct += elementwise_multiply_conj(
+						dagger(Vdft) * Sinner[iDir] * Vdft,
+						dagger(Vw) * kpoint.S[iDir] * Vw
+					);
 			}
+			
 			//--- The phase of each off-diagonal element in conjProduct is now the best fit relative phase for that state pair.
 			//--- Now find a consistent phase for each state that best matches these pair relative phases.
 			std::vector<complex> phase(kpoint.nInner, complex(1.0)); //WLOG let first state have zero phase (storing cis(phase))
@@ -266,14 +272,14 @@ struct LindbladModify
 			{	//Reference phase to all previous cases:
 				complex conjProductSum;
 				for(int b2=0; b2<b1; b2++)
-					conjProductSum += phase[b2].conj() * conjProduct(b2, b1);
+					conjProductSum += phase[b2] * conjProduct(b2, b1);
 				phase[b1] = conjProductSum / conjProductSum.abs(); //make unit complex number
 			}
-			//--- apply phase
-			matrix phaseMat(phase);
-			for(matrix& Pi: Pinner) Pi = dagger(phaseMat) * Pi * phaseMat;
-			for(matrix& Li: Linner) Li = dagger(phaseMat) * Li * phaseMat;
-			if(h.spinorial) for(matrix& Si: Sinner) Si = dagger(phaseMat) * Si * phaseMat;
+			//--- apply unitary rotations and phase together to match DFT to Wannier
+			matrix rot = Vdft * matrix(phase) * dagger(Vw);
+			for(matrix& Pi: Pinner) Pi = dagger(rot) * Pi * rot;
+			for(matrix& Li: Linner) Li = dagger(rot) * Li * rot;
+			if(h.spinorial) for(matrix& Si: Sinner) Si = dagger(rot) * Si * rot;
 			
 			//Replace matrix elements with DFT versions wherever possible:
 			kpoint.E = Eouter;
