@@ -156,11 +156,6 @@ Lindblad::Lindblad(const LindbladParams& lp)
 		}
 		if(lp.valleyMode != ValleyNone) isKall[s.ik] = isKvalley(s.k);
 		
-		//Set initial occupations:
-		s.rho0.resize(s.nInner);
-		for(int b=0; b<s.nInner; b++)
-			s.rho0[b] = fermi((s.E[b+s.innerStart] - lp.dmu) * lp.invT);
-		
 		//Initialize H0 used for interaction picture:
 		s.E0 = s.E(s.innerStart, s.innerStop); //default: diagonal using energies from data file
 		if(lp.Bext.isNonzero())
@@ -181,6 +176,11 @@ Lindblad::Lindblad(const LindbladParams& lp)
 				spinEchoOmegaDen += weight;
 			}
 		}
+
+		//Set initial occupations:
+		s.rho0.resize(s.nInner);
+		for(int b=0; b<s.nInner; b++)
+			s.rho0[b] = fermi((s.E[b+s.innerStart] - lp.dmu) * lp.invT);
 		
 		//Initialize density matrix and time derivative:
 		s.rho = matrix(s.rho0);
