@@ -217,7 +217,7 @@ void Lindblad::report(double t, const DM1& drho) const
 		: 0; //don't save distributions
 	std::vector<Histogram> dist(nDist, Histogram(Emin, lp.dE, Emax));
 	const double prefac = spinWeight*(1./nkTot); //BZ integration weight
-	double Etot = 0., dfMax = 0.; vector3<> Stot;
+	double Etot = 0., dfMax = 0.; vector3<> Stot; vector3<> Ssqtot;
 	double entropy = 0.;
 	for(const State& s: state)
 	{	setState(t, drho, (State&)s); //update Schrodinger-picture quantities
@@ -245,13 +245,19 @@ void Lindblad::report(double t, const DM1& drho) const
 		{	const complex* drhoData = s.drho.data();
 			vector3<const complex*> Sdata; for(int k=0; k<3; k++) Sdata[k] = s.S[k].data();
 			std::vector<vector3<>> Sband(s.nInner); //spin expectation by band S_b := sum_a S_ba drho_ab
+			std::vector<vector3<>> Ssqband(s.nInner); //squared spin expectation by band S_b := sum_a S_ba drho_ab
 			for(int b2=0; b2<s.nInner; b2++)
 			{	for(int b1=0; b1<s.nInner; b1++)
 				{	complex weight = prefac * (*(drhoData++)).conj();
 					for(int iDir=0; iDir<3; iDir++)
-						Sband[b2][iDir] += (weight * (*(Sdata[iDir]++))).real();
+					{
+						double bandContrib = (weight * (*(Sdata[iDir]++))).real();
+						Sband[b2][iDir] += bandContrib;
+						Ssqband[b2][iDir] += std::pow(bandContrib, 2);
+					}
 				}
 				Stot += Sband[b2];
+				Ssqtot += Ssqband[b2];
 			}
 			//Collect distribution based on per-band spin:
 			if(lp.saveDist)
@@ -268,13 +274,18 @@ void Lindblad::report(double t, const DM1& drho) const
 	}
 	mpiWorld->reduce(Etot, MPIUtil::ReduceSum);
 	mpiWorld->reduce(Stot, MPIUtil::ReduceSum);
+	mpiWorld->reduce(Ssqtot, MPIUtil::ReduceSum);
 	mpiWorld->reduce(dfMax, MPIUtil::ReduceMax);
 	mpiWorld->reduce(entropy, MPIUtil::ReduceSum);
 	for(Histogram& h: dist) h.reduce(MPIUtil::ReduceSum);
 	if(mpiWorld->isHead())
 	{	//Report step ID and energy:
 		logPrintf("Integrate: Step: %4d   t[fs]: %6.1lf   Etot[eV]: %.2le   dfMax: %.2le", stepID, t/fs, Etot/eV, dfMax);
-		if(spinorial) logPrintf("   S: [ %16.15lg %16.15lg %16.15lg ]", Stot[0],  Stot[1],  Stot[2]);
+		if(spinorial) 
+		{
+			logPrintf("   S: [ %16.15lg %16.15lg %16.15lg ]", Stot[0],  Stot[1],  Stot[2]);
+			logPrintf("   S^2: [ %16.15lg %16.15lg %16.15lg ]", Ssqtot[0],  Ssqtot[1],  Ssqtot[2]);
+		}
 		logPrintf("\n"); logFlush();
 		
 		//Report entropy:
