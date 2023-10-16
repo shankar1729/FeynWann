@@ -244,16 +244,20 @@ void Lindblad::report(double t, const DM1& drho) const
 		if(spinorial)
 		{	const complex* drhoData = s.drho.data();
 			vector3<const complex*> Sdata; for(int k=0; k<3; k++) Sdata[k] = s.S[k].data();
+			vector3<matrix> Ssq; vector3<const complex*> SsqData;
+			for(int k=0; k<3; k++)
+			{	Ssq[k] = s.S[k] * s.S[k];
+				SsqData[k] = Ssq[k].data();
+			}
 			std::vector<vector3<>> Sband(s.nInner); //spin expectation by band S_b := sum_a S_ba drho_ab
-			std::vector<vector3<>> Ssqband(s.nInner); //squared spin expectation by band S_b := sum_a S_ba drho_ab
+			std::vector<vector3<>> Ssqband(s.nInner); //spin expectation by band S_b := sum_a S_ba drho_ab
 			for(int b2=0; b2<s.nInner; b2++)
 			{	for(int b1=0; b1<s.nInner; b1++)
 				{	complex weight = prefac * (*(drhoData++)).conj();
 					for(int iDir=0; iDir<3; iDir++)
 					{
-						double bandContrib = (weight * (*(Sdata[iDir]++))).real();
-						Sband[b2][iDir] += bandContrib;
-						Ssqband[b2][iDir] += std::pow(bandContrib, 2);
+						Sband[b2][iDir] += (weight * (*(Sdata[iDir]++))).real();
+						Ssqband[b2][iDir] += (weight * (*(SsqData[iDir]++))).real();
 					}
 				}
 				Stot += Sband[b2];
