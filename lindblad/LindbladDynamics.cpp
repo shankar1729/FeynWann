@@ -213,11 +213,11 @@ void Lindblad::report(double t, const DM1& drho) const
 
 	//Total energy and distributions:
 	int nDist = lp.saveDist
-		? (spinorial ? 4 : 1) //number distribution only, or also spin distribution
+		? (spinorial ? 7 : 4) //number distribution only, or also spin distribution
 		: 0; //don't save distributions
 	std::vector<Histogram> dist(nDist, Histogram(Emin, lp.dE, Emax));
 	const double prefac = spinWeight*(1./nkTot); //BZ integration weight
-	double Etot = 0., dfMax = 0.; vector3<> Stot; vector3<> Ssqtot;
+	double Etot = 0., dfMax = 0.; vector3<> Stot, Ssqtot, jTot;
 	double entropy = 0.;
 	for(const State& s: state)
 	{	setState(t, drho, (State&)s); //update Schrodinger-picture quantities
@@ -275,9 +275,37 @@ void Lindblad::report(double t, const DM1& drho) const
 				}
 			}
 		}
+
+		drhoData = s.drho.data();
+		double prefacJ = prefac / Omega / (Ampere / std::pow(meter, 2));
+		vector3<const complex*> Pdata; for(int k=0; k<3; k++) Pdata[k] = s.P[k].data() + s.nInner*s.innerStart;
+		std::vector<vector3<>> Pband(s.nInner); //spin expectation by band P_b := sum_a P_ba drho_ab
+		for(int b2=0; b2<s.nInner; b2++)
+		{	for(int b1=0; b1<s.nInner; b1++)
+			{	complex weight = prefacJ * (*(drhoData++)).conj();
+				for(int iDir=0; iDir<3; iDir++)
+				{
+					Pband[b2][iDir] += (weight * (*(Pdata[iDir]++))).real();
+				}
+			}
+			jTot += Pband[b2];
+		}
+		//Collect distribution based on per-band spin:
+		int dirOffset = spinorial ? 4 : 1;
+		if(lp.saveDist)
+		{	for(int b=0; b<s.nInner; b++)
+			{	const double& E = s.E[b+s.innerStart];
+				int iEvent; double tEvent;
+				if(dist[1].eventPrecalc(E, iEvent, tEvent))
+				{	for(int iDir=0; iDir<3; iDir++)
+						dist[iDir+dirOffset].addEventPrecalc(iEvent, tEvent, Pband[b][iDir]);
+				}
+			}
+		}
 	}
 	mpiWorld->reduce(Etot, MPIUtil::ReduceSum);
 	mpiWorld->reduce(Stot, MPIUtil::ReduceSum);
+	mpiWorld->reduce(jTot, MPIUtil::ReduceSum);
 	mpiWorld->reduce(Ssqtot, MPIUtil::ReduceSum);
 	mpiWorld->reduce(dfMax, MPIUtil::ReduceMax);
 	mpiWorld->reduce(entropy, MPIUtil::ReduceSum);
@@ -290,6 +318,7 @@ void Lindblad::report(double t, const DM1& drho) const
 			logPrintf("   S: [ %16.15lg %16.15lg %16.15lg ]", Stot[0],  Stot[1],  Stot[2]);
 			logPrintf("   S^2: [ %16.15lg %16.15lg %16.15lg ]", Ssqtot[0],  Ssqtot[1],  Ssqtot[2]);
 		}
+		logPrintf("   j: [ %16.9le %16.9le %16.9le ] A/m^2", jTot[0],  jTot[1],  jTot[2]);
 		logPrintf("\n"); logFlush();
 		
 		//Report entropy:
@@ -308,6 +337,7 @@ void Lindblad::report(double t, const DM1& drho) const
 			ofs << "#E-mu/VBM[eV] n[eV^-1]";
 			if(spinorial)
 				ofs << "Sx[eV^-1] Sy[eV^-1] Sz[eV^-1]";
+			ofs << "jx[Am^-2eV^-1] jy[Am^-2eV^-1] jz[Am^-2eV^-1]";
 			ofs << "\n";
 			for(int iE=0; iE<dist[0].nE; iE++)
 			{	double E = Emin + iE*lp.dE;
