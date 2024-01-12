@@ -323,7 +323,7 @@ void Lindblad::report(double t, const DM1& drho) const
 			logPrintf("   S: [ %16.15lg %16.15lg %16.15lg ]", Stot[0],  Stot[1],  Stot[2]);
 			logPrintf("   S^2: [ %16.15lg %16.15lg %16.15lg ]", Ssqtot[0],  Ssqtot[1],  Ssqtot[2]);
 		}
-		logPrintf("   j: [ %16.9le %16.9le %16.9le ] A/m^2", jTot[0],  jTot[1],  jTot[2]);
+		logPrintf("\nj: [ %16.9le %16.9le %16.9le ] A/m^2", jTot[0],  jTot[1],  jTot[2]);
 		logPrintf("\n"); logFlush();
 		
 		//Report entropy:
