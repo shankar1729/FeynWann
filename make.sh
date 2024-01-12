@@ -12,6 +12,8 @@ CC=mpicc CXX=mpicxx FC=mpifort cmake \
 	-D EnableLibXC=yes \
 	-D LIBXC_PATH="/software/groups/ping_group/shared/libs/libxc-6.2.2/build" \
 	-D EnableProfiling=yes \
+        -D JDFTX_BUILD="/software/groups/ping_group/shared/apps/jdftx-1.7.0/build" \
+        -D JDFTX_SRC="/software/groups/ping_group/shared/apps/jdftx-1.7.0/jdftx" \
 .
 
 make -j8
