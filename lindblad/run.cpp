@@ -154,7 +154,7 @@ int main(int argc, char** argv)
 		logPrintf("pumpI = %lg\n", lp.pumpI);
 		logPrintf("pumpSigma = %lg\n", lp.pumpSigma);
 		logPrintf("pumpPol = "); print(globalLog, lp.pumpPol);
-		logPrintf("laserMode = %s\n",laserMode); 
+		logPrintf("laserMode = %s\n",laserMode.c_str()); 
 	}
 	if(lp.pol.size())
 	{	for(int iPol=0; iPol<int(lp.pol.size()); iPol++)
