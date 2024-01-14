@@ -63,13 +63,6 @@ int main(int argc, char** argv)
 	if(pumpMode!="Evolve" and pumpMode!="Perturb" and pumpMode!="Bfield")
 		die("\npumpMode must be 'Evolve' or 'Perturb' or 'Bfield'\n");
 	lp.pumpEvolve = (pumpMode == "Evolve");
-	const string laserMode = inputMap.getString("laserMode"); 
-	if(laserMode!="constant" and laserMode!="pump" )
-		die("\nlaserMode must be 'constant' or 'pump'\n");
-	if(laserMode=="pump")	
-	{lp.pumpGaussian=true;}
-	else
-	{lp.pumpGaussian=false;}
 	lp.pumpBfield = (pumpMode == "Bfield");
 	lp.pumpB = inputMap.getVector("pumpB", vector3<>()) * Tesla; //perturbing initial magnetic field in Tesla (used only in Bfield mode)
 	lp.pumpOmega = inputMap.get("pumpOmega", pumpMode=="Bfield" ? 0. : NAN) * eV; //pump frequency in eV (used only in Evolve/Perturb modes)
@@ -154,7 +147,6 @@ int main(int argc, char** argv)
 		logPrintf("pumpI = %lg\n", lp.pumpI);
 		logPrintf("pumpSigma = %lg\n", lp.pumpSigma);
 		logPrintf("pumpPol = "); print(globalLog, lp.pumpPol);
-		logPrintf("laserMode = %s\n",laserMode.c_str()); 
 	}
 	if(lp.pol.size())
 	{	for(int iPol=0; iPol<int(lp.pol.size()); iPol++)

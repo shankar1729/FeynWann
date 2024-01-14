@@ -136,12 +136,7 @@ void Lindblad::getStateDot(const State& s, DM1& rhoDot) const
 DM1 Lindblad::compute(double t, const DM1& drho)
 {	double pumpPrefac = 1.0;
 	if(lp.pumpEvolve and lp.pumpTau) //Gaussian pulse
-		if(lp.pumpGaussian)
-		{
-				pumpPrefac = (sqrt(M_PI) * exp(-(t*t)/std::pow(lp.pumpTau, 2)) / lp.pumpTau);
-		}
-		else
-			{pumpPrefac = M_PI;}
+		pumpPrefac = (sqrt(M_PI) * exp(-(t*t)/std::pow(lp.pumpTau, 2)) / lp.pumpTau);
 	vector3<> Bcur = lp.spinEchoGetB(t);
 	
 	for(State& s: state)

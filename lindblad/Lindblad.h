@@ -66,8 +66,7 @@ struct LindbladParams
 	double pumpTau, pumpSigma; //!< pulse width (zero for CW) and energy conservation width
 	vector3<complex> pumpPol; //!< pump polarization
 	bool pumpEvolve; //!< whether pump is explicitly evolved in time
-	bool pumpGaussian; // whether multiply Gaussian to the light
-
+	
 	bool pumpBfield; //!< whether the "pump" is a magnetic field initialization
 	vector3<> pumpB; //!< initialization magnetic field
 	vector3<> Bext; //!< constant external magnetic field applied post-initialization
