@@ -58,6 +58,7 @@ struct LindbladInit
 	
 	const double dmuMin, dmuMax, Tmax;
 	const BandSelection bandSelection; //!< which sets of bands to include (e, h or all)
+	const int bandCountFixed; //!< if non-zero, fix nInner = bandCountFixed with no nOuter for all energies
 	const double pumpOmegaMax, probeOmegaMax;
 	
 	const bool ePhEnabled; //!< whether e-ph coupling is enabled
@@ -66,11 +67,13 @@ struct LindbladInit
 	const bool defectEnabled; //!< if defect scattering is enabled with phonons
 	
 	LindbladInit(FeynWann& fw, const vector3<int>& NkFine,
-		double dmuMin, double dmuMax, double Tmax, BandSelection bandSelection,
+		double dmuMin, double dmuMax, double Tmax,
+		BandSelection bandSelection, int bandCountFixed,
 		double pumpOmegaMax, double probeOmegaMax,
 		bool ePhEnabled, double ePhDelta, bool defectEnabled)
 	: fw(fw), NkFine(NkFine), nkTot(NkFine[0]*NkFine[1]*NkFine[2]),
-		dmuMin(dmuMin), dmuMax(dmuMax), Tmax(Tmax), bandSelection(bandSelection),
+		dmuMin(dmuMin), dmuMax(dmuMax), Tmax(Tmax),
+		bandSelection(bandSelection), bandCountFixed(bandCountFixed),
 		pumpOmegaMax(pumpOmegaMax), probeOmegaMax(probeOmegaMax),
 		ePhEnabled(ePhEnabled), ePhDelta(ePhDelta), defectEnabled(defectEnabled)
 	{
@@ -124,14 +127,13 @@ struct LindbladInit
 	}
 	
 	inline void kSelect(const FeynWann::StateE& state)
-	{	bool active = false;
+	{	int nActiveCur = 0;
 		for(double E: state.E)
 			if(E>=Estart and E<=Estop)
-			{	active = true;
-				nActiveTot++;
-			}
-		if(active)
-		{	k.push_back(state.k);
+				nActiveCur++;
+		if(nActiveCur)
+		{	nActiveTot += (bandCountFixed ? bandCountFixed : nActiveCur);
+			k.push_back(state.k);
 			E.insert(E.end(), state.E.begin(), state.E.end());
 			offKcur[2] = state.ik;
 			offK.push_back(offKcur);
@@ -284,8 +286,26 @@ struct LindbladInit
 	std::vector<double> kpairWeight; //Econserve weight factor for all k1 pairs due to downsampling (1 if no downsmapling)
 	size_t nActivePairs; //total number of active state pairs
 	inline void selectActive(const double*& Ebegin, const double*& Eend, double Elo, double Ehi) //narrow pointer range to data within [Estart,Estop]
-	{	Ebegin = std::lower_bound(Ebegin, Eend, Elo);
-		Eend = &(*std::lower_bound(reverse(Eend), reverse(Ebegin), Ehi, std::greater<double>()))+1;
+	{	if(bandCountFixed)
+		{	//New logic for fixed band count targeting qimpy.transport
+			if(bandSelection == ElectronsOnly)
+			{	Ebegin = std::lower_bound(Ebegin, Eend, Elo);
+				const double* EendNew = Ebegin + bandCountFixed;
+				assert(EendNew <= Eend); //Ensure fixed band count doesn't cross upper range of available bands
+				Eend = EendNew;
+			}
+			else //bandSelection == HolesOnly (Ensured during startup)
+			{	Eend = &(*std::lower_bound(reverse(Eend), reverse(Ebegin), Ehi, std::greater<double>()))+1;
+				const double* EbeginNew = Eend - bandCountFixed;
+				assert(EbeginNew >= Ebegin);
+				Ebegin = EbeginNew; //Ensure fixed band count doesn't cross lower range of available bands
+			}
+		}
+		else
+		{	//Select based on energies only:
+			Ebegin = std::lower_bound(Ebegin, Eend, Elo);
+			Eend = &(*std::lower_bound(reverse(Eend), reverse(Ebegin), Ehi, std::greater<double>()))+1;
+		}
 	}
 	inline void kpSelect(const FeynWann::StatePh& state)
 	{	//Find pairs of momentum conserving electron states with this q:
@@ -457,10 +477,18 @@ struct LindbladInit
 		double EinnerMax = Ebegin[innerOffset+kp.nInner-1];
 		//--- probe-active (outer) energy range:
 		int outerOffset = 0; //offset from original bands to outer window
-		activeOffsets(Ebegin, Eend,
-			EinnerMin-probeOmegaMax, //lowest occupied energy accessible from bottom of active window
-			EinnerMax+probeOmegaMax,  //highest unoccupied energy accessible from top of active window
-			outerOffset, kp.nOuter);
+		if(bandCountFixed)
+		{	//Set outer window to be same as inner window
+			outerOffset = innerOffset;
+			kp.nOuter = kp.nInner;
+		}
+		else
+		{	//Set outer window based on probe energies from inner window
+			activeOffsets(Ebegin, Eend,
+				EinnerMin-probeOmegaMax, //lowest occupied energy accessible from bottom of active window
+				EinnerMax+probeOmegaMax,  //highest unoccupied energy accessible from top of active window
+				outerOffset, kp.nOuter);
+		}
 		kp.innerStart = innerOffset - outerOffset;
 		
 		//Save energy and matrix elements to kp:
@@ -791,10 +819,13 @@ int main(int argc, char** argv)
 	const double dmuMax = inputMap.get("dmuMax", 0.) * eV; //optional: highest shift in fermi level from neutral value / VBM in eV (default: 0)
 	const double Tmax = inputMap.get("Tmax") * Kelvin; //maximum temperature in Kelvin (ambient phonon T = initial electron T)
 	//--- which bands to use
+	const int bandCountFixed = inputMap.get("bandCountFixed", 0); //if nonzero, fix number of inner bands (no separate outer)
 	const string bandSelectionStr = inputMap.has("bandSelection") ? inputMap.getString("bandSelection") : "all-bands";
 	BandSelection bandSelection;
 	if(not bandSelectionMap.getEnum(bandSelectionStr.c_str(), bandSelection))
 		die("bandSelection must be one of %s\n", bandSelectionMap.optionList().c_str());
+	if(bandCountFixed and (bandSelection == AllBands))
+		die("bandSelection must be ElectronsOnly or HolesOnly to use fixed band count.\n");
 	//--- pump
 	const double pumpOmegaMax = inputMap.get("pumpOmegaMax") * eV; //maximum pump frequency in eV
 	const double probeOmegaMax = inputMap.get("probeOmegaMax") * eV; //maximum probe frequency in eV
@@ -813,6 +844,7 @@ int main(int argc, char** argv)
 	logPrintf("dmuMax = %lg\n", dmuMax);
 	logPrintf("Tmax = %lg\n", Tmax);
 	logPrintf("bandSelection = %s\n", bandSelectionMap.getString(bandSelection));
+	logPrintf("bandCountFixed = %d\n", bandCountFixed);
 	logPrintf("pumpOmegaMax = %lg\n", pumpOmegaMax);
 	logPrintf("probeOmegaMax = %lg\n", probeOmegaMax);
 	logPrintf("ePhMode = %s\n", ePhMode.c_str());
@@ -867,7 +899,7 @@ int main(int argc, char** argv)
 	}
 	
 	//Create and initialize lindblad calculator:
-	LindbladInit lb(fw, NkFine, dmuMin, dmuMax, Tmax, bandSelection, pumpOmegaMax, probeOmegaMax, ePhEnabled, ePhDelta, defectEnabled);
+	LindbladInit lb(fw, NkFine, dmuMin, dmuMax, Tmax, bandSelection, bandCountFixed, pumpOmegaMax, probeOmegaMax, ePhEnabled, ePhDelta, defectEnabled);
 	
 	//First pass (e only): select k-points
 	fw.energyOnly = true;
