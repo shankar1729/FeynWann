@@ -7,6 +7,7 @@ if(EnablePETSc)
 endif()
 
 add_FeynWann_executable(init)
+add_FeynWann_executable(init-h5)
 add_FeynWann_executable(init-fixed-bands)
 add_FeynWann_executable(modify)
 add_FeynWann_executable(makeModel)

@@ -119,11 +119,18 @@ if(EnableScaLAPACK)
 	#JDFTx must be built with scalapack support for this to work (not tested in this cmake script)
 endif()
 
+option(EnableHDF5 "Enable HDF5 features (currently required only by init-h5)")
+if(EnableHDF5)
+        find_package(HDF5 REQUIRED)
+        include_directories(${HDF5_INCLUDE_DIRS})
+        add_definitions("-DHDF5_ENABLED")
+endif()
+
 #Main library for FeynWann containing all the auxiliary functionality
 file(GLOB FEYNWANN_SOURCES FeynWann*.cpp)
 add_library(FeynWann ${LINK_TYPE} ${FEYNWANN_SOURCES} DistributedMatrix.cpp InputMap.cpp Histogram.cpp Interp1.cpp BlockCyclicMatrix.cpp ${SCALAPACK_F_FILES} ${TDEP_F90_FILES})
 find_library(JDFTX_LIBRARY jdftx PATHS ${JDFTX_BUILD} NO_DEFAULT_PATH)
-target_link_libraries(FeynWann ${JDFTX_LIBRARY} ${FFTW3_MPI_LIBRARY} ${FFTW3_THREADS_LIBRARY} ${FFTW3_LIBRARY} ${MPI_CXX_LIBRARIES} ${EXTRA_LIBRARIES} ${TDEP_LIBRARIES})
+target_link_libraries(FeynWann ${JDFTX_LIBRARY} ${FFTW3_MPI_LIBRARY} ${FFTW3_THREADS_LIBRARY} ${FFTW3_LIBRARY} ${MPI_CXX_LIBRARIES} ${EXTRA_LIBRARIES} ${TDEP_LIBRARIES} ${HDF5_LIBRARIES})
 
 #Executables linked to above library
 macro(add_FeynWann_executable targetName)

@@ -14,7 +14,7 @@ endif()
 
 if(TDEP_FOUND)
 	if(NOT TDEP_FIND_QUIETLY)
-		message(STATUS "Found TDEP: ${TDEP_LIBRARY}")
+		message(STATUS "Found TDEP: ${TDEP_LIBRARIES}")
 	endif()
 else()
 	if(TDEP_FIND_REQUIRED)
