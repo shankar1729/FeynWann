@@ -57,6 +57,12 @@ typedef struct {
    double im;   /*imaginary part */
 } complex_t;
 
+hid_t h5_complex;
+hid_t h5_bool;
+
+template<> struct h5type<complex_t> { static hid_t get() { return h5_complex; } };
+template<> struct h5type<bool> { static hid_t get() { return h5_bool; } };
+
 //Open HDF5 file for collective access:
 hid_t openHDF5(string fname)
 {       logPrintf("Dumping '%s' ... ", fname.c_str()); logFlush();
@@ -70,18 +76,32 @@ hid_t openHDF5(string fname)
         return fid;
 }
 
-void h5writeComplex(hid_t fid, const char* dname, const complex_t* data, const hsize_t* dims, hsize_t rank, hid_t dataType)
-{
-	hid_t sid = H5Screate_simple(rank, dims, NULL);
-	hid_t did = H5Dcreate(fid, dname, dataType, sid, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-	H5Sclose(sid);
-	if(did<0) die("Could not create dataset '%s' in HDF5 file.\n", dname);
+template<typename T> void h5writeVectorDataset(hid_t fid, const char* dname, const T* data, hsize_t* dims, hsize_t* offset, hsize_t* count, int rank)
+{	hid_t dataType = h5type<T>::get();
+
+	//Create dataset:
+	hid_t sidGlobal = H5Screate_simple(rank, dims, NULL);
+	hid_t did = H5Dcreate(fid, dname, dataType, sidGlobal, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+	hsize_t test_dims[4];
+	H5Sget_simple_extent_dims(sidGlobal, test_dims, NULL);
+	H5Sclose(sidGlobal);
+	if(did<0){ fprintf(stderr, "Could not create dataset '%s' in output file.\n", dname); MPI_Abort(MPI_COMM_WORLD, 1); }
+	//Select hyperslab:
+	hid_t sid = H5Screate_simple(rank, count, NULL);
+	sidGlobal = H5Dget_space(did);
+	H5Sselect_hyperslab(sidGlobal, H5S_SELECT_SET, offset, NULL, count, NULL);
 	//Create collective write property:
 	hid_t plid = H5Pcreate(H5P_DATASET_XFER);
-	H5Pset_dxpl_mpio(plid, H5FD_MPIO_INDEPENDENT);
+	H5Pset_dxpl_mpio(plid, H5FD_MPIO_COLLECTIVE);
 	//Write data:
-	H5Dwrite(did, dataType, H5S_ALL, H5S_ALL, plid, data);
+	if(!count[0])
+	{	H5Sselect_none(sid);
+		H5Sselect_none(sidGlobal);
+	}
+	H5Dwrite(did, dataType, sid, sidGlobal, plid, data);
 	//Cleanup:
+	H5Sclose(sidGlobal);
+	H5Sclose(sid);
 	H5Dclose(did);
 	H5Pclose(plid);
 }
@@ -102,18 +122,6 @@ template<typename T> void h5writeVectorAttr(hid_t fid, const char* dname, const 
 	H5Pclose(plid);
 }
 
-void h5writeBoolAttr(hid_t fid, const char* dname, bool data, hid_t dataType)
-{
-	//Create dataset:
-	hid_t sid = H5Screate(H5S_SCALAR);
-	hid_t aid = H5Acreate2(fid, dname, dataType, sid, H5P_DEFAULT, H5P_DEFAULT);
-	H5Sclose(sid);
-	if(aid<0) die("Could not create dataset '%s' in HDF5 file.\n", dname);
-	//Write data:
-	H5Awrite(aid, dataType, &data);
-	H5Aclose(aid);
-}
-
 template<typename T> void h5writeScalarAttr(hid_t fid, const char* dname, const T& data)
 {	hid_t dataType = h5type<T>::get();
 	//Create dataset:
@@ -126,13 +134,19 @@ template<typename T> void h5writeScalarAttr(hid_t fid, const char* dname, const 
 	H5Aclose(aid);
 }
 
-void dumpHDF5(size_t nk, size_t bandCount, double* R, std::vector<double> k, std::vector<double> E, std::vector<complex_t> P, std::vector<complex_t> S, std::vector<complex_t> L, std::vector<complex_t> G, std::vector<double> omegaPh, std::vector<int> ikpair, LindbladFile::Header h)
+void dumpHDF5(size_t nk, size_t bandCount, double* R, std::vector<double> k,
+		std::vector<double> E, std::vector<complex_t> P,
+		std::vector<complex_t> S, std::vector<complex_t> L,
+		std::vector<complex_t> G, std::vector<double> omegaPh,
+		std::vector<int> ikpair, std::vector<size_t> kpGCount, std::vector<int> kAdj,
+		LindbladFile::Header h, size_t countMine, size_t startMine)
 {
-	hid_t complex_id = H5Tcreate (H5T_COMPOUND, sizeof(complex_t));
-	H5Tinsert (complex_id, "r", HOFFSET(complex_t,re), H5T_NATIVE_DOUBLE);
-	H5Tinsert (complex_id, "i", HOFFSET(complex_t,im), H5T_NATIVE_DOUBLE);
+	h5_complex = H5Tcreate (H5T_COMPOUND, sizeof(complex_t));
 
-	hid_t h5_bool = H5Tenum_create (H5T_STD_I8LE);
+	H5Tinsert (h5_complex, "r", HOFFSET(complex_t,re), H5T_NATIVE_DOUBLE);
+	H5Tinsert (h5_complex, "i", HOFFSET(complex_t,im), H5T_NATIVE_DOUBLE);
+
+	h5_bool = H5Tenum_create (H5T_STD_I8LE);
 	bool trueVal = true;
 	bool falseVal = false;
 	H5Tenum_insert(h5_bool, "FALSE", &falseVal);
@@ -143,36 +157,90 @@ void dumpHDF5(size_t nk, size_t bandCount, double* R, std::vector<double> k, std
 
         //--- K-points:
         hsize_t dimsK[2] = { nk, 3 };
-        h5writeVector(fid, "k", k.data(), dimsK, 2);
+        hsize_t offK[2] = { startMine, 0 };
+        hsize_t countK[2] = { countMine, 3 };
+        h5writeVectorDataset(fid, "k", k.data(), dimsK, offK, countK, 2);
 
         //--- Energy:
         hsize_t dimsE[2] = { nk, bandCount };
-        h5writeVector(fid, "E", E.data(), dimsE, 2);
+        hsize_t offE[2] = { startMine, 0 };
+        hsize_t countE[2] = { countMine, bandCount };
+        h5writeVectorDataset(fid, "E", E.data(), dimsE, offE, countE, 2);
 
         //--- Momentum:
         hsize_t dimsP[4] = { nk, 3, bandCount, bandCount };
-        h5writeComplex(fid, "P", P.data(), dimsP, 4, complex_id);
+        hsize_t offP[4] = { startMine, 0, 0, 0};
+        hsize_t countP[4] = { countMine, 3, bandCount, bandCount };
+        h5writeVectorDataset(fid, "P", P.data(), dimsP, offP, countP, 4);
 
         //--- Spin:
         hsize_t dimsS[4] = { nk, 3, bandCount, bandCount };
-        h5writeComplex(fid, "S", S.data(), dimsS, 4, complex_id);
+        hsize_t offS[4] = { startMine, 0, 0, 0};
+        hsize_t countS[4] = { countMine, 3, bandCount, bandCount };
+        h5writeVectorDataset(fid, "S", S.data(), dimsS, offS, countS, 4);
 
-        //--- Angular Momentum:
-        hsize_t dimsL[4] = { nk, 3, bandCount, bandCount };
-        h5writeComplex(fid, "L", L.data(), dimsL, 4, complex_id);
+	if (h.haveL)
+	{
+		//--- Angular Momentum:
+		hsize_t dimsL[4] = { nk, 3, bandCount, bandCount };
+		hsize_t offL[4] = { startMine, 0, 0, 0};
+		hsize_t countL[4] = { countMine, 3, bandCount, bandCount };
+		h5writeVectorDataset(fid, "L", L.data(), dimsL, offL, countL, 4);
+	}
 
-	size_t Gsize = G.size()/bandCount/bandCount;
-        //--- ePh Matrix Elements
-        hsize_t dimsG[4] = { Gsize, bandCount, bandCount };
-        h5writeComplex(fid, "G", G.data(), dimsG, 3, complex_id);
+	if (h.ePhEnabled)
+	{
+		size_t Gsize = 0;
+		size_t gMine = 0;
+		size_t gOff = 0;
+		size_t kpCount = 0;
+		for (size_t i = 0; i < kpGCount.size(); i++)
+		{
+			Gsize += kpGCount[i];
+			if (i < startMine)
+			{
+				gOff+=kpGCount[i];
+			}
+			else
+			{
+				if (kpCount < countMine)
+				{
+					gMine += kpGCount[i];
+					kpCount++;
+				}
+				else
+				{
+					break;
+				}
+			}
+		}
+		mpiWorld->allReduce(Gsize, MPIUtil::ReduceMax);
+		mpiWorld->bcast(Gsize);
 
-        //--- OmegaPh:
-        hsize_t dimsOmegaPh[1] = { Gsize };
-        h5writeVector(fid, "omega_ph", omegaPh.data(), dimsOmegaPh, 1);
+		//--- ePh Matrix Elements
+		hsize_t dimsG[4] = { Gsize, bandCount, bandCount };
+		hsize_t offG[4] = { gOff, 0, 0 };
+		hsize_t countG[4] = { gMine, bandCount, bandCount };
+		h5writeVectorDataset(fid, "G", G.data(), dimsG, offG, countG, 3);
 
-        //--- ik pairs:
-        hsize_t dimsikPair[2] = { Gsize, 2 };
-        h5writeVector(fid, "ikpair", ikpair.data(), dimsikPair, 2);
+		//--- OmegaPh:
+		hsize_t dimsOmegaPh[1] = { Gsize };
+		hsize_t offOmegaPh[1] = { gOff };
+		hsize_t countOmegaPh[1] = { gMine };
+		h5writeVectorDataset(fid, "omega_ph", omegaPh.data(), dimsOmegaPh, offOmegaPh, countOmegaPh, 1);
+
+		//--- ik pairs:
+		hsize_t dimsikPair[2] = { Gsize, 2 };
+		hsize_t offikPair[2] = { gOff, 0 };
+		hsize_t countikPair[2] = { gMine, 2 };
+		h5writeVectorDataset(fid, "ikpair", ikpair.data(), dimsikPair, offikPair, countikPair, 2);
+	}
+
+        //--- k adjacency:
+        hsize_t dimskAdj[3] = { nk, 3, 5 };
+        hsize_t offkAdj[3] = { startMine, 0, 0 };
+        hsize_t countkAdj[3] = { countMine, 3, 5 };
+        h5writeVectorDataset(fid, "k_adj", kAdj.data(), dimskAdj, offkAdj, countkAdj, 3);
 
         //--- R:
         hsize_t dimsR[2] = { 3, 3 };
@@ -188,9 +256,9 @@ void dumpHDF5(size_t nk, size_t bandCount, double* R, std::vector<double> k, std
 	h5writeScalarAttr(fid, "pumpOmegaMax", h.pumpOmegaMax);
 	h5writeScalarAttr(fid, "spinWeight", h.spinWeight);
 
-	h5writeBoolAttr(fid, "ePhEnabled", h.ePhEnabled, h5_bool);
-	h5writeBoolAttr(fid, "haveL", h.haveL, h5_bool);
-	h5writeBoolAttr(fid, "spinorial", h.spinorial, h5_bool);
+	h5writeScalarAttr(fid, "ePhEnabled", h.ePhEnabled);
+	h5writeScalarAttr(fid, "haveL", h.haveL);
+	h5writeScalarAttr(fid, "spinorial", h.spinorial);
 
         //Close file:
         H5Fclose(fid);
@@ -597,6 +665,8 @@ struct LindbladInit
 	std::vector<LindbladFile::Kpoint> kpOffset; //array of kpoint data for current offset
 	std::vector<int> kpWhose; //index of process in mpiWorld that owns each entry in kpAll
 	std::vector<size_t> kpSize; //size in bytes of each entry in kpAll when written to file
+	std::vector<size_t> kpGCount; //size in bytes of each entry in kpAll when written to file
+	size_t kpGCountTotal; //size in bytes of each entry in kpAll when written to file
 	
 	//Wrapper to selectActive that computes offset and length of the active range (rather than narrowing the iterator range)
 	inline void activeOffsets(const double* Ebegin, const double* Eend, double Estart, double Estop, int& offset, int& length)
@@ -759,6 +829,7 @@ struct LindbladInit
 		h.R = fw.R;
 		h.haveL = fw.fwp.orbitalZeeman;
 
+		// Collect vectors for each dataset
 		std::vector<double> allk;
 		std::vector<double> allE;
 		std::vector<int> allikPair;
@@ -767,6 +838,7 @@ struct LindbladInit
 		std::vector<complex_t> allS;
 		std::vector<complex_t> allL;
 		std::vector<complex_t> allG;
+		std::vector<int> allKAdj;
 		double R[9] = { 
 				h.R(0, 0), h.R(0, 1), h.R(0, 2), 
 				h.R(1, 0), h.R(1, 1), h.R(1, 2),
@@ -778,6 +850,8 @@ struct LindbladInit
 		kpAll.clear(); kpAll.resize(k.size());
 		kpWhose.assign(k.size(), -1);
 		kpSize.assign(k.size(), 0);
+		kpGCount.assign(k.size(), 0);
+		kpGCountTotal = 0;
 		size_t nOffMine = offStartGroup[iGroup+1] - offStartGroup[iGroup];
 		size_t offInterval = std::max(1, int(round(nOffMine/50.))); //interval for reporting progress
 		for(size_t iOffMine=0; iOffMine<nOffMine; iOffMine++)
@@ -883,6 +957,7 @@ struct LindbladInit
 				if(kpAll[ik].E.size())
 				{	kpWhose[ik] = mpiWorld->iProcess();
 					kpSize[ik] = kpAll[ik].nBytes(h);
+					kpGCount[ik] = kpAll[ik].GePh.size();
 					std::sort(kpAll[ik].GePh.begin(), kpAll[ik].GePh.end()); //sort e-ph matrix elements by partner index
 				}
 			}
@@ -892,6 +967,8 @@ struct LindbladInit
 		}
 		mpiWorld->allReduceData(kpWhose, MPIUtil::ReduceMax); //now each process knows who owns a specific k-point data
 		mpiWorld->allReduceData(kpSize, MPIUtil::ReduceMax); //... and its size when written to file
+		mpiWorld->allReduceData(kpGCount, MPIUtil::ReduceMax);
+
 		logPrintf("done.\n"); logFlush();
 		
 		//Compute offsets to each k-point within file:
@@ -922,14 +999,6 @@ struct LindbladInit
 			#endif
 		}
 		//--- Write data:
-		// Initialize HDF5 file
-		//
-		//hid_t file = H5Fcreate("ldbd.h5", H5F_ACC_TRUNC, H5P_DEFAULT, H5P_DEFAULT); // TODO: filename
-		//hsize_t dims[2] = {h.nk, 3};
-		//hid_t dataspace = H5Screate_simple(2, dims, NULL);
-		//// Create Datasets
-		//// double H5T_IEEE_F64LE, complex H5T_COMPLEX_IEEE_F64LE
-		//hid_t dataset = H5Dcreate(file, "k", H5T_IEEE_F64LE, dataspace, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
 
 		logPrintf("Writing %s: ", outFile.c_str()); logFlush();
 		size_t ikInterval = std::max(1, int(round(h.nk/50.))); //interval for reporting progress
@@ -952,6 +1021,7 @@ struct LindbladInit
 				complex elem_tmp;
 				complex_t elem;
 
+				// Collect data (for HDF5)
 				for(int iBand=0; iBand<bandCountFixed; iBand++)
 				{
 					allE.push_back(kp.E[iBand]);
@@ -963,7 +1033,7 @@ struct LindbladInit
 
 					for(int iBand=0; iBand<bandCountFixed; iBand++)
 					{
-						// E
+						// P, S, L
 						for(int jBand=0; jBand<bandCountFixed; jBand++)
 						{
 
@@ -981,8 +1051,10 @@ struct LindbladInit
 						}
 					}
 				}
-				for(int iGePh = 0; iGePh < kp.GePh.size(); iGePh++)
+				// Get ePh matrix elements for each k
+				for(size_t iGePh = 0; iGePh < kp.GePh.size(); iGePh++)
 				{
+					// Get k-pairs and frequency
 					allOmegaPH.push_back(kp.GePh[iGePh].omegaPh);
 					allikPair.push_back((double)ik);
 					allikPair.push_back((double)kp.GePh[iGePh].jk);
@@ -991,17 +1063,73 @@ struct LindbladInit
 						for(int jBand=0; jBand<bandCountFixed; jBand++)
 						{
 							SparseMatrix Gs = kp.GePh[iGePh].G;
-							for (int iG = 0; iG < Gs.size(); iG++)
+							for (size_t iG = 0; iG < Gs.size(); iG++)
 							{
+								// This logic could probably be cleaned up
+								// (assuming sparse entries are consistently ordered)
 								SparseEntry GEntry = Gs[iG];
 								if (iBand == GEntry.i && jBand == GEntry.j)
 								{
+									// Matrix elements
 									elem_tmp = GEntry.val;
 									elem = {elem_tmp.real(), elem_tmp.imag()};
 									allG.push_back(elem);
 								}
 							}
 						}
+					}
+				}
+				// Find adjacent k points
+				for (int comp = 0; comp < 3; comp++)
+				{
+					int adj_arr[5];
+					vector3<double> offset;
+					// Calculate offset based on NkFine
+					for (int ind = 0; ind < 3; ind++)
+					{
+						offset[ind] = (ind==comp?1.0/NkFine[comp]:0.0);
+					}
+					int k_ind_prev = ik;
+					size_t jk_ind;
+					// Get cells to the "left"
+					for (int cell = 1; cell >= 0; cell--)
+					{
+						vector3<double> jk = kp.k + ((cell - 2)*offset);
+						bool exists = findK(jk, jk_ind);
+						if (exists)
+						{
+							adj_arr[cell] = jk_ind;
+							k_ind_prev = jk_ind;
+						}
+						else
+						{
+							// If no adjacent point exists, insert the previous point
+							// (moving outward)
+							adj_arr[cell] = k_ind_prev;
+						}
+					}
+					adj_arr[2] = ik;
+					// Get cells to the "right"
+					for (int cell = 3; cell < 5; cell++)
+					{
+						vector3<double> jk = kp.k + ((cell - 2)*offset);
+						bool exists = findK(jk, jk_ind);
+						if (exists)
+						{
+							adj_arr[cell] = jk_ind;
+							k_ind_prev = jk_ind;
+						}
+						else
+						{
+							// If no adjacent point exists, insert the previous point
+							// (moving outward)
+							adj_arr[cell] = k_ind_prev;
+						}
+					}
+					// Put all 5 cells into vector
+					for (int cell = 0; cell < 5; cell++)
+					{
+						allKAdj.push_back(adj_arr[cell]);
 					}
 				}
 			}
@@ -1026,7 +1154,22 @@ struct LindbladInit
 		#else
 		mpiWorld->fclose(fp);
 		#endif
-		dumpHDF5(h.nk, bandCountFixed, R, allk, allE, allP, allS, allL, allG, allOmegaPH, allikPair, h);
+
+		size_t countMine = 0;
+		size_t startMine = 0;
+		for (size_t ik = 0; ik < kpWhose.size(); ik++)
+		{
+			if (kpWhose[ik] == mpiWorld->iProcess())
+			{
+				if (countMine == 0)
+				{
+					startMine = ik;
+				}
+				countMine++;
+			}
+		}
+
+		dumpHDF5(h.nk, bandCountFixed, R, allk, allE, allP, allS, allL, allG, allOmegaPH, allikPair, kpGCount, allKAdj, h, countMine, startMine);
 	}
 };
 
@@ -1060,7 +1203,7 @@ int main(int argc, char** argv)
 	const string ePhMode = inputMap.getString("ePhMode"); //must be Off or DiagK (add FullK in future)
 	const string defectName = inputMap.has("defectName") ? inputMap.getString("defectName") : "Off"; //optional defect contribution
 	const bool ePhEnabled = (ePhMode != "Off");
-    const bool defectEnabled = (defectName != "Off");
+	const bool defectEnabled = (defectName != "Off");
 	const double ePhDelta = inputMap.get("ePhDelta") * eV; //energy conservation width for e-ph coupling
 	const size_t maxNeighbors = inputMap.get("maxNeighbors", 0); //if non-zero: limit neighbors per k by stochastic down-sampling and amplifying the Econserve weights
 	const string outFile = inputMap.has("outFile") ? inputMap.getString("outFile") : "ldbd.dat"; //output file name
