@@ -844,6 +844,10 @@ struct LindbladInit
 				h.R(1, 0), h.R(1, 1), h.R(1, 2),
 				h.R(2, 0), h.R(2, 1), h.R(2, 2)
 		};
+		for (int i=0; i<9; i++)
+		{
+			logPrintf("%f\n", R[i]);
+		}
 		
 		//Loop over offsets in current group:
 		logPrintf("\nGenerating matrix elements: "); logFlush();
@@ -1109,6 +1113,7 @@ struct LindbladInit
 						}
 					}
 					adj_arr[2] = ik;
+					k_ind_prev = ik;
 					// Get cells to the "right"
 					for (int cell = 3; cell < 5; cell++)
 					{
