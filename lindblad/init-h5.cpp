@@ -116,7 +116,7 @@ template<typename T> void h5writeVectorAttr(hid_t fid, const char* dname, const 
 	hid_t plid = H5Pcreate(H5P_DATASET_XFER);
 	H5Pset_dxpl_mpio(plid, H5FD_MPIO_INDEPENDENT);
 	//Write data:
-	H5Awrite(aid, dataType, &data);
+	H5Awrite(aid, dataType, data);
 	//Cleanup:
 	H5Aclose(aid);
 	H5Pclose(plid);
@@ -844,10 +844,6 @@ struct LindbladInit
 				h.R(1, 0), h.R(1, 1), h.R(1, 2),
 				h.R(2, 0), h.R(2, 1), h.R(2, 2)
 		};
-		for (int i=0; i<9; i++)
-		{
-			logPrintf("%f\n", R[i]);
-		}
 		
 		//Loop over offsets in current group:
 		logPrintf("\nGenerating matrix elements: "); logFlush();
