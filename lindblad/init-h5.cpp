@@ -139,7 +139,7 @@ void dumpHDF5(size_t nk, size_t bandCount, double* R, std::vector<double> k,
 		std::vector<complex_t> S, std::vector<complex_t> L,
 		std::vector<complex_t> G, std::vector<double> omegaPh,
 		std::vector<int> ikpair, std::vector<size_t> kpGCount, std::vector<int> kAdj,
-		LindbladFile::Header h, size_t countMine, size_t startMine)
+		LindbladFile::Header h, size_t countMine, size_t startMine, vector3<int> nkFine)
 {
 	h5_complex = H5Tcreate (H5T_COMPOUND, sizeof(complex_t));
 
@@ -245,6 +245,10 @@ void dumpHDF5(size_t nk, size_t bandCount, double* R, std::vector<double> k,
         //--- R:
         hsize_t dimsR[2] = { 3, 3 };
         h5writeVectorAttr(fid, "R", R, dimsR, 2);
+
+        hsize_t dimsDK[2] = { 3, 3 };
+	int dk[3] = {nkFine[0], nkFine[1], nkFine[2]};
+        h5writeVectorAttr(fid, "nk_grid", dk, dimsDK, 1);
 
 	//--- Write scalars
 	h5writeScalarAttr(fid, "Tmax", h.Tmax);
@@ -1170,7 +1174,7 @@ struct LindbladInit
 			}
 		}
 
-		dumpHDF5(h.nk, bandCountFixed, R, allk, allE, allP, allS, allL, allG, allOmegaPH, allikPair, kpGCount, allKAdj, h, countMine, startMine);
+		dumpHDF5(h.nk, bandCountFixed, R, allk, allE, allP, allS, allL, allG, allOmegaPH, allikPair, kpGCount, allKAdj, h, countMine, startMine, NkFine);
 	}
 };
 
