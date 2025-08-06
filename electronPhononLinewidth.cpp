@@ -32,6 +32,7 @@ struct CollectEph
 	const double T;
 	const double prefacImSigma;
 	const double EconserveWidth;
+	const double lambdaDefect; //account for additional broadening due to defect scattering with specified mean free path
 	const bool lorentzian;
 	const bool valley; //whether to add valley contributions
 	const unsigned nP; //number of ImSigma's calculated (linewidth, momentum-relaxation, and if available, valley-relaxation)
@@ -44,10 +45,11 @@ struct CollectEph
 	const matrix3<> G, GGT; 
 	const vector3<> K, Kp; //For computing valley weights
 	
-	CollectEph(const FeynWann& fw, double T, double EconserveWidth, bool lorentzian, const vector3<int>& NkMult, bool valley)
+	CollectEph(const FeynWann& fw, double T, double EconserveWidth, double lambdaDefect, bool lorentzian, const vector3<int>& NkMult, bool valley)
 	: fw(fw), T(T),
 		prefacImSigma(0.5 * 2*M_PI/(prod(fw.kfold)*prod(NkMult))), //Factor of 0.5 in ImSigma because of psi^2 -> n
 		EconserveWidth(EconserveWidth),
+		lambdaDefect(lambdaDefect),
 		lorentzian(lorentzian),
 		valley(valley),
 		nP(valley ? 3 : 2),
@@ -121,13 +123,15 @@ struct CollectEph
 					//Loop over absorption and emission:
 					for(int ae=-1; ae<=+1; ae+=2)
 					{	double delta = 0.0;
-						double EdiffSq = std::pow((E2 - E1 - ae*omegaPh) / EconserveWidth, 2);
+						double lwSum = EconserveWidth;
+						if(lambdaDefect) lwSum += 0.5 * (v1.length() + v2.length()) / lambdaDefect;
+						double EdiffSq = std::pow((E2 - E1 - ae*omegaPh) / lwSum, 2);
 						if(lorentzian)
-						{	delta = 1.0 / (M_PI * EconserveWidth * (1.0 + EdiffSq));
+						{	delta = 1.0 / (M_PI * lwSum * (1.0 + EdiffSq));
 						}
 						else
 						{	if(EdiffSq > 30.) continue; //the exponential below will be negligible
-							delta = exp(-0.5 * EdiffSq) / (sqrt(2.*M_PI) * EconserveWidth);
+							delta = exp(-0.5 * EdiffSq) / (sqrt(2.*M_PI) * lwSum);
 						}
 						double contribNum = wOffsetCur * prefacImSigma * delta * mEph.M[alpha](b2,b1).norm()
 							* nPh*(nPh+1); //contribution numerator before f1-dependent denominator
@@ -227,6 +231,7 @@ int main(int argc, char** argv)
 	InputMap inputMap(ip.inputFilename);
 	const double T = inputMap.get("T") * Kelvin;
 	const double EconserveWidth = inputMap.get("EconserveWidth") * eV;
+	const double lambdaDefect = inputMap.get("lambdaDefect", 0.0) * (10 * Angstrom); //defect mean free path input in nm
 	const bool lorentzian = inputMap.getBool("lorentzian", false); //optionally switch to lorentzian broadening
 	const int iSpin = inputMap.get("iSpin", 0); //spin channel (default 0)
 	const int NkMultAll = int(round(inputMap.get("NkMult"))); //increase in number of k-points for phonon mesh
@@ -243,6 +248,7 @@ int main(int argc, char** argv)
 	logPrintf("\nInputs after conversion to atomic units:\n");
 	logPrintf("T = %lg\n", T);
 	logPrintf("EconserveWidth = %lg\n", EconserveWidth);
+	logPrintf("lambdaDefect = %lg\n", lambdaDefect);
 	logPrintf("lorentzian = %s\n", lorentzian ? "yes" : "no");
 	logPrintf("iSpin = %d\n", iSpin);
 	logPrintf("NkMult = "); NkMult.print(globalLog, " %d ");
@@ -295,7 +301,7 @@ int main(int argc, char** argv)
 	NkFine.print(globalLog, " %d ");
 	
 	//Collect energies and k-point  mesh:
-	CollectEph cEph(fw, T, EconserveWidth, lorentzian, NkMult, valley);
+	CollectEph cEph(fw, T, EconserveWidth, lambdaDefect, lorentzian, NkMult, valley);
 	for(vector3<> qOff: fw.qOffset) fw.eLoop(qOff, CollectEph::collectE, &cEph);
 	//--- make available on all processes:
 	for(unsigned i=0; i<cEph.E.size(); i++)
