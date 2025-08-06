@@ -46,6 +46,7 @@ struct FeynWannParams
 	string needDefect; //!< if non-null, read matrix elements for defect with name specified by this string
 	string needLinewidth_D; //!< if non-null, provide e-defect line-width for defect with name specified by this string
 	string needLinewidthP_D; //!< if non-null, provide e-defect momentum-relaxation line-width for defect with name specified by this string
+	string lwSuffix; //!< optional suffix for e-ph linewidth files
 	
 	vector3<> Bext; //!< external magentic field (added as a Zeeman perturbation to hamiltonian in FeynWann:setState)
 	bool orbitalZeeman; //!< whether to include orbital magnetic moment from L in Zeeman perturbation

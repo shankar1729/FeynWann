@@ -488,9 +488,9 @@ int main(int argc, char** argv)
 	cEph.iCol = 0;
 	for(vector3<> qOff: fw.qOffset) fw.eLoop(qOff, CollectEph::eProcess, &cEph);
 	cEph.phase *= (1./cEph.kmesh.size()); //inverse transform normalizing factor
-	cEph.dumpWannierized(cEph.mlwfImSigma[0], fwp.wannierPrefix + ".mlwfImSigma_ePh" + fw.spinSuffix);
-	cEph.dumpWannierized(cEph.mlwfImSigma[1], fwp.wannierPrefix + ".mlwfImSigmaP_ePh" + fw.spinSuffix);
-	if(valley) cEph.dumpWannierized(cEph.mlwfImSigma[2], fwp.wannierPrefix + ".mlwfImSigmaV_ePh" + fw.spinSuffix);
+	cEph.dumpWannierized(cEph.mlwfImSigma[0], fwp.wannierPrefix + ".mlwfImSigma_ePh" + fwp.lwSuffix + fw.spinSuffix);
+	cEph.dumpWannierized(cEph.mlwfImSigma[1], fwp.wannierPrefix + ".mlwfImSigmaP_ePh" + fwp.lwSuffix + fw.spinSuffix);
+	if(valley) cEph.dumpWannierized(cEph.mlwfImSigma[2], fwp.wannierPrefix + ".mlwfImSigmaV_ePh" + fwp.lwSuffix + fw.spinSuffix);
 	
 	fw.free();
 	FeynWann::finalize();
