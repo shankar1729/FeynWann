@@ -40,6 +40,7 @@ orbitalZeeman(false), EzExt(0.), scissor(0.), EshiftWeight(0.), enforceKramerDeg
 {
 	if(inputMap)
 	{	const double nm = 10*Angstrom;
+		lwSuffix = inputMap->has("lwSuffix") ? inputMap->getString("lwSuffix") : "";
 		Bext = inputMap->getVector("Bext", vector3<>(0.,0.,0.)) * Tesla;
 		orbitalZeeman = inputMap->getBool("orbitalZeeman", false);
 		if(Bext.length_squared())
@@ -62,7 +63,8 @@ orbitalZeeman(false), EzExt(0.), scissor(0.), EshiftWeight(0.), enforceKramerDeg
 
 
 void FeynWannParams::printParams() const
-{	logPrintf("Bext = "); Bext.print(globalLog, " %lg ");
+{	logPrintf("lwSuffix = '%s'\n", lwSuffix.c_str());
+	logPrintf("Bext = "); Bext.print(globalLog, " %lg ");
 	logPrintf("orbitalZeeman = %s\n", orbitalZeeman ? "yes" : "no");
 	logPrintf("EzExt = %lg\n", EzExt);
 	logPrintf("scissor = %lg\n", scissor);
@@ -583,8 +585,8 @@ tTransformByCompute(1), tTransformByComputeD(1), inEphLoop(false)
 	if(fwp.EzExt) Zw = readE("mlwfZ");
 	//Linewidths:
 	if(fwp.needLinewidth_ee) ImSigma_eeW = readE("mlwfImSigma_ee");
-	if(fwp.needLinewidth_ePh) ImSigma_ePhW = readE("mlwfImSigma_ePh", FeynWannParams::fGrid_ePh.size());
-	if(fwp.needLinewidthP_ePh) ImSigmaP_ePhW = readE("mlwfImSigmaP_ePh", FeynWannParams::fGrid_ePh.size());
+	if(fwp.needLinewidth_ePh) ImSigma_ePhW = readE("mlwfImSigma_ePh" + fwp.lwSuffix, FeynWannParams::fGrid_ePh.size());
+	if(fwp.needLinewidthP_ePh) ImSigmaP_ePhW = readE("mlwfImSigmaP_ePh" + fwp.lwSuffix, FeynWannParams::fGrid_ePh.size());
 	if(fwp.needLinewidth_D.length()) ImSigma_DW = readE("mlwfImSigma_D_" + fwp.needLinewidth_D);
 	if(fwp.needLinewidthP_D.length()) ImSigmaP_DW = readE("mlwfImSigmaP_D_" + fwp.needLinewidth_D);
 	logPrintf("\n");

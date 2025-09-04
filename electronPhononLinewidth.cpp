@@ -31,7 +31,9 @@ struct CollectEph
 	const FeynWann& fw;
 	const double T;
 	const double prefacImSigma;
-	const double EconserveExpFac, EconservePrefac; //energy conserving Gaussian exponential and pre-factor
+	const double EconserveWidth;
+	const double lambdaDefect; //account for additional broadening due to defect scattering with specified mean free path
+	const bool lorentzian;
 	const bool valley; //whether to add valley contributions
 	const unsigned nP; //number of ImSigma's calculated (linewidth, momentum-relaxation, and if available, valley-relaxation)
 	const std::vector<double>& f1grid; //grid of fillings ofr which e-ph linewidth is calculated
@@ -43,11 +45,12 @@ struct CollectEph
 	const matrix3<> G, GGT; 
 	const vector3<> K, Kp; //For computing valley weights
 	
-	CollectEph(const FeynWann& fw, double T, double EconserveWidth, const vector3<int>& NkMult, bool valley)
+	CollectEph(const FeynWann& fw, double T, double EconserveWidth, double lambdaDefect, bool lorentzian, const vector3<int>& NkMult, bool valley)
 	: fw(fw), T(T),
 		prefacImSigma(0.5 * 2*M_PI/(prod(fw.kfold)*prod(NkMult))), //Factor of 0.5 in ImSigma because of psi^2 -> n
-		EconserveExpFac(-0.5/std::pow(EconserveWidth,2)),
-		EconservePrefac(1./(sqrt(2.*M_PI)*EconserveWidth)),
+		EconserveWidth(EconserveWidth),
+		lambdaDefect(lambdaDefect),
+		lorentzian(lorentzian),
 		valley(valley),
 		nP(valley ? 3 : 2),
 		f1grid(FeynWannParams::fGrid_ePh),
@@ -119,9 +122,17 @@ struct CollectEph
 					if(!nPh) continue; //no contribution below
 					//Loop over absorption and emission:
 					for(int ae=-1; ae<=+1; ae+=2)
-					{	double EconserveExponent = EconserveExpFac * std::pow((E2-E1 - ae*omegaPh),2);
-						if(EconserveExponent < -15.) continue; //the exponential below will be negligible
-						double delta = EconservePrefac * exp(EconserveExponent);
+					{	double delta = 0.0;
+						double lwSum = EconserveWidth;
+						if(lambdaDefect) lwSum += 0.5 * (v1.length() + v2.length()) / lambdaDefect;
+						double EdiffSq = std::pow((E2 - E1 - ae*omegaPh) / lwSum, 2);
+						if(lorentzian)
+						{	delta = 1.0 / (M_PI * lwSum * (1.0 + EdiffSq));
+						}
+						else
+						{	if(EdiffSq > 30.) continue; //the exponential below will be negligible
+							delta = exp(-0.5 * EdiffSq) / (sqrt(2.*M_PI) * lwSum);
+						}
 						double contribNum = wOffsetCur * prefacImSigma * delta * mEph.M[alpha](b2,b1).norm()
 							* nPh*(nPh+1); //contribution numerator before f1-dependent denominator
 						for(unsigned if1=0; if1<f1grid.size(); if1++)
@@ -220,6 +231,8 @@ int main(int argc, char** argv)
 	InputMap inputMap(ip.inputFilename);
 	const double T = inputMap.get("T") * Kelvin;
 	const double EconserveWidth = inputMap.get("EconserveWidth") * eV;
+	const double lambdaDefect = inputMap.get("lambdaDefect", 0.0) * (10 * Angstrom); //defect mean free path input in nm
+	const bool lorentzian = inputMap.getBool("lorentzian", false); //optionally switch to lorentzian broadening
 	const int iSpin = inputMap.get("iSpin", 0); //spin channel (default 0)
 	const int NkMultAll = int(round(inputMap.get("NkMult"))); //increase in number of k-points for phonon mesh
 	const string valleyMode = inputMap.has("valley") ? inputMap.getString("valley") : "no"; //whether to also compute intervalley-weighted linewidths
@@ -235,6 +248,8 @@ int main(int argc, char** argv)
 	logPrintf("\nInputs after conversion to atomic units:\n");
 	logPrintf("T = %lg\n", T);
 	logPrintf("EconserveWidth = %lg\n", EconserveWidth);
+	logPrintf("lambdaDefect = %lg\n", lambdaDefect);
+	logPrintf("lorentzian = %s\n", lorentzian ? "yes" : "no");
 	logPrintf("iSpin = %d\n", iSpin);
 	logPrintf("NkMult = "); NkMult.print(globalLog, " %d ");
 	logPrintf("valley = %s\n", valleyMode.c_str());
@@ -286,7 +301,7 @@ int main(int argc, char** argv)
 	NkFine.print(globalLog, " %d ");
 	
 	//Collect energies and k-point  mesh:
-	CollectEph cEph(fw, T, EconserveWidth, NkMult, valley);
+	CollectEph cEph(fw, T, EconserveWidth, lambdaDefect, lorentzian, NkMult, valley);
 	for(vector3<> qOff: fw.qOffset) fw.eLoop(qOff, CollectEph::collectE, &cEph);
 	//--- make available on all processes:
 	for(unsigned i=0; i<cEph.E.size(); i++)
@@ -488,9 +503,9 @@ int main(int argc, char** argv)
 	cEph.iCol = 0;
 	for(vector3<> qOff: fw.qOffset) fw.eLoop(qOff, CollectEph::eProcess, &cEph);
 	cEph.phase *= (1./cEph.kmesh.size()); //inverse transform normalizing factor
-	cEph.dumpWannierized(cEph.mlwfImSigma[0], fwp.wannierPrefix + ".mlwfImSigma_ePh" + fw.spinSuffix);
-	cEph.dumpWannierized(cEph.mlwfImSigma[1], fwp.wannierPrefix + ".mlwfImSigmaP_ePh" + fw.spinSuffix);
-	if(valley) cEph.dumpWannierized(cEph.mlwfImSigma[2], fwp.wannierPrefix + ".mlwfImSigmaV_ePh" + fw.spinSuffix);
+	cEph.dumpWannierized(cEph.mlwfImSigma[0], fwp.wannierPrefix + ".mlwfImSigma_ePh" + fwp.lwSuffix + fw.spinSuffix);
+	cEph.dumpWannierized(cEph.mlwfImSigma[1], fwp.wannierPrefix + ".mlwfImSigmaP_ePh" + fwp.lwSuffix + fw.spinSuffix);
+	if(valley) cEph.dumpWannierized(cEph.mlwfImSigma[2], fwp.wannierPrefix + ".mlwfImSigmaV_ePh" + fwp.lwSuffix + fw.spinSuffix);
 	
 	fw.free();
 	FeynWann::finalize();
