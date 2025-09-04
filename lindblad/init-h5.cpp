@@ -1006,6 +1006,7 @@ struct LindbladInit
 
 		logPrintf("Writing %s: ", outFile.c_str()); logFlush();
 		size_t ikInterval = std::max(1, int(round(h.nk/50.))); //interval for reporting progress
+		logPrintf("Collecting HDF5\n");
 		for(size_t ik=0; ik<h.nk; ik++)
 		{	const LindbladFile::Kpoint& kp = kpAll[ik];
 			std::vector<char> buf(kpSize[ik]); //buffer containing serialization of kp
@@ -1062,25 +1063,16 @@ struct LindbladInit
 					allOmegaPH.push_back(kp.GePh[iGePh].omegaPh);
 					allikPair.push_back((double)ik);
 					allikPair.push_back((double)kp.GePh[iGePh].jk);
-					for(int iBand=0; iBand<bandCountFixed; iBand++)
+					SparseMatrix Gs = kp.GePh[iGePh].G;
+					for (size_t iG = 0; iG < Gs.size(); iG++)
 					{
-						for(int jBand=0; jBand<bandCountFixed; jBand++)
-						{
-							SparseMatrix Gs = kp.GePh[iGePh].G;
-							for (size_t iG = 0; iG < Gs.size(); iG++)
-							{
-								// This logic could probably be cleaned up
-								// (assuming sparse entries are consistently ordered)
-								SparseEntry GEntry = Gs[iG];
-								if (iBand == GEntry.i && jBand == GEntry.j)
-								{
-									// Matrix elements
-									elem_tmp = GEntry.val;
-									elem = {elem_tmp.real(), elem_tmp.imag()};
-									allG.push_back(elem);
-								}
-							}
-						}
+						// This logic could probably be cleaned up
+						// (assuming sparse entries are consistently ordered)
+						SparseEntry GEntry = Gs[iG];
+						// Matrix elements
+						elem_tmp = GEntry.val;
+						elem = {elem_tmp.real(), elem_tmp.imag()};
+						allG.push_back(elem);
 					}
 				}
 				// Find adjacent k points
