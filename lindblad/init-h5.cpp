@@ -65,7 +65,7 @@ hsize_t* hsizes(std::initializer_list<hsize_t> list)
 
 //Open HDF5 file for collective access:
 hid_t openHDF5(string fname)
-{       logPrintf("Dumping '%s' ... ", fname.c_str()); logFlush();
+{       logPrintf("Writing %s: ", fname.c_str()); logFlush();
         //Create MPI file access across all processes:
         hid_t plid = H5Pcreate(H5P_FILE_ACCESS);
         H5Pset_fapl_mpio(plid, MPI_COMM_WORLD, MPI_INFO_NULL);
@@ -737,7 +737,7 @@ struct LindbladInit
 		return result;
 	}
 	
-	void saveData(const std::vector<vector3<>>& k0, string outFile)
+	void saveData(const std::vector<vector3<>>& k0, string outFile, bool enableH5Output, string outFileH5)
 	{
 		//Prepare the file header:
 		LindbladFile::Header h;
@@ -949,111 +949,116 @@ struct LindbladInit
 		#endif
 
 		//---------- HDF5 output ---------
-		hid_t fid = openHDF5("ldbd.h5");
-		
-		//Prepate h5py compatible datatype for complex
-		h5_complex = H5Tcreate(H5T_COMPOUND, sizeof(complex));
-		H5Tinsert(h5_complex, "r", HOFFSET(complex, x), H5T_NATIVE_DOUBLE);
-		H5Tinsert(h5_complex, "i", HOFFSET(complex, y), H5T_NATIVE_DOUBLE);
+		if (enableH5Output)
+		{
+			hid_t fid = openHDF5(outFileH5);
+			
+			//Prepate h5py compatible datatype for complex
+			h5_complex = H5Tcreate(H5T_COMPOUND, sizeof(complex));
+			H5Tinsert(h5_complex, "r", HOFFSET(complex, x), H5T_NATIVE_DOUBLE);
+			H5Tinsert(h5_complex, "i", HOFFSET(complex, y), H5T_NATIVE_DOUBLE);
 
-		//Prepate h5py compatible datatype for bool
-		h5_bool = H5Tenum_create (H5T_STD_I8LE);
-		bool trueVal = true;
-		bool falseVal = false;
-		H5Tenum_insert(h5_bool, "FALSE", &falseVal);
-		H5Tenum_insert(h5_bool, "TRUE", &trueVal);
-		
-		//--- Write scalars
-		h5writeScalarAttr(fid, "Tmax", h.Tmax);
-		h5writeScalarAttr(fid, "dmuMax", h.dmuMax);
-		h5writeScalarAttr(fid, "dmuMin", h.dmuMin);
-		h5writeScalarAttr(fid, "nk", (int)h.nk);
-		h5writeScalarAttr(fid, "nkTot", (int)h.nkTot);
-		h5writeScalarAttr(fid, "probeOmegaMax", h.probeOmegaMax);
-		h5writeScalarAttr(fid, "pumpOmegaMax", h.pumpOmegaMax);
-		h5writeScalarAttr(fid, "spinWeight", h.spinWeight);
-		h5writeScalarAttr(fid, "ePhEnabled", h.ePhEnabled);
-		h5writeScalarAttr(fid, "haveL", h.haveL);
-		h5writeScalarAttr(fid, "spinorial", h.spinorial);
+			//Prepate h5py compatible datatype for bool
+			h5_bool = H5Tenum_create (H5T_STD_I8LE);
+			bool trueVal = true;
+			bool falseVal = false;
+			H5Tenum_insert(h5_bool, "FALSE", &falseVal);
+			H5Tenum_insert(h5_bool, "TRUE", &trueVal);
+			
+			//--- Write scalars
+			h5writeScalarAttr(fid, "Tmax", h.Tmax);
+			h5writeScalarAttr(fid, "dmuMax", h.dmuMax);
+			h5writeScalarAttr(fid, "dmuMin", h.dmuMin);
+			h5writeScalarAttr(fid, "nk", (int)h.nk);
+			h5writeScalarAttr(fid, "nkTot", (int)h.nkTot);
+			h5writeScalarAttr(fid, "probeOmegaMax", h.probeOmegaMax);
+			h5writeScalarAttr(fid, "pumpOmegaMax", h.pumpOmegaMax);
+			h5writeScalarAttr(fid, "spinWeight", h.spinWeight);
+			h5writeScalarAttr(fid, "ePhEnabled", h.ePhEnabled);
+			h5writeScalarAttr(fid, "haveL", h.haveL);
+			h5writeScalarAttr(fid, "spinorial", h.spinorial);
 
-		//Write lattice vectors:
-		{	double R[9] = { 
-				h.R(0, 0), h.R(0, 1), h.R(0, 2), 
-				h.R(1, 0), h.R(1, 1), h.R(1, 2),
-				h.R(2, 0), h.R(2, 1), h.R(2, 2)
-			};
-			hsize_t dimsR[2] = { 3, 3 };
-			h5writeVectorAttr(fid, "R", R, dimsR, 2);
-		}
-		
-		//Write k resolution:
-		{	hsize_t dims_nk[1] = {3};
-			h5writeVectorAttr(fid, "nk_grid", &NkFine[0], dims_nk, 1);
-		}
-		
-		//Create datasets collectively:
-		hsize_t nBands = bandCountFixed;
-		hid_t did_k = h5createVectorDataset<double>(fid, "k", hsizes({h.nk, 3}), 2);
-		hid_t did_E = h5createVectorDataset<double>(fid, "E", hsizes({h.nk, nBands}), 2);
-		hid_t did_k_adj = h5createVectorDataset<int>(fid, "k_adj", hsizes({h.nk, 3, 5}), 3);
-		hid_t did_P = h5createVectorDataset<complex>(fid, "P", hsizes({h.nk, 3, nBands, nBands}), 4);		
-		hid_t did_S=0, did_L=0, did_G=0, did_omegaPh=0, did_ikpair=0;
-		if(h.spinorial) did_S = h5createVectorDataset<complex>(fid, "S", hsizes({h.nk, 3, nBands, nBands}), 4);
-		if(h.haveL) did_L = h5createVectorDataset<complex>(fid, "L", hsizes({h.nk, 3, nBands, nBands}), 4);
-		if(h.ePhEnabled)
-		{	did_G = h5createVectorDataset<complex>(fid, "G", hsizes({GcountTot, nBands, nBands}), 3);
-			did_omegaPh = h5createVectorDataset<double>(fid, "omega_ph", hsizes({GcountTot}), 1);
-			did_ikpair = h5createVectorDataset<int>(fid, "ikpair", hsizes({GcountTot, 2}), 2);
-		}
-		
-		size_t GcountPrev = 0;
-		for(size_t ik=0; ik<h.nk; ik++)
-		{	if(kpWhose[ik] == mpiWorld->iProcess())
-			{	const LindbladFile::Kpoint& kp = kpAll[ik];
-				
-				h5writeVectorSlice(did_k, &kp.k[0], hsizes({ik, 0}), hsizes({1, 3}), 2);
-				h5writeVectorSlice(did_E, kp.E.data(), hsizes({ik, 0}), hsizes({1, nBands}), 2);
-				h5writeVectorSlice(did_k_adj, getAdjacency(ik).data(), hsizes({ik, 0, 0}), hsizes({1, 3, 5}), 3);
-				h5writeVectorSlice(did_P, getContiguousData(kp.P).data(), hsizes({ik, 0, 0, 0}), hsizes({1, 3, nBands, nBands}), 4);
-				if(h.spinorial) h5writeVectorSlice(did_S, getContiguousData(kp.S).data(), hsizes({ik, 0, 0, 0}), hsizes({1, 3, nBands, nBands}), 4);
-				if(h.haveL) h5writeVectorSlice(did_L, getContiguousData(kp.L).data(), hsizes({ik, 0, 0, 0}), hsizes({1, 3, nBands, nBands}), 4);
-				
-				if(h.ePhEnabled)
-				{	std::vector<double> omegaPh; omegaPh.reserve(kp.GePh.size());
-					std::vector<int> ikpair; ikpair.reserve(kp.GePh.size() * 2);
-					std::vector<complex> G; G.reserve(kp.GePh.size() * nBands * nBands);
-					for(const LindbladFile::GePhEntry& g: kp.GePh)
-					{	omegaPh.push_back(g.omegaPh);
-						ikpair.push_back(ik);
-						ikpair.push_back(g.jk);
-
-						matrix Gdense = zeroes(bandCountFixed, bandCountFixed);
-						for(const SparseEntry& Gentry: g.G)
-							Gdense.set(Gentry.i, Gentry.j, Gentry.val);
-					
-						for(unsigned iBand=0; iBand<nBands; iBand++)
-							for(unsigned jBand=0; jBand<nBands; jBand++)
-								G.push_back(Gdense(iBand, jBand));
-					}
-					h5writeVectorSlice(did_omegaPh, omegaPh.data(), hsizes({GcountPrev}), hsizes({kpGcount[ik]}), 1);
-					h5writeVectorSlice(did_ikpair, ikpair.data(), hsizes({GcountPrev, 0}), hsizes({kpGcount[ik], 2}), 2);
-					h5writeVectorSlice(did_G, G.data(), hsizes({GcountPrev, 0, 0}), hsizes({kpGcount[ik], nBands, nBands}), 3);					
-				}
+			//Write lattice vectors:
+			{	double R[9] = { 
+					h.R(0, 0), h.R(0, 1), h.R(0, 2), 
+					h.R(1, 0), h.R(1, 1), h.R(1, 2),
+					h.R(2, 0), h.R(2, 1), h.R(2, 2)
+				};
+				hsize_t dimsR[2] = { 3, 3 };
+				h5writeVectorAttr(fid, "R", R, dimsR, 2);
 			}
-			GcountPrev += kpGcount[ik];
+			
+			//Write k resolution:
+			{	hsize_t dims_nk[1] = {3};
+				h5writeVectorAttr(fid, "nk_grid", &NkFine[0], dims_nk, 1);
+			}
+			
+			//Create datasets collectively:
+			hsize_t nBands = bandCountFixed;
+			hid_t did_k = h5createVectorDataset<double>(fid, "k", hsizes({h.nk, 3}), 2);
+			hid_t did_E = h5createVectorDataset<double>(fid, "E", hsizes({h.nk, nBands}), 2);
+			hid_t did_k_adj = h5createVectorDataset<int>(fid, "k_adj", hsizes({h.nk, 3, 5}), 3);
+			hid_t did_P = h5createVectorDataset<complex>(fid, "P", hsizes({h.nk, 3, nBands, nBands}), 4);		
+			hid_t did_S=0, did_L=0, did_G=0, did_omegaPh=0, did_ikpair=0;
+			if(h.spinorial) did_S = h5createVectorDataset<complex>(fid, "S", hsizes({h.nk, 3, nBands, nBands}), 4);
+			if(h.haveL) did_L = h5createVectorDataset<complex>(fid, "L", hsizes({h.nk, 3, nBands, nBands}), 4);
+			if(h.ePhEnabled)
+			{	did_G = h5createVectorDataset<complex>(fid, "G", hsizes({GcountTot, nBands, nBands}), 3);
+				did_omegaPh = h5createVectorDataset<double>(fid, "omega_ph", hsizes({GcountTot}), 1);
+				did_ikpair = h5createVectorDataset<int>(fid, "ikpair", hsizes({GcountTot, 2}), 2);
+			}
+			
+			size_t GcountPrev = 0;
+			for(size_t ik=0; ik<h.nk; ik++)
+			{	if(kpWhose[ik] == mpiWorld->iProcess())
+				{	const LindbladFile::Kpoint& kp = kpAll[ik];
+					
+					h5writeVectorSlice(did_k, &kp.k[0], hsizes({ik, 0}), hsizes({1, 3}), 2);
+					h5writeVectorSlice(did_E, kp.E.data(), hsizes({ik, 0}), hsizes({1, nBands}), 2);
+					h5writeVectorSlice(did_k_adj, getAdjacency(ik).data(), hsizes({ik, 0, 0}), hsizes({1, 3, 5}), 3);
+					h5writeVectorSlice(did_P, getContiguousData(kp.P).data(), hsizes({ik, 0, 0, 0}), hsizes({1, 3, nBands, nBands}), 4);
+					if(h.spinorial) h5writeVectorSlice(did_S, getContiguousData(kp.S).data(), hsizes({ik, 0, 0, 0}), hsizes({1, 3, nBands, nBands}), 4);
+					if(h.haveL) h5writeVectorSlice(did_L, getContiguousData(kp.L).data(), hsizes({ik, 0, 0, 0}), hsizes({1, 3, nBands, nBands}), 4);
+					
+					if(h.ePhEnabled)
+					{	std::vector<double> omegaPh; omegaPh.reserve(kp.GePh.size());
+						std::vector<int> ikpair; ikpair.reserve(kp.GePh.size() * 2);
+						std::vector<complex> G; G.reserve(kp.GePh.size() * nBands * nBands);
+						for(const LindbladFile::GePhEntry& g: kp.GePh)
+						{	omegaPh.push_back(g.omegaPh);
+							ikpair.push_back(ik);
+							ikpair.push_back(g.jk);
+
+							matrix Gdense = zeroes(bandCountFixed, bandCountFixed);
+							for(const SparseEntry& Gentry: g.G)
+								Gdense.set(Gentry.i, Gentry.j, Gentry.val);
+						
+							for(unsigned iBand=0; iBand<nBands; iBand++)
+								for(unsigned jBand=0; jBand<nBands; jBand++)
+									G.push_back(Gdense(iBand, jBand));
+						}
+						h5writeVectorSlice(did_omegaPh, omegaPh.data(), hsizes({GcountPrev}), hsizes({kpGcount[ik]}), 1);
+						h5writeVectorSlice(did_ikpair, ikpair.data(), hsizes({GcountPrev, 0}), hsizes({kpGcount[ik], 2}), 2);
+						h5writeVectorSlice(did_G, G.data(), hsizes({GcountPrev, 0, 0}), hsizes({kpGcount[ik], nBands, nBands}), 3);					
+					}
+				}
+				GcountPrev += kpGcount[ik];
+				if((ik+1)%ikInterval==0) { logPrintf("%d%% ", int(round((ik+1)*100./h.nk))); logFlush(); }
+			}
+			H5Dclose(did_k);
+			H5Dclose(did_E);
+			H5Dclose(did_k_adj);
+			H5Dclose(did_P);
+			if(h.spinorial) H5Dclose(did_S);
+			if(h.haveL) H5Dclose(did_L);
+			if(h.ePhEnabled)
+			{	H5Dclose(did_omegaPh);
+				H5Dclose(did_ikpair);
+				H5Dclose(did_G);
+			}
+			H5Fclose(fid);
+			logPrintf("done.\n"); logFlush();
 		}
-		H5Dclose(did_k);
-		H5Dclose(did_E);
-		H5Dclose(did_k_adj);
-		H5Dclose(did_P);
-		if(h.spinorial) H5Dclose(did_S);
-		if(h.haveL) H5Dclose(did_L);
-		if(h.ePhEnabled)
-		{	H5Dclose(did_omegaPh);
-			H5Dclose(did_ikpair);
-			H5Dclose(did_G);
-		}
-        H5Fclose(fid);
 	}
 };
 
@@ -1091,6 +1096,14 @@ int main(int argc, char** argv)
 	const double ePhDelta = inputMap.get("ePhDelta") * eV; //energy conservation width for e-ph coupling
 	const size_t maxNeighbors = inputMap.get("maxNeighbors", 0); //if non-zero: limit neighbors per k by stochastic down-sampling and amplifying the Econserve weights
 	const string outFile = inputMap.has("outFile") ? inputMap.getString("outFile") : "ldbd.dat"; //output file name
+
+        // H5 output options
+	const string h5OutputOption = inputMap.has("enableH5Output") ? inputMap.getString("enableH5Output") : "no"; //optional defect contribution
+	const bool enableH5Output = (h5OutputOption == "yes");
+	if(enableH5Output & (bandCountFixed <= 0))
+		die("bandCountFixed must be set to a non-zero value to enable HDF5 output.\n");
+	const string outFileH5 = inputMap.has("outFileH5") ? inputMap.getString("outFileH5") : "ldbd.h5"; //output file name
+
 	FeynWannParams fwp(&inputMap);
 	
 	logPrintf("\nInputs after conversion to atomic units:\n");
@@ -1103,10 +1116,12 @@ int main(int argc, char** argv)
 	logPrintf("pumpOmegaMax = %lg\n", pumpOmegaMax);
 	logPrintf("probeOmegaMax = %lg\n", probeOmegaMax);
 	logPrintf("ePhMode = %s\n", ePhMode.c_str());
-    logPrintf("defectName = %s\n", defectName.c_str());
+	logPrintf("defectName = %s\n", defectName.c_str());
 	logPrintf("ePhDelta = %lg\n", ePhDelta);
 	logPrintf("maxNeighbors = %lu\n", maxNeighbors);
 	logPrintf("outFile = %s\n", outFile.c_str());
+	logPrintf("outFileH5 = %s\n", outFileH5.c_str());
+	logPrintf("enableH5Output = %s\n", h5OutputOption.c_str());
 	fwp.printParams();
 	
 	//Initialize FeynWann:
@@ -1175,7 +1190,7 @@ int main(int argc, char** argv)
 		lb.kpairSelect(q0, maxNeighbors);
 	
 	//Final pass: output electronic and e-ph quantities
-	lb.saveData(k0, outFile);
+	lb.saveData(k0, outFile, enableH5Output, outFileH5);
 	
 	//Cleanup:
 	fw.free();
