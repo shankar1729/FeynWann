@@ -119,7 +119,7 @@ if(EnableScaLAPACK)
 	#JDFTx must be built with scalapack support for this to work (not tested in this cmake script)
 endif()
 
-option(EnableHDF5 "Enable HDF5 features (currently required only by init-h5)")
+option(EnableHDF5 "Enable HDF5 features (currently required only by Lindblad init)")
 if(EnableHDF5)
         find_package(HDF5 REQUIRED)
         include_directories(${HDF5_INCLUDE_DIRS})

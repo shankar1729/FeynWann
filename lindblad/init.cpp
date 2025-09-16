@@ -27,31 +27,10 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 #include <Histogram.h>
 #include <InputMap.h>
 #include <lindblad/LindbladFile.h>
+
+#ifdef HDF5_ENABLED
 #include <hdf5.h>
 #include <core/H5io.h>
-
-//Reverse iterator for pointers:
-template<class T> constexpr std::reverse_iterator<T*> reverse(T* i) { return std::reverse_iterator<T*>(i); }
-
-static const double omegaPhCut = 1e-6;
-static const double nEphDelta = 5.; //number of ePhDelta to include in output
-
-//Helper class to "argsort" an array i.e. determine the indices that sort it
-template<typename ArrayType> struct IndexCompare
-{	const ArrayType& array;
-	IndexCompare(const ArrayType& array) : array(array) {}
-	template<typename Integer> bool operator()(Integer i1, Integer i2) const { return array[i1] < array[i2]; }
-};
-
-
-enum BandSelection {ElectronsOnly, HolesOnly, AllBands};
-EnumStringMap<BandSelection> bandSelectionMap(
-	ElectronsOnly, "electrons-only",
-	HolesOnly, "holes-only",
-	AllBands, "all-bands"
-);
-
-
 hid_t h5_complex;
 hid_t h5_bool;
 
@@ -131,6 +110,30 @@ template<typename T> void h5writeScalarAttr(hid_t fid, const char* dname, const 
 	H5Awrite(aid, dataType, &data);
 	H5Aclose(aid);
 }
+#endif
+
+//Reverse iterator for pointers:
+template<class T> constexpr std::reverse_iterator<T*> reverse(T* i) { return std::reverse_iterator<T*>(i); }
+
+static const double omegaPhCut = 1e-6;
+static const double nEphDelta = 5.; //number of ePhDelta to include in output
+
+//Helper class to "argsort" an array i.e. determine the indices that sort it
+template<typename ArrayType> struct IndexCompare
+{	const ArrayType& array;
+	IndexCompare(const ArrayType& array) : array(array) {}
+	template<typename Integer> bool operator()(Integer i1, Integer i2) const { return array[i1] < array[i2]; }
+};
+
+
+enum BandSelection {ElectronsOnly, HolesOnly, AllBands};
+EnumStringMap<BandSelection> bandSelectionMap(
+	ElectronsOnly, "electrons-only",
+	HolesOnly, "holes-only",
+	AllBands, "all-bands"
+);
+
+
 
 std::vector<complex> getContiguousData(const matrix X[3])
 {	std::vector<complex> result;
@@ -948,6 +951,7 @@ struct LindbladInit
 		mpiWorld->fclose(fp);
 		#endif
 
+#ifdef HDF5_ENABLED
 		//---------- HDF5 output ---------
 		if (enableH5Output)
 		{
@@ -1059,6 +1063,7 @@ struct LindbladInit
 			H5Fclose(fid);
 			logPrintf("done.\n"); logFlush();
 		}
+#endif
 	}
 };
 
@@ -1103,6 +1108,11 @@ int main(int argc, char** argv)
 	if(enableH5Output & (bandCountFixed <= 0))
 		die("bandCountFixed must be set to a non-zero value to enable HDF5 output.\n");
 	const string outFileH5 = inputMap.has("outFileH5") ? inputMap.getString("outFileH5") : "ldbd.h5"; //output file name
+
+#ifndef HDF5_ENABLED
+	if (enableH5Output)
+		die("HDF5 output is enabled, however FeynWann has not been compiled with HDF5 support.\n");
+#endif
 
 	FeynWannParams fwp(&inputMap);
 	
