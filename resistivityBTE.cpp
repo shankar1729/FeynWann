@@ -118,6 +118,7 @@ int main(int argc, char** argv)
 	const double dmu = inputMap.get("dmu", 0.) * eV; //must be within [dmuMin,dmuMax] specified while generating inFile
 	const string inFile = inputMap.has("inFile") ? inputMap.getString("inFile") : "ldbd.dat"; //input file name
 	const int nBlocks = int(inputMap.get("nBlocks", 3)); //number of blocks for error analysis
+	const bool save_df = inputMap.has("save-df") ? inputMap.getBool("save-df") : false; //whether to output change in f
 	
 	logPrintf("\nInputs after conversion to atomic units:\n");
 	logPrintf("Tmin = %lg\n", Tmin);
@@ -337,6 +338,14 @@ int main(int argc, char** argv)
 			rhoMat[iBlock] = inv(sigmaMat);
 			rho[iBlock] = (1./3) * trace(rhoMat[iBlock]);
 			tau[iBlock] = weightSum / tauInvNum;
+			
+			//Save df if needed (only for first T and block):
+			if(save_df and (iT == 0) and (iBlock == 0) and mpiWorld->isHead())
+			{	matrix df = mfPrime * invB_mfPrimeV;  //f1 in the derivation (chnage of f for each E direction)
+				logPrintf("Dumping 'df.dat' ... "); logFlush();
+				df.write_real("df.dat");
+				logPrintf("done.\n");
+			}
 		}
 		
 		//Report:
