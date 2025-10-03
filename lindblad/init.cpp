@@ -55,6 +55,19 @@ hid_t openHDF5(string fname)
         return fid;
 }
 
+std::vector<complex> unravelMatrix(matrix M)
+{
+	std::vector<complex> result; result.reserve(M.nRows()*M.nCols());
+	for (int i = 0; i < M.nRows(); i++)
+	{
+		for (int j = 0; j < M.nCols(); j++)
+		{
+			result.push_back(M(i, j));
+		}
+	}
+	return result;
+}	
+
 //Create dataset collectively across all processes
 template<typename T> hid_t h5createVectorDataset(hid_t fid, const char* dname, hsize_t* dims, int rank)
 {
@@ -567,7 +580,7 @@ struct LindbladInit
 		//Find k-point index in global list:
 		kp.k = state.k;
 		size_t ik; if(not findK(kp.k, ik)) return;
-		
+
 		//Determine energy ranges:
 		const double *Ebegin = state.E.data(), *Eend = Ebegin+fw.nBands;
 		//--- pump-active (inner) energy range:
@@ -590,6 +603,7 @@ struct LindbladInit
 				outerOffset, kp.nOuter);
 		}
 		kp.innerStart = innerOffset - outerOffset;
+		kp.innerOffset = innerOffset;
 		
 		//Save energy and matrix elements to kp:
 		//Energies:
@@ -604,6 +618,10 @@ struct LindbladInit
 		if(fw.fwp.needL)
 			for(int iDir=0; iDir<3; iDir++)
 				kp.L[iDir] = state.L[iDir](innerOffset,innerOffset+kp.nInner, innerOffset,innerOffset+kp.nInner);
+
+		// Set U to a submatrix of state.U (nBands by nInner)
+		kp.U = state.U(0, fw.nBands, innerOffset, innerOffset+kp.nInner);
+		
 	}
 	static void initKpoint(const FeynWann::StateE& state, void* params)
 	{	((LindbladInit*)params)->initKpoint(state);
@@ -694,49 +712,53 @@ struct LindbladInit
     static void addDefect(const FeynWann::MatrixDefect& mD, void* params)
 	{	((LindbladInit*)params)->addDefect(mD);
 	}
-	
-	//Get 3 x 5 adjacency indices as a flat array for a specified k-point
-	std::vector<int> getAdjacency(size_t ik)
-	{	std::vector<int> result; result.reserve(15);
-		for (int dir=0; dir<3; dir++)
-		{	std::vector<int> adj_arr(5);
-			vector3<> offset; offset[dir] = 1.0 / NkFine[dir];
-			
-			int k_ind_prev = ik;
-			size_t jk_ind;
-			
-			// Get cells to the "left"
-			for(int cell=1; cell>=0; cell--)
-			{	vector3<double> jk = k[ik] + (cell - 2) * offset;
-				bool exists = findK(jk, jk_ind);
-				if (exists)
-				{	adj_arr[cell] = jk_ind;
-					k_ind_prev = jk_ind;
-				}
-				else
-				{	// If no adjacent point exists, insert the previous point (moving outward)
-					adj_arr[cell] = k_ind_prev;
+
+        matrix pivotPermute(matrix M)
+	{
+		std::vector<int> perm;
+		for (int i = 0; i < M.nCols(); i++)
+		{
+			int argmax = -1;
+			double max = 0;
+			for (int j = 0; j < M.nRows(); j++)
+			{
+				if (M(i, j).abs() > max)
+				{
+					max = M(i, j).abs();
+					argmax = j;
 				}
 			}
-			
-			adj_arr[2] = ik;
-			k_ind_prev = ik;
-			
-			//Get cells to the "right"
-			for(int cell=3; cell<5; cell++)
-			{	vector3<double> jk = k[ik] + (cell - 2) * offset;
-				bool exists = findK(jk, jk_ind);
-				if (exists)
-				{	adj_arr[cell] = jk_ind;
-					k_ind_prev = jk_ind;
-				}
-				else
-				{	// If no adjacent point exists, insert the previous point (moving outward)
-					adj_arr[cell] = k_ind_prev;
-				}
-			}
-			result.insert(result.end(), adj_arr.begin(), adj_arr.end());
+			// Ensure all rows will be permuted
+			for (const int& ind : perm) if (ind == argmax)
+					die("Overlap matrix is malformed.");
+			perm.push_back(argmax);
 		}
+		matrix result = zeroes(M.nRows(), M.nCols());
+		for (int row = 0; row < M.nRows(); row++)
+		{
+			result.set(row, row+1, 0, M.nCols(), M(perm[row], perm[row]+1, 0, M.nCols()));
+		}
+		return result;
+	}
+
+    	matrix getRotation(matrix C, matrix CRef, std::vector<double> eigRef)
+	{
+		matrix O = dagger(C)*CRef;
+		O = pivotPermute(O);
+		// Prevent rotation between non-degenerate states
+		for (int i = 0; i < O.nRows(); i++)
+		{
+			for (int j = 0; j < O.nCols(); j++)
+			{
+				if (eigRef[i] - eigRef[j] > fw.fwp.degeneracyThreshold)
+				{
+					O(i, j) = 0.0;
+				}
+			}
+		}
+
+		matrix result = O*invsqrt(dagger(O)*O);
+
 		return result;
 	}
 	
@@ -1002,6 +1024,7 @@ struct LindbladInit
 			hid_t did_k = h5createVectorDataset<double>(fid, "k", hsizes({h.nk, 3}), 2);
 			hid_t did_E = h5createVectorDataset<double>(fid, "E", hsizes({h.nk, nBands}), 2);
 			hid_t did_k_adj = h5createVectorDataset<int>(fid, "k_adj", hsizes({h.nk, 3, 5}), 3);
+			hid_t did_U = h5createVectorDataset<complex>(fid, "U", hsizes({h.nk, 3, 5, nBands, nBands}), 5);
 			hid_t did_P = h5createVectorDataset<complex>(fid, "P", hsizes({h.nk, 3, nBands, nBands}), 4);		
 			hid_t did_S=0, did_L=0, did_G=0, did_omegaPh=0, did_ikpair=0;
 			if(h.spinorial) did_S = h5createVectorDataset<complex>(fid, "S", hsizes({h.nk, 3, nBands, nBands}), 4);
@@ -1016,10 +1039,77 @@ struct LindbladInit
 			for(size_t ik=0; ik<h.nk; ik++)
 			{	if(kpWhose[ik] == mpiWorld->iProcess())
 				{	const LindbladFile::Kpoint& kp = kpAll[ik];
+	
+
+					// Calculate adjacency and phase matching
+					std::vector<int> k_adj; k_adj.reserve(15);
+					std::vector<complex> U; U.reserve(15*nBands*nBands);
+					const LindbladFile::Kpoint& kp_self = kpAll[ik];
+					for (int dir=0; dir<3; dir++)
+					{	std::vector<int> adj_arr(5);
+						vector3<> offset; offset[dir] = 1.0 / NkFine[dir];
+						
+						int k_ind_prev = ik;
+						size_t jk_ind;
+
+						matrix kp_j_U;
+						LindbladFile::Kpoint kp_j;
+						
+						// Get cells to the "left"
+						for(int cell=1; cell>=0; cell--)
+						{	vector3<double> jk = k[ik] + (cell - 2) * offset;
+							bool exists = findK(jk, jk_ind);
+							if (exists)
+							{	adj_arr[cell] = jk_ind;
+								k_ind_prev = jk_ind;
+							}
+							else
+							{	// If no adjacent point exists, insert the previous point (moving outward)
+								adj_arr[cell] = k_ind_prev;
+							}
+							kp_j = kpAll[adj_arr[cell]];
+
+							// Get rotations, using selected energy levels at kp_j (for calculating degeneracy)
+							kp_j_U = getRotation(kp_self.U, kp_j.U, 
+									std::vector<double>(kp_j.E.begin() + kp_j.innerOffset, kp_j.E.begin() + kp_j.innerOffset + kp_j.nInner));
+							std::vector<complex> kp_j_U_flat = unravelMatrix(kp_j_U);
+							U.insert(U.end(), kp_j_U_flat.begin(), kp_j_U_flat.end());
+						}
+						
+						adj_arr[2] = ik;
+						k_ind_prev = ik;
+						kp_j_U = eye(nBands);
+
+						std::vector<complex> kp_j_U_flat = unravelMatrix(kp_j_U);
+						U.insert(U.end(), kp_j_U_flat.begin(), kp_j_U_flat.end());
+						
+						//Get cells to the "right"
+						for(int cell=3; cell<5; cell++)
+						{	vector3<double> jk = k[ik] + (cell - 2) * offset;
+							bool exists = findK(jk, jk_ind);
+							if (exists)
+							{	adj_arr[cell] = jk_ind;
+								k_ind_prev = jk_ind;
+							}
+							else
+							{	// If no adjacent point exists, insert the previous point (moving outward)
+								adj_arr[cell] = k_ind_prev;
+							}
+							kp_j = kpAll[adj_arr[cell]];
+
+							// Get rotations, using selected energy levels at kp_j (for calculating degeneracy)
+							kp_j_U = getRotation(kp_self.U, kp_j.U, 
+									std::vector<double>(kp_j.E.begin() + kp_j.innerOffset, kp_j.E.begin() + kp_j.innerOffset + kp_j.nInner));
+							std::vector<complex> kp_j_U_flat = unravelMatrix(kp_j_U);
+							U.insert(U.end(), kp_j_U_flat.begin(), kp_j_U_flat.end());
+						}
+						k_adj.insert(k_adj.end(), adj_arr.begin(), adj_arr.end());
+					}
 					
 					h5writeVectorSlice(did_k, &kp.k[0], hsizes({ik, 0}), hsizes({1, 3}), 2);
 					h5writeVectorSlice(did_E, kp.E.data(), hsizes({ik, 0}), hsizes({1, nBands}), 2);
-					h5writeVectorSlice(did_k_adj, getAdjacency(ik).data(), hsizes({ik, 0, 0}), hsizes({1, 3, 5}), 3);
+					h5writeVectorSlice(did_k_adj, k_adj.data(), hsizes({ik, 0, 0}), hsizes({1, 3, 5}), 3);
+					h5writeVectorSlice(did_U, U.data(), hsizes({ik, 0, 0, 0, 0}), hsizes({1, 3, 5, nBands, nBands}), 5);
 					h5writeVectorSlice(did_P, getContiguousData(kp.P).data(), hsizes({ik, 0, 0, 0}), hsizes({1, 3, nBands, nBands}), 4);
 					if(h.spinorial) h5writeVectorSlice(did_S, getContiguousData(kp.S).data(), hsizes({ik, 0, 0, 0}), hsizes({1, 3, nBands, nBands}), 4);
 					if(h.haveL) h5writeVectorSlice(did_L, getContiguousData(kp.L).data(), hsizes({ik, 0, 0, 0}), hsizes({1, 3, nBands, nBands}), 4);
@@ -1052,6 +1142,7 @@ struct LindbladInit
 			H5Dclose(did_k);
 			H5Dclose(did_E);
 			H5Dclose(did_k_adj);
+			H5Dclose(did_U);
 			H5Dclose(did_P);
 			if(h.spinorial) H5Dclose(did_S);
 			if(h.haveL) H5Dclose(did_L);

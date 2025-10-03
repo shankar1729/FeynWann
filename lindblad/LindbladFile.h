@@ -193,12 +193,14 @@ namespace LindbladFile
 		int nInner; //number of bands in the inner pump-active window
 		int nOuter; //number of bands in the outer probe-active window
 		int innerStart; //start of inner window relative to outer window
+		int innerOffset; //start of inner window relative to outer window
 		
 		diagMatrix E; //energies (dim: nOuter)
 		matrix P[3]; //momentum matrix elements (dim: nInner x nOuter each)
 		matrix S[3]; //spin matrix elements (dim: nInner x nInner each, only if spinorial)
 		matrix L[3]; //orbital anguler momentum matrix elements (dim: nInner x nInner each, only if haveL)
 		std::vector<GePhEntry> GePh; //e-ph matrix elements (only if ePhEnabled)
+		matrix U; //!< rotation from Wannier to eigen-basis
 		
 		size_t nBytes(const Header& h) const
 		{	size_t dataSize = sizeof(char)*markerLen + sizeof(vector3<>) + sizeof(int)*3
