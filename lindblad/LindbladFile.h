@@ -193,7 +193,6 @@ namespace LindbladFile
 		int nInner; //number of bands in the inner pump-active window
 		int nOuter; //number of bands in the outer probe-active window
 		int innerStart; //start of inner window relative to outer window
-		int innerOffset; //start of inner window relative to outer window
 		
 		diagMatrix E; //energies (dim: nOuter)
 		matrix P[3]; //momentum matrix elements (dim: nInner x nOuter each)

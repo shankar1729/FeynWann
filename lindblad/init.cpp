@@ -66,7 +66,7 @@ std::vector<complex> unravelMatrix(matrix M)
 		}
 	}
 	return result;
-}	
+}
 
 //Create dataset collectively across all processes
 template<typename T> hid_t h5createVectorDataset(hid_t fid, const char* dname, hsize_t* dims, int rank)
@@ -603,7 +603,6 @@ struct LindbladInit
 				outerOffset, kp.nOuter);
 		}
 		kp.innerStart = innerOffset - outerOffset;
-		kp.innerOffset = innerOffset;
 		
 		//Save energy and matrix elements to kp:
 		//Energies:
@@ -1034,7 +1033,21 @@ struct LindbladInit
 				did_omegaPh = h5createVectorDataset<double>(fid, "omega_ph", hsizes({GcountTot}), 1);
 				did_ikpair = h5createVectorDataset<int>(fid, "ikpair", hsizes({GcountTot, 2}), 2);
 			}
-			
+
+			// Gather together all U
+			std::vector<matrix> allU(h.nk);
+			for(size_t ik=0; ik<k.size(); ik++)
+			{	if(kpWhose[ik] == mpiWorld->iProcess())
+				{	
+					allU[ik] = kpAll[ik].U;
+				}
+				else
+				{
+					allU[ik].init(fw.nBands, nBands);
+				}
+				mpiWorld->bcastData(allU[ik], kpWhose[ik]);
+			}
+
 			size_t GcountPrev = 0;
 			for(size_t ik=0; ik<h.nk; ik++)
 			{	if(kpWhose[ik] == mpiWorld->iProcess())
@@ -1067,11 +1080,11 @@ struct LindbladInit
 							{	// If no adjacent point exists, insert the previous point (moving outward)
 								adj_arr[cell] = k_ind_prev;
 							}
-							kp_j = kpAll[adj_arr[cell]];
+							int other_ind = adj_arr[cell];
 
 							// Get rotations, using selected energy levels at kp_j (for calculating degeneracy)
-							kp_j_U = getRotation(kp_self.U, kp_j.U, 
-									std::vector<double>(kp_j.E.begin() + kp_j.innerOffset, kp_j.E.begin() + kp_j.innerOffset + kp_j.nInner));
+							diagMatrix EInner_self = kp_self.E(kp_self.innerStart, kp_self.innerStart + nBands);
+							kp_j_U = getRotation(allU[other_ind], kp_self.U, EInner_self);
 							std::vector<complex> kp_j_U_flat = unravelMatrix(kp_j_U);
 							U.insert(U.end(), kp_j_U_flat.begin(), kp_j_U_flat.end());
 						}
@@ -1095,13 +1108,14 @@ struct LindbladInit
 							{	// If no adjacent point exists, insert the previous point (moving outward)
 								adj_arr[cell] = k_ind_prev;
 							}
-							kp_j = kpAll[adj_arr[cell]];
+							int other_ind = adj_arr[cell];
 
 							// Get rotations, using selected energy levels at kp_j (for calculating degeneracy)
-							kp_j_U = getRotation(kp_self.U, kp_j.U, 
-									std::vector<double>(kp_j.E.begin() + kp_j.innerOffset, kp_j.E.begin() + kp_j.innerOffset + kp_j.nInner));
+							diagMatrix EInner_self = kp_self.E(kp_self.innerStart, kp_self.innerStart + nBands);
+							kp_j_U = getRotation(allU[other_ind], kp_self.U, EInner_self);
 							std::vector<complex> kp_j_U_flat = unravelMatrix(kp_j_U);
 							U.insert(U.end(), kp_j_U_flat.begin(), kp_j_U_flat.end());
+
 						}
 						k_adj.insert(k_adj.end(), adj_arr.begin(), adj_arr.end());
 					}
