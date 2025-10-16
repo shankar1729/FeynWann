@@ -32,6 +32,7 @@ struct FeynWannParams
 	bool needPhonons; //!< whether to initialize phonon-related quantities (default: false)
 	bool needVelocity; //!< whether to initialize velocity (momentum) matrix elements
 	bool needSpin; //!< whether to initialize spin matrix elements (will be reset to false if not relativistic)
+	bool needR; //!< whether to initialize position matrix elements
 	bool needL; //!< whether to initialize angular momentum matrix elements
 	bool needQ; //!< whether to initialize r*p electric quadrupole matrix elements
 	bool needLinewidth_ee; //!< whether to provide e-e line-width (default: false)
@@ -93,6 +94,7 @@ public:
 		std::vector<vector3<>> vVec; //!< band velocities (diagonal part of v) in Cartesian coordinates, available if needVelocity = true
 		matrix S[3]; //!< Spin matrix elements in Cartesian coordinates, available if needSpin = true
 		std::vector<vector3<>> Svec; //!< band spins (diagonal part of S) in Cartesian coordinates, available if needSpin = true
+		matrix R[3]; //!< Position matrix elements (Berry connection), available if needR = true
 		matrix L[3]; //!< Angular momentum matrix elements in Cartesian coordinates, available if needL = true
 		matrix Q[5]; //!< Electric quadrupole r*p matrix elements (xy, yz, zx, xxr, yyr), available if needQ = true
 		diagMatrix ImSigma_ee; //!< e-e linewidth, available if needLinewidth_ee = true
@@ -109,6 +111,9 @@ public:
 		void computeLQ(const FeynWannParams& fwp,
 			const std::shared_ptr<DistributedMatrix> RPw,
 			const std::shared_ptr<DistributedMatrix> HprimeW[3]); //!< calculate L and Q
+		void computeR(const FeynWannParams& fwp,
+			const std::shared_ptr<DistributedMatrix> Rw,
+			const std::shared_ptr<DistributedMatrix> HprimeW[3]); //!< calculate R
 		void compute_dHePhSum(const std::shared_ptr<DistributedMatrix> Dw,
 			const std::shared_ptr<DistributedMatrix> HePhSumW); //!< calculate phonon sum rule correction
 		static void extractDiagonal(const matrix (&X)[3], std::vector<vector3<>>& Xvec); //!< used to initialize vVev, Svec
@@ -206,7 +211,7 @@ public:
 	//Electrons:
 	std::vector<vector3<int>> cellMap; //electron Wannier cell map
 	std::vector<matrix> cellWeights; //corresponding weights (nBands x nBands for each cell)
-	std::shared_ptr<DistributedMatrix> Hw, Pw, Sw, RPw, Zw; //Wannier hamiltonian, momentum, spin, R*P and z matrix elements
+	std::shared_ptr<DistributedMatrix> Hw, Pw, Sw, Rw, RPw, Zw; //Wannier hamiltonian, momentum, spin, R, R*P and z matrix elements
 	std::shared_ptr<DistributedMatrix> HprimeW[3]; //d/dk of Wannier hamiltonian in each Cartesian direction
 	std::shared_ptr<DistributedMatrix> ImSigma_eeW, ImSigma_ePhW, ImSigmaP_ePhW, ImSigma_DW, ImSigmaP_DW; //linewidths in wannier basis
 	void setState(StateE& state); //!< set requested properties for ik in state

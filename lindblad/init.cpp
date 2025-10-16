@@ -617,6 +617,9 @@ struct LindbladInit
 		if(fw.fwp.needL)
 			for(int iDir=0; iDir<3; iDir++)
 				kp.L[iDir] = state.L[iDir](innerOffset,innerOffset+kp.nInner, innerOffset,innerOffset+kp.nInner);
+		if(fw.fwp.needR)
+			for(int iDir=0; iDir<3; iDir++)
+				kp.R[iDir] = state.R[iDir](innerOffset,innerOffset+kp.nInner, innerOffset,innerOffset+kp.nInner);
 
 		// Set U to a submatrix of state.U (nBands by nInner)
 		kp.U = state.U(0, fw.nBands, innerOffset, innerOffset+kp.nInner);
@@ -1025,9 +1028,10 @@ struct LindbladInit
 			hid_t did_k_adj = h5createVectorDataset<int>(fid, "k_adj", hsizes({h.nk, 3, 5}), 3);
 			hid_t did_U = h5createVectorDataset<complex>(fid, "U", hsizes({h.nk, 3, 5, nBands, nBands}), 5);
 			hid_t did_P = h5createVectorDataset<complex>(fid, "P", hsizes({h.nk, 3, nBands, nBands}), 4);		
-			hid_t did_S=0, did_L=0, did_G=0, did_omegaPh=0, did_ikpair=0;
+			hid_t did_S=0, did_R=0, did_L=0, did_G=0, did_omegaPh=0, did_ikpair=0;
 			if(h.spinorial) did_S = h5createVectorDataset<complex>(fid, "S", hsizes({h.nk, 3, nBands, nBands}), 4);
 			if(h.haveL) did_L = h5createVectorDataset<complex>(fid, "L", hsizes({h.nk, 3, nBands, nBands}), 4);
+			if(fw.fwp.needR) did_R = h5createVectorDataset<complex>(fid, "R", hsizes({h.nk, 3, nBands, nBands}), 4);
 			if(h.ePhEnabled)
 			{	did_G = h5createVectorDataset<complex>(fid, "G", hsizes({GcountTot, nBands, nBands}), 3);
 				did_omegaPh = h5createVectorDataset<double>(fid, "omega_ph", hsizes({GcountTot}), 1);
@@ -1126,6 +1130,7 @@ struct LindbladInit
 					h5writeVectorSlice(did_U, U.data(), hsizes({ik, 0, 0, 0, 0}), hsizes({1, 3, 5, nBands, nBands}), 5);
 					h5writeVectorSlice(did_P, getContiguousData(kp.P).data(), hsizes({ik, 0, 0, 0}), hsizes({1, 3, nBands, nBands}), 4);
 					if(h.spinorial) h5writeVectorSlice(did_S, getContiguousData(kp.S).data(), hsizes({ik, 0, 0, 0}), hsizes({1, 3, nBands, nBands}), 4);
+					if(fw.fwp.needR) h5writeVectorSlice(did_R, getContiguousData(kp.R).data(), hsizes({ik, 0, 0, 0}), hsizes({1, 3, nBands, nBands}), 4);
 					if(h.haveL) h5writeVectorSlice(did_L, getContiguousData(kp.L).data(), hsizes({ik, 0, 0, 0}), hsizes({1, 3, nBands, nBands}), 4);
 					
 					if(h.ePhEnabled)
@@ -1160,6 +1165,7 @@ struct LindbladInit
 			H5Dclose(did_P);
 			if(h.spinorial) H5Dclose(did_S);
 			if(h.haveL) H5Dclose(did_L);
+			if(fw.fwp.needR) H5Dclose(did_R);
 			if(h.ePhEnabled)
 			{	H5Dclose(did_omegaPh);
 				H5Dclose(did_ikpair);
@@ -1207,6 +1213,9 @@ int main(int argc, char** argv)
 	const size_t maxNeighbors = inputMap.get("maxNeighbors", 0); //if non-zero: limit neighbors per k by stochastic down-sampling and amplifying the Econserve weights
 	const string outFile = inputMap.has("outFile") ? inputMap.getString("outFile") : "ldbd.dat"; //output file name
 
+	const string writeROption = inputMap.has("writeR") ? inputMap.getString("writeR") : "yes"; //optional defect contribution
+	const bool writeR = (writeROption == "yes");
+
         // H5 output options
 	const string h5OutputOption = inputMap.has("enableH5Output") ? inputMap.getString("enableH5Output") : "no"; //optional defect contribution
 	const bool enableH5Output = (h5OutputOption == "yes");
@@ -1237,12 +1246,14 @@ int main(int argc, char** argv)
 	logPrintf("outFile = %s\n", outFile.c_str());
 	logPrintf("outFileH5 = %s\n", outFileH5.c_str());
 	logPrintf("enableH5Output = %s\n", h5OutputOption.c_str());
+	logPrintf("writeR = %s\n", writeROption.c_str());
 	fwp.printParams();
 	
 	//Initialize FeynWann:
 	fwp.needVelocity = true;
 	fwp.needSpin = true;
 	fwp.needL = fwp.orbitalZeeman;
+	fwp.needR = writeR;
 	fwp.needPhonons = ePhEnabled;
     if(defectEnabled)
 		fwp.needDefect = defectName;

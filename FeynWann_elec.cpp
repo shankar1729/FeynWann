@@ -66,7 +66,9 @@ void FeynWann::eTransformNeeded(const vector3<>& k0)
 	if(energyOnly) return;
 	if(fwp.needVelocity or (fwp.needL or fwp.needQ)) Pw->transform(k0);
 	if(fwp.needSpin) Sw->transform(k0);
-	if(fwp.needRP()) { RPw->transform(k0); for(int iDir=0; iDir<3; iDir++) HprimeW[iDir]->transform(k0); }
+	if(fwp.needR) Rw->transform(k0); 
+	if(fwp.needRP()) RPw->transform(k0);
+	if(fwp.needR or fwp.needRP()) { for(int iDir=0; iDir<3; iDir++) HprimeW[iDir]->transform(k0); }
 	if(fwp.EzExt) Zw->transform(k0);
 	if(fwp.needLinewidth_ee) ImSigma_eeW->transform(k0);
 	if(fwp.needLinewidth_ePh) ImSigma_ePhW->transform(k0);
@@ -81,7 +83,9 @@ void FeynWann::eComputeNeeded(const vector3<>& k)
 	if(energyOnly) return;
 	if(fwp.needVelocity or (fwp.needL or fwp.needQ)) Pw->compute(k);
 	if(fwp.needSpin) Sw->compute(k);
-	if(fwp.needRP()) { RPw->compute(k); for(int iDir=0; iDir<3; iDir++) HprimeW[iDir]->compute(k); }
+	if(fwp.needR) Rw->compute(k); 
+	if(fwp.needRP()) RPw->compute(k);
+	if(fwp.needR or fwp.needRP()) { for(int iDir=0; iDir<3; iDir++) HprimeW[iDir]->compute(k); }
 	if(fwp.EzExt) Zw->compute(k);
 	if(fwp.needLinewidth_ee) ImSigma_eeW->compute(k);
 	if(fwp.needLinewidth_ePh) ImSigma_ePhW->compute(k);
@@ -178,6 +182,9 @@ void FeynWann::setState(FeynWann::StateE& state)
 		if(fwp.needQ) for(int iComp=0; iComp<5; iComp++) rotateMatrix(state.Q[iComp], Upert);
 		watchPert.stop();
 	}
+	//Compute R
+	if(fwp.needR)
+		state.computeR(fwp, Rw, HprimeW);
 	
 	//Extract diagonal components for convenience, where needed:
 	if(fwp.needVelocity) StateE::extractDiagonal(state.v, state.vVec);
@@ -231,6 +238,11 @@ void FeynWann::bcastState(FeynWann::StateE& state, MPIUtil* mpiUtil, int root)
 			bcast(state.S[iDir], nBands, nBands, mpiUtil, root);
 		state.Svec.resize(nBands);
 		mpiUtil->bcastData(state.Svec, root);
+	}
+	//Position matrix, if needed:
+	if(fwp.needR)
+	{	for(int iDir=0; iDir<3; iDir++)
+			bcast(state.R[iDir], nBands, nBands, mpiUtil, root);
 	}
 	//Angular momentum matrix, if needed:
 	if(fwp.needL)
@@ -300,6 +312,31 @@ double FeynWann::StateE::ImSigmaP_ePh(int n, double f) const
 matrix FeynWann::StateE::getMatrixRotated(const std::shared_ptr<DistributedMatrix>& mat, int iMat) const
 {	int nBands = U.nRows();
 	return dagger(U) * getMatrix(mat->getResult(ik), nBands, nBands, iMat) * U;
+}
+
+void FeynWann::StateE::computeR(const FeynWannParams& fwp,
+	const std::shared_ptr<DistributedMatrix> Rw,
+	const std::shared_ptr<DistributedMatrix> HprimeW[3])
+{
+	int nBands = E.nRows();
+	for(int iDir=0; iDir<3; iDir++)
+	{	//Compute R from Wannier interpolation with range-splitting:
+		R[iDir] = getMatrixRotated(Rw, iDir);
+
+		//Long range correction:
+		//--- fetch dH/dk
+		matrix iDi = getMatrixRotated(HprimeW[iDir]);
+		//--- convert to i*D := i dU/dk in place:
+		{	complex* iDiData = iDi.data();
+			for(int bCol=0; bCol<nBands; bCol++) //note: column major storage
+				for(int bRow=0; bRow<nBands; bRow++)
+				{	double Ediff = E[bCol] - E[bRow];
+					*(iDiData++) *= complex(0., (fabs(Ediff) < fwp.degeneracyThreshold) ? 0. : 1./Ediff);
+				}
+		}
+		//--- add correction
+		R[iDir] += iDi;
+	}
 }
 
 

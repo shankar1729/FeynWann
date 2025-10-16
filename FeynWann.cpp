@@ -33,7 +33,7 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 
 FeynWannParams::FeynWannParams(InputMap* inputMap)
 : iSpin(0), totalEprefix("Wannier/totalE"), phononPrefix("Wannier/phonon"), wannierPrefix("Wannier/wannier"),
-needSymmetries(false), needPhonons(false), needVelocity(false), needSpin(false), needL(false), needQ(false),
+needSymmetries(false), needPhonons(false), needVelocity(false), needSpin(false), needR(false), needL(false), needQ(false),
 needLinewidth_ee(false), needLinewidth_ePh(false), needLinewidthP_ePh(false),
 ePhHeadOnly(false), maskOptimize(false), bandSumLQ(false),
 orbitalZeeman(false), EzExt(0.), scissor(0.), EshiftWeight(0.), enforceKramerDeg(0.), degeneracyThreshold(1E-4*eV), tdep(false)
@@ -565,6 +565,9 @@ tTransformByCompute(1), tTransformByComputeD(1), inEphLoop(false)
 	{	std::shared_ptr<DistributedMatrix> Ww = readE("mlwfW");
 		axpy(fwp.EshiftWeight, Ww->mat, Hw->mat);
 	}
+
+	if(fwp.needR) //read position matrix elements
+		Rw = readE("mlwfR", 3);
 	
 	//Velocity matrix elements
 	if(fwp.needVelocity or (fwp.needL or fwp.needQ)) //also needed for long-raneg correction of R*P
@@ -612,6 +615,7 @@ void FeynWann::free()
 {	Hw = 0;
 	Pw = 0;
 	Sw = 0;
+	Rw = 0;
 	RPw = 0;
 	Zw = 0;
 	for(int iDir=0; iDir<3; iDir++) HprimeW[iDir] = 0;

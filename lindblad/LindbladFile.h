@@ -197,6 +197,7 @@ namespace LindbladFile
 		diagMatrix E; //energies (dim: nOuter)
 		matrix P[3]; //momentum matrix elements (dim: nInner x nOuter each)
 		matrix S[3]; //spin matrix elements (dim: nInner x nInner each, only if spinorial)
+		matrix R[3]; //position matrix elements (dim: nInner x nOuter each)
 		matrix L[3]; //orbital anguler momentum matrix elements (dim: nInner x nInner each, only if haveL)
 		std::vector<GePhEntry> GePh; //e-ph matrix elements (only if ePhEnabled)
 		matrix U; //!< rotation from Wannier to eigen-basis
