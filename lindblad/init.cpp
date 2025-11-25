@@ -223,7 +223,8 @@ struct LindbladInit
 	{	size_t index=0;
 		for(int iDir=0; iDir<3; iDir++)
 		{	double ki = k[iDir] - floor(k[iDir]); //wrapped to [0,1)
-			index = (size_t)round(NkFine[iDir]*(index+ki));
+			size_t index_i = size_t(round(ki * NkFine[iDir])) % NkFine[iDir];
+			index = NkFine[iDir] * index + index_i;
 		}
 		return index;
 	}
