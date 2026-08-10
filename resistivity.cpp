@@ -164,6 +164,8 @@ int main(int argc, char** argv)
 	string rhoName = "Resistivity";
 	const double cm = 1e-2*meter;
 	const double cm2byVs = cm*cm/(Volt*sec);
+	const double Dunit = meter*meter/sec;
+	string DunitName = "m^2/s";
 	double kappaUnit = Joule/(sec*meter*Kelvin);
 	string kappaUnitName="W/(m.K)";
 	string kappaName = "Kappa_e";
@@ -287,8 +289,8 @@ int main(int argc, char** argv)
 		for(size_t iSpin=0; iSpin<rcArr.size(); iSpin++)
 		{	string spinSuffix = spinSuffixes[iSpin];
 			//Compute quantities for each block:
-			std::vector<matrix3<>> rhoArr(nBlocks), mobArr(nBlocks), kappaArr(nBlocks);
-			std::vector<double> rhoBarArr(nBlocks), mobBarArr(nBlocks), kappaBarArr(nBlocks); 
+			std::vector<matrix3<>> rhoArr(nBlocks), mobArr(nBlocks), Darr(nBlocks), kappaArr(nBlocks);
+			std::vector<double> rhoBarArr(nBlocks), mobBarArr(nBlocks), DbarArr(nBlocks), kappaBarArr(nBlocks); 
 			std::vector<double> tauArr(nBlocks), tauDrudeArr(nBlocks), tauRateAvgArr(nBlocks);
 			std::vector<double> mEffArr(nBlocks), vFarr(nBlocks);
 			std::vector<double> gArr(nBlocks), nArr(nBlocks);
@@ -297,14 +299,17 @@ int main(int argc, char** argv)
 			{	const ResistivityCollect& rc = *rcArr[iSpin][block];
 				rhoArr[block] = Omega * inv(rc.vvTau[iMu]);
 				mobArr[block] = rc.vvTau[iMu]/fabs(rc.n[iMu]);
+				Darr[block] = rc.vvTau[iMu] / rc.g[iMu];
 				kappaArr[block] = rc.vvTauK[iMu]/Omega;
 				if(slabDir>=0.)
 				{	rhoArr[block](slabDir,slabDir) = INFINITY;
 					mobArr[block](slabDir,slabDir) = 0.;
+					Darr[block](slabDir,slabDir) = 0.;
 					kappaArr[block](slabDir,slabDir) = 0.;
 				}
 				rhoBarArr[block] = trace(rhoArr[block], slabDir) / (slabDir>=0 ? 2. : 3.);
 				mobBarArr[block] = trace(mobArr[block], slabDir) / (slabDir>=0 ? 2. : 3.);
+				DbarArr[block] = trace(Darr[block], slabDir) / (slabDir>=0 ? 2. : 3.);
 				kappaBarArr[block] = trace(kappaArr[block], slabDir) / (slabDir>=0 ? 2. : 3.);
 				tauArr[block] = rc.tau[iMu] / rc.g[iMu];
 				tauRateAvgArr[block] = rc.g[iMu] / rc.tauInv[iMu];
@@ -319,9 +324,11 @@ int main(int argc, char** argv)
 			//Report with statistics:
 			reportResult(rhoArr, rhoName+spinSuffix, rhoUnit, rhoUnitName);
 			reportResult(mobArr, "Mobility"+spinSuffix, cm2byVs, "cm^2/(V.s)");
+			reportResult(Darr, "Diffusivity"+spinSuffix, Dunit, DunitName);
 			reportResult(kappaArr, kappaName+spinSuffix, kappaUnit, kappaUnitName);
 			reportResult(rhoBarArr, rhoName+spinSuffix, rhoUnit, rhoUnitName);
 			reportResult(mobBarArr, "Mobility"+spinSuffix, cm2byVs, "cm^2/(V.s)");
+			reportResult(DbarArr, "Diffusivity"+spinSuffix, Dunit, DunitName);
 			reportResult(kappaBarArr, kappaName+spinSuffix, kappaUnit, kappaUnitName);
 			reportResult(tauDrudeArr, "tauDrude"+spinSuffix, fs, "fs");
 			reportResult(tauArr, "tau"+spinSuffix, fs, "fs");
