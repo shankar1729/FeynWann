@@ -460,7 +460,15 @@ void Lindblad::reportCarrierLifetime() const
 	size_t iEallStart = nInnerPrev[ikStart]; //start index of Eall corresponding to iProc
 	size_t iEallStop = nInnerPrev[ikStop]; //end index of Eall corresponding to iProc
 	size_t nE_i = iEallStop - iEallStart; //total number of Eall corresponding to iProc
-	diagMatrix tauInv_i(nE_i); //all rate contributions to states on iProc
+	diagMatrix tauInv_i(nE_i), tauPinv_i(nE_i); //all carrier and momentum relaxation rate contributions to states on iProc
+	
+	//Collect band velocities on all processes:
+	std::vector<vector3<>> vAll(Eall.size());
+	for(const State& s: state)
+		for(int b=0; b<s.nInner; b++)
+			for(int iDir=0; iDir<3; iDir++)
+				vAll[nInnerPrev[s.ik] + b][iDir] = s.P[iDir](b, b).real();
+	mpiWorld->allReduceData(vAll, MPIUtil::ReduceSum);
 	
 	//Loop over process providing other k data:
 	const double prefac = (2.*M_PI)/nkTot;
@@ -471,7 +479,7 @@ void Lindblad::reportCarrierLifetime() const
 		size_t jEallStart = nInnerPrev[jkStart]; //start index of Eall corresponding to jProc
 		size_t jEallStop = nInnerPrev[jkStop]; //end index of Eall corresponding to jProc
 		size_t nE_j = jEallStop - jEallStart; //total number of Eall corresponding to jProc
-		diagMatrix rho0_j(nE_j), tauInv_j(nE_j); //equilibrium fillings and rate contributions corresponding to jProc
+		diagMatrix rho0_j(nE_j), tauInv_j(nE_j), tauPinv_j(nE_j); //equilibrium fillings and rate contributions corresponding to jProc
 		for(size_t jEall=jEallStart; jEall<jEallStop; jEall++)
 			rho0_j[jEall-jEallStart] = fermi((Eall[jEall] - lp.dmu) * lp.invT);
 
@@ -479,7 +487,8 @@ void Lindblad::reportCarrierLifetime() const
 		for(const State& s: state)
 		{	size_t iE1 = nInnerPrev[s.ik] - iEallStart; //index of ik1 (s.ik) in local Eall-like arrays
 			const diagMatrix& f1 = s.rho0;
-			double* tauInv1 = &tauInv_i[iE1];
+			const vector3<>* v1 = &vAll[nInnerPrev[s.ik]];
+			double *tauInv1 = &tauInv_i[iE1], *tauPinv1 = &tauPinv_i[iE1];
 
 			//Find first entry of GePh whose partner is on jProc (if any):
 			std::vector<LindbladFile::GePhEntry>::const_iterator g = std::lower_bound(s.GePh.begin(), s.GePh.end(), jkStart);
@@ -488,7 +497,8 @@ void Lindblad::reportCarrierLifetime() const
 				const size_t& ik2 = g->jk;
 				size_t jE2 = nInnerPrev[ik2] - jEallStart; //index of ik2 in local Eall-like arrays
 				const double* f2 = &rho0_j[jE2];
-				double* tauInv2 = &tauInv_j[jE2];
+				const vector3<>* v2 = &vAll[nInnerPrev[ik2]];
+				double *tauInv2 = &tauInv_j[jE2], *tauPinv2 = &tauPinv_j[jE2];
 				bool shouldSkip = false; //must skip after iterating over all matching k2 below (else endless loop!)
 				if((lp.valleyMode==ValleyIntra) and (isKall[s.ik]!=isKall[ik2])) shouldSkip=true; //skip intervalley scattering
 				if((lp.valleyMode==ValleyInter) and (isKall[s.ik]==isKall[ik2])) shouldSkip=true; //skip intravalley scattering
@@ -501,13 +511,18 @@ void Lindblad::reportCarrierLifetime() const
 					{	double term = prefac * e.val.norm();
 						tauInv1[e.i] += term * f2[e.j];
 						tauInv2[e.j] += term * (1. - f1[e.i]);
+						double term_p = term * (1 - dot(v1[e.i], v2[e.j]) / std::max(1e-16, v1[e.i].length() * v2[e.j].length()));
+						tauPinv1[e.i] += term_p * f2[e.j];
+						tauPinv2[e.j] += term_p * (1. - f1[e.i]);
 					}
 					//A+ contributions:
 					for(const SparseEntry& e: g->Ap)
 					{	double term = prefac * e.val.norm();
 						tauInv1[e.i] += term * (1. - f2[e.j]);
 						tauInv2[e.j] += term * f1[e.i];
-
+						double term_p = term * (1 - dot(v1[e.i], v2[e.j]) / std::max(1e-16, v1[e.i].length() * v2[e.j].length()));
+						tauPinv1[e.i] += term_p * (1. - f2[e.j]);
+						tauPinv2[e.j] += term_p * f1[e.i];
 					}
 					//Move to next element:
 					g++;
@@ -517,16 +532,21 @@ void Lindblad::reportCarrierLifetime() const
 
 		//Collect remote contributions:
 		mpiWorld->reduceData(tauInv_j, MPIUtil::ReduceSum, jProc);
+		mpiWorld->reduceData(tauPinv_j, MPIUtil::ReduceSum, jProc);
 		if(jProc==iProc)
-			tauInv_i += tauInv_j;
+		{	tauInv_i += tauInv_j;
+			tauPinv_i += tauPinv_j;
+		}
 	}
 	
 	//Compute f-prime averages:
-	double wSum = 0., tauSum = 0., tauInvSum = 0., wSumDP = 0.;
+	double wSum = 0., tauSum = 0., tauInvSum = 0., tauPsum = 0., tauPinvSum = 0., wSumDP = 0.;
 	vector3<> SpinMixSqEYsum, tauInvSpinEYsum, OmegaSqDPsum, tauInvSpinDPsum;
+	matrix3<> Dsum;
 	for(const State& s: state)
 	{	const diagMatrix& f = s.rho0;
 		const double* tauInv = &tauInv_i[nInnerPrev[s.ik] - iEallStart];
+		const double* tauPinv = &tauPinv_i[nInnerPrev[s.ik] - iEallStart];
 		const diagMatrix Einner = s.E(s.innerStart, s.innerStop);
 		//Determine parity (starting at odd/even) of spin-split bands in inner window
 		int bSpinStart = 0;
@@ -537,9 +557,13 @@ void Lindblad::reportCarrierLifetime() const
 		}
 		for(int b=0; b<s.nInner; b++)
 		{	double mfPrime = lp.invT * f[b] * (1. - f[b]); //-df/dE
+			const vector3<>& v = vAll[nInnerPrev[s.ik] + b];
 			wSum += mfPrime;
 			tauSum += mfPrime / tauInv[b];
 			tauInvSum += mfPrime * tauInv[b];
+			tauPsum += mfPrime / tauPinv[b];
+			tauPinvSum += mfPrime * tauPinv[b];
+			Dsum += (mfPrime / tauPinv[b]) * outer(v, v);
 			//Optional DP field and lifetime calculation:
 			if(spinorial)
 			{	int bOther = (((b-bSpinStart) % 2) ? b-1 : b+1);
@@ -576,8 +600,14 @@ void Lindblad::reportCarrierLifetime() const
 	mpiWorld->allReduce(wSum, MPIUtil::ReduceSum);
 	mpiWorld->allReduce(tauSum, MPIUtil::ReduceSum);
 	mpiWorld->allReduce(tauInvSum, MPIUtil::ReduceSum);
+	mpiWorld->allReduce(tauPsum, MPIUtil::ReduceSum);
+	mpiWorld->allReduce(tauPinvSum, MPIUtil::ReduceSum);
+	mpiWorld->allReduce(Dsum, MPIUtil::ReduceSum);
 	logPrintf("tau(time-avg) = %lf fs\n", (tauSum / wSum) / fs);
 	logPrintf("tau(rate-avg) = %lf fs\n", (wSum / tauInvSum) / fs);
+	logPrintf("tauP(time-avg) = %lf fs\n", (tauPsum / wSum) / fs);
+	logPrintf("tauP(rate-avg) = %lf fs\n", (wSum / tauPinvSum) / fs);
+	logPrintf("Diffusion [m^2/s]:\n"); ((Dsum / wSum) / (std::pow(meter, 2) / sec)).print(globalLog, "  %lg  ");
 
 	if(spinorial)
 	{	mpiWorld->allReduce(wSumDP, MPIUtil::ReduceSum);
