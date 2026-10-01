@@ -169,7 +169,7 @@ struct LindbladInit
 	
 	const double dmuMin, dmuMax, Tmax;
 	const BandSelection bandSelection; //!< which sets of bands to include (e, h or all)
-	const int bandCountFixed; //!< if non-zero, fix nInner = bandCountFixed with no nOuter for all energies
+	int bandCountFixed; //!< if non-zero, fix nInner = bandCountFixed with no nOuter for all energies
 	const double pumpOmegaMax, probeOmegaMax;
 	
 	const bool ePhEnabled; //!< whether e-ph coupling is enabled
@@ -362,6 +362,23 @@ struct LindbladInit
 			}
 			ikStartOff.push_back(nkSelected);
 		}
+		if(bandCountFixed)
+		{	//Report margins to rejected bands for this and lower values of bandCountFixed:
+			const int bandCountFixedOrig = bandCountFixed;
+			const double* Eptr = this->E.data();
+			bool adequatePrev = false;
+			for(bandCountFixed=1; bandCountFixed<=bandCountFixedOrig; bandCountFixed++)
+			{	double EloMax = -INFINITY, EhiMin = +INFINITY;
+				for(size_t i=0; i<nkSelected; i++)
+					updateEnergyMargins(Eptr+i*fw.nBands, Eptr+(i+1)*fw.nBands, Estart, Estop, EloMax, EhiMin);
+				bool adequate = (EloMax <= Estart) and (EhiMin >= Estop);
+				bool best = adequate and (not adequatePrev);
+				adequatePrev = adequate;
+				logPrintf("With %d fixed bands, max rejected Elo = %.3lf and min rejected Ehi = %.3lf%s\n",
+					bandCountFixed, EloMax/eV, EhiMin/eV, best ? " (best)" : "");
+			}
+			bandCountFixed = bandCountFixedOrig;
+		}
 		logPrintf("Found k-points with active states in %lu of %lu q-mesh offsets (%.0fx reduction)\n",
 			offKuniq.size(), k0.size()*fw.qOffset.size(), round(k0.size()*fw.qOffset.size()*1./offKuniq.size()));
 		logPrintf("Found %lu k-points with active states from %lu total k-points (%.0fx reduction)\n",
@@ -406,11 +423,31 @@ struct LindbladInit
 				assert(EendNew <= Eend); //Ensure fixed band count doesn't cross upper range of available bands
 				Eend = EendNew;
 			}
-			else //bandSelection == HolesOnly (Ensured during startup)
+			else if(bandSelection == HolesOnly)
 			{	Eend = &(*std::lower_bound(reverse(Eend), reverse(Ebegin), Ehi, std::greater<double>()))+1;
 				const double* EbeginNew = Eend - bandCountFixed;
-				assert(EbeginNew >= Ebegin);
-				Ebegin = EbeginNew; //Ensure fixed band count doesn't cross lower range of available bands
+				assert(EbeginNew >= Ebegin); //Ensure fixed band count doesn't cross lower range of available bands
+				Ebegin = EbeginNew;
+			}
+			else
+			{	double Emid = 0.5*(Elo + Ehi);
+				int nAvailable = int(Eend - Ebegin);
+				//Find range of bands that maximizes margin from Emid to discarded bands:
+				int iStartBest = -1;
+				double marginBest = -DBL_MAX;
+				for(int iStart=0; iStart<=(nAvailable - bandCountFixed); iStart++)
+				{	double margin = +DBL_MAX;
+					if(iStart)
+						margin = std::min(margin, Emid - Ebegin[iStart - 1]);
+					if(iStart + bandCountFixed < nAvailable)
+						margin = std::min(margin, Ebegin[iStart + bandCountFixed] - Emid);
+					if(margin > marginBest)
+					{	marginBest = margin;
+						iStartBest = iStart;
+					}
+				}
+				Ebegin += iStartBest;
+				Eend = Ebegin + bandCountFixed;
 			}
 		}
 		else
@@ -571,6 +608,14 @@ struct LindbladInit
 		selectActive(EactiveBegin, EactiveEnd, Estart, Estop);
 		offset = EactiveBegin - Ebegin;
 		length = EactiveEnd - EactiveBegin;
+	}
+	
+	//Wrapper to selectActive that updates the energy margins (rather than narrowing the iterator range)
+	inline void updateEnergyMargins(const double* Ebegin, const double* Eend, double Estart, double Estop, double& EloMax, double& EhiMin)
+	{	const double *EactiveBegin = Ebegin, *EactiveEnd = Eend;
+		selectActive(EactiveBegin, EactiveEnd, Estart, Estop);
+		if(EactiveBegin > Ebegin) EloMax = std::max(EloMax, *(EactiveBegin - 1));
+		if(EactiveEnd < Eend) EhiMin = std::min(EhiMin, *EactiveEnd);
 	}
 	
 	//Initialize k-point data:
@@ -1201,8 +1246,6 @@ int main(int argc, char** argv)
 	BandSelection bandSelection;
 	if(not bandSelectionMap.getEnum(bandSelectionStr.c_str(), bandSelection))
 		die("bandSelection must be one of %s\n", bandSelectionMap.optionList().c_str());
-	if(bandCountFixed and (bandSelection == AllBands))
-		die("bandSelection must be ElectronsOnly or HolesOnly to use fixed band count.\n");
 	//--- pump
 	const double pumpOmegaMax = inputMap.get("pumpOmegaMax") * eV; //maximum pump frequency in eV
 	const double probeOmegaMax = inputMap.get("probeOmegaMax") * eV; //maximum probe frequency in eV
@@ -1214,7 +1257,7 @@ int main(int argc, char** argv)
 	const size_t maxNeighbors = inputMap.get("maxNeighbors", 0); //if non-zero: limit neighbors per k by stochastic down-sampling and amplifying the Econserve weights
 	const string outFile = inputMap.has("outFile") ? inputMap.getString("outFile") : "ldbd.dat"; //output file name
 
-	const string writeROption = inputMap.has("writeR") ? inputMap.getString("writeR") : "yes"; //optional defect contribution
+	const string writeROption = inputMap.has("writeR") ? inputMap.getString("writeR") : "no"; //optional Stark matrix elements
 	const bool writeR = (writeROption == "yes");
 
         // H5 output options
